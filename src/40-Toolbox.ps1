@@ -117,22 +117,41 @@ function Get-PowerShellHost {
 function New-RemoteScriptCommand {
     param(
         [Parameter(Mandatory)][string]$Url,
-        [string[]]$ScriptArguments = @()
+        [string[]]$ScriptArguments = @(),
+        [switch]$PauseOnError
     )
 
     $safeUrl = $Url -replace "'", "''"
 
     if (-not $ScriptArguments -or $ScriptArguments.Count -eq 0) {
-        return "irm '$safeUrl' | iex"
+        $invocation = "irm '$safeUrl' | iex"
+    }
+    else {
+        # Switches pass through bare; values get quoted, since paths contain spaces.
+        $rendered = foreach ($argument in $ScriptArguments) {
+            if ($argument -match '^-[A-Za-z]') { $argument }
+            else { "'" + ($argument -replace "'", "''") + "'" }
+        }
+
+        $invocation = "& ([scriptblock]::Create((irm '$safeUrl'))) $($rendered -join ' ')"
     }
 
-    # Switches pass through bare; values get quoted, since paths contain spaces.
-    $rendered = foreach ($argument in $ScriptArguments) {
-        if ($argument -match '^-[A-Za-z]') { $argument }
-        else { "'" + ($argument -replace "'", "''") + "'" }
-    }
+    if (-not $PauseOnError) { return $invocation }
 
-    "& ([scriptblock]::Create((irm '$safeUrl'))) $($rendered -join ' ')"
+    # The window is launched without -NoExit so it closes as soon as the user
+    # quits WinUtil or Win11Debloat. That would also make a script that fails
+    # instantly flash past unread, so hold the window open on a terminating
+    # error only - a normal quit throws nothing and closes straight away.
+    #
+    # Deliberately free of double quotes: this whole string is passed as one
+    # -Command argument, and embedded quotes get mangled on the way through.
+    $handler = "Write-Host ''; " +
+               "Write-Host ('Moscovium: the script stopped with an error.') -ForegroundColor Red; " +
+               "Write-Host (`$_.Exception.Message) -ForegroundColor Red; " +
+               "Write-Host ''; " +
+               "Read-Host 'Press Enter to close this window'"
+
+    "try { $invocation } catch { $handler }"
 }
 
 # Runs a third-party script the way its authors document it: as `irm <url> | iex`
@@ -151,60 +170,55 @@ function Invoke-RemoteScript {
     param(
         [Parameter(Mandatory)][string]$Url,
         [Parameter(Mandatory)][string]$Label,
-        [string[]]$ScriptArguments = @(),
-        [switch]$Wait
+        [string[]]$ScriptArguments = @()
     )
 
-    $command = New-RemoteScriptCommand -Url $Url -ScriptArguments $ScriptArguments
+    # Shown to the user: the command they would paste themselves. What actually
+    # runs adds the error handler from New-RemoteScriptCommand -PauseOnError,
+    # which changes nothing about what is fetched or executed.
+    $shown = New-RemoteScriptCommand -Url $Url -ScriptArguments $ScriptArguments
+    $command = New-RemoteScriptCommand -Url $Url -ScriptArguments $ScriptArguments -PauseOnError
 
-    $where = if ($Ctx.IsAdmin) { 'a new window, elevated as you already are' }
-             else { 'a new window, which will ask for administrator rights' }
+    $elevation = if ($Ctx.IsAdmin) { 'elevated, as you already are' }
+                 else { 'which will ask for administrator rights' }
 
     Write-Line ''
     Write-Warn "$Label runs a script published by a third party:"
     Write-Line "      $Url" -Color White
     Write-Info 'Moscovium does not review or pin the contents of that script.'
     Write-Line ''
-    Write-Info "It will run in $where as:"
-    Write-Line "      $command" -Color Gray
+    Write-Info "Runs in a new window ($elevation) as:"
+    Write-Line "      $shown" -Color Gray
+    Write-Info "The window closes when you quit $Label, or stays open if it fails."
 
-    if (-not (Confirm-Action "Run it now?")) {
+    if (-not (Confirm-Action "Run it now?" -DefaultYes)) {
         Write-Warn "$Label - skipped."
         return $false
     }
 
-    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass')
-    # Keep the window open afterwards so the user can read what happened; an
-    # install we are waiting on should close on its own instead.
-    if (-not $Wait) { $arguments += '-NoExit' }
-    $arguments += @('-Command', $command)
-
+    # No -NoExit: the window is meant to close as soon as the tool is quit.
     $start = @{
         FilePath     = Get-PowerShellHost
-        ArgumentList = $arguments
+        ArgumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $command)
+        Wait         = $true
+        PassThru     = $true
         ErrorAction  = 'Stop'
     }
     # Already elevated: the child inherits it. Otherwise ask, rather than letting
     # the script discover it is unelevated and relaunch itself.
     if (-not $Ctx.IsAdmin) { $start.Verb = 'RunAs' }
-    if ($Wait) { $start.Wait = $true; $start.PassThru = $true }
 
-    Write-Step "Launching $Label"
+    Write-Step "Launching $Label - this returns when you quit it"
     Write-Log "remote script: $command"
 
     $process = Start-Process @start
 
-    if ($Wait) {
-        if ($process -and $process.ExitCode -ne 0) {
-            Write-Warn "$Label exited with code $($process.ExitCode)."
-            return $false
-        }
-        Write-Ok "$Label finished."
-    }
-    else {
-        Write-Ok "$Label is running in its own window."
+    if ($process -and $process.ExitCode -ne 0) {
+        Write-Warn "$Label exited with code $($process.ExitCode)."
+        return $false
     }
 
+    Write-Ok "$Label closed."
     return $true
 }
 

@@ -225,6 +225,11 @@ WinUtil, Win11Debloat and any catalog entry with a `scriptUrl` run code publishe
 by someone else. The CLI shows the URL *and the exact command* and asks first,
 every time. It does not pin or review their contents — nor does the GUI.
 
+The prompt defaults to yes, so Enter runs it. The window closes as soon as you
+quit the tool; it only stays open if the script fails outright, so an error like
+a bad parameter is still readable instead of flashing past. The CLI waits and
+returns to what you were doing once the window closes.
+
 They are launched as `irm <url> | iex` in a **separate PowerShell process**, not
 executed inside the CLI. That matters:
 

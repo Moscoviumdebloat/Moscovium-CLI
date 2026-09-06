@@ -231,8 +231,8 @@ function Install-FromScript {
 
     # Shares Invoke-RemoteScript with the toolbox: a bootstrap script gets its own
     # process rather than running inside this one, for the reasons documented
-    # there. -Wait because an install should finish before we report on it.
-    $ran = Invoke-RemoteScript -Url $App.scriptUrl -Label $App.name -Wait
+    # there. It waits, so the install has finished before we report on it.
+    $ran = Invoke-RemoteScript -Url $App.scriptUrl -Label $App.name
 
     if (-not $ran) { $Ctx.Skipped++ }
     return $ran

@@ -538,6 +538,40 @@ Test-Case 'WinUtil is never passed the -Run switch it no longer has' {
     Assert-True ($bundle -notmatch "'-Run'") 'the built bundle still passes -Run to WinUtil'
 }
 
+Test-Case 'the error-pause wrapper is valid, quote-safe PowerShell' {
+    $command = New-RemoteScriptCommand -Url 'https://christitus.com/win' `
+        -ScriptArguments @('-Config', 'C:\a b\c.json') -PauseOnError
+
+    # It is passed as a single -Command argument, so an embedded double quote
+    # would be mangled by Start-Process's own quoting.
+    Assert-True ($command -notmatch '"') "wrapper contains a double quote: $command"
+    Assert-True ($command -match '^try \{') 'wrapper does not open with try'
+    Assert-True ($command -match 'Read-Host') 'wrapper never pauses on failure'
+
+    $errors = $null
+    [void][Management.Automation.Language.Parser]::ParseInput($command, [ref]$null, [ref]$errors)
+    Assert-Equal 0 @($errors).Count 'wrapper does not parse as PowerShell'
+}
+
+Test-Case 'the wrapper preserves the exact invocation it wraps' {
+    foreach ($case in @(@{ A = @() }, @{ A = @('-Config', 'C:\x y\z.json') })) {
+        $plain   = New-RemoteScriptCommand -Url 'https://example.invalid/s' -ScriptArguments $case.A
+        $wrapped = New-RemoteScriptCommand -Url 'https://example.invalid/s' -ScriptArguments $case.A -PauseOnError
+        Assert-True ($wrapped.Contains($plain)) "wrapper altered the command: $wrapped"
+    }
+}
+
+Test-Case 'the launched window is not held open with -NoExit' {
+    # -NoExit would leave a dead console behind after the user quits WinUtil.
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/40-Toolbox.ps1') -Raw
+    Assert-True ($source -notmatch "'-NoExit'") 'the remote-script window still uses -NoExit'
+}
+
+Test-Case 'the run prompt defaults to yes' {
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/40-Toolbox.ps1') -Raw
+    Assert-True ($source -match "Confirm-Action ""Run it now\?"" -DefaultYes") 'the run prompt does not default to yes'
+}
+
 Test-Case 'remote scripts are launched out of process, not invoked inline' {
     # Running them in this process would inherit Set-StrictMode -Version Latest
     # and $ErrorActionPreference = 'Stop', and would let WinUtil's bare `break`
