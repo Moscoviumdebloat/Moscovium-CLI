@@ -1,0 +1,21 @@
+# Cloudflare Worker config for the short irm URL.
+#
+#   npm install -g wrangler
+#   wrangler login
+#   wrangler deploy --config deploy/wrangler.toml
+#
+# Change `name` and the route pattern to the domain you own. The zone must
+# already be on your Cloudflare account.
+
+name = "moscovium"
+main = "cloudflare-worker.js"
+compatibility_date = "2024-11-01"
+
+# Serve the script at the apex so `irm moscovium.win | iex` works with no path.
+# Add a second route for www if you want it.
+routes = [
+  { pattern = "moscovium.win/*", zone_name = "moscovium.win" }
+]
+
+# No KV, no secrets, no environment variables: the Worker only proxies a public
+# file from GitHub.

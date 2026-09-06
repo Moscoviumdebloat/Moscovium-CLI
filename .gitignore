@@ -1,0 +1,8 @@
+# Local run state (backups, logs, downloads) never belongs in the repo.
+*.log
+/downloads/
+
+# Editor noise
+.vs/
+.idea/
+*.user

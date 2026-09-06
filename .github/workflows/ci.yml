@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    # Windows PowerShell 5.1 is the baseline the CLI targets, and it only exists
+    # on Windows runners. `shell: powershell` selects 5.1; `pwsh` would be 7.
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show PowerShell version
+        shell: powershell
+        run: $PSVersionTable | Format-List
+
+      - name: Bundle is in sync with src/ and data/
+        shell: powershell
+        run: ./build.ps1 -Check
+
+      - name: Run tests (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tests/Run-Tests.ps1
+
+      - name: Run tests (PowerShell 7)
+        shell: pwsh
+        run: ./tests/Run-Tests.ps1
+
+      - name: Smoke-test the built bundle
+        shell: powershell
+        run: |
+          ./moscovium.ps1 -Version
+          ./moscovium.ps1 -NoBanner -List categories
+          ./moscovium.ps1 -NoBanner -Status
+          # -DryRun must never touch the machine, so it is safe in CI.
+          ./moscovium.ps1 -NoBanner -DryRun -Apply all
+
+  lint:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PSScriptAnalyzer
+        shell: powershell
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -SkipPublisherCheck
+          # moscovium.ps1 is generated; analyse the sources it is built from.
+          $results = Invoke-ScriptAnalyzer -Path ./src, ./tools, ./build.ps1 -Recurse -Severity Error, Warning `
+            -ExcludeRule PSAvoidUsingWriteHost, PSUseShouldProcessForStateChangingFunctions, PSAvoidUsingInvokeExpression
+
+          if ($results) {
+            $results | Format-Table -AutoSize | Out-String | Write-Host
+            throw "PSScriptAnalyzer reported $($results.Count) issue(s)."
+          }
+
+          Write-Host 'PSScriptAnalyzer clean.' -ForegroundColor Green

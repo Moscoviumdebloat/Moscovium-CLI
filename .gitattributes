@@ -1,0 +1,7 @@
+# moscovium.ps1 is served verbatim over HTTP and must keep LF endings on every
+# platform: build.ps1 emits LF, and a CRLF checkout would change what irm gets.
+moscovium.ps1 text eol=lf
+*.ps1 text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.js text eol=lf

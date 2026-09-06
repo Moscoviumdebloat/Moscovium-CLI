@@ -1,0 +1,886 @@
+{
+    "categories":  [
+                       "Privacy & Telemetry",
+                       "Explorer & Taskbar",
+                       "Gaming & Performance",
+                       "Hardware & Gaming",
+                       "Advanced"
+                   ],
+    "tweaks":  [
+                   {
+                       "name":  "Disable Telemetry",
+                       "description":  "Disables Microsoft telemetry, advertising ID, targeted ads and speech data collection.",
+                       "category":  "Privacy & Telemetry",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\AdvertisingInfo",
+                                            "name":  "Enabled",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Privacy",
+                                            "name":  "TailoredExperiencesWithDiagnosticDataEnabled",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Speech_OneCore\\Settings\\OnlineSpeechPrivacy",
+                                            "name":  "HasAccepted",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Input\\TIPC",
+                                            "name":  "Enabled",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\InputPersonalization",
+                                            "name":  "RestrictImplicitInkCollection",
+                                            "type":  "DWord",
+                                            "value":  1
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\InputPersonalization",
+                                            "name":  "RestrictImplicitTextCollection",
+                                            "type":  "DWord",
+                                            "value":  1
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\InputPersonalization\\TrainedDataStore",
+                                            "name":  "HarvestContacts",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Personalization\\Settings",
+                                            "name":  "AcceptedPrivacyPolicy",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\DataCollection",
+                                            "name":  "AllowTelemetry",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                                            "name":  "Start_TrackProgs",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+                                            "name":  "PublishUserActivities",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Siuf\\Rules",
+                                            "name":  "NumberOfSIUFInPeriod",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Disable Activity History",
+                       "description":  "Erases recent docs, clipboard and run history tracking.",
+                       "category":  "Privacy & Telemetry",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+                                            "name":  "EnableActivityFeed",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+                                            "name":  "PublishUserActivities",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+                                            "name":  "UploadUserActivities",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Disable Location Tracking",
+                       "description":  "Denies location access for apps and disables sensor permission.",
+                       "category":  "Privacy & Telemetry",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\location",
+                                            "name":  "Value",
+                                            "type":  "String",
+                                            "value":  "Deny"
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Sensor\\Overrides\\{BFA794E4-F964-4FDB-90F6-51056BFE4B44}",
+                                            "name":  "SensorPermissionState",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SYSTEM\\Maps",
+                                            "name":  "AutoUpdateEnabled",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Disable Delivery Optimization",
+                       "description":  "Stops Windows using your bandwidth to upload updates to other PCs.",
+                       "category":  "Privacy & Telemetry",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\DeliveryOptimization",
+                                            "name":  "DODownloadMode",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Disable Consumer Features",
+                       "description":  "Stops promoted app installs and Store content suggestions.",
+                       "category":  "Privacy & Telemetry",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\CloudContent",
+                                            "name":  "DisableWindowsConsumerFeatures",
+                                            "type":  "DWord",
+                                            "value":  1
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Disable WPBT",
+                       "description":  "Prevents your PC vendor from running programs at boot (anti-theft, forced software).",
+                       "category":  "Privacy & Telemetry",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager",
+                                            "name":  "DisableWpbtExecution",
+                                            "type":  "DWord",
+                                            "value":  1
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Set Time to UTC",
+                       "description":  "Fixes clock drift when dual booting with Linux.",
+                       "category":  "Privacy & Telemetry",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\TimeZoneInformation",
+                                            "name":  "RealTimeIsUniversal",
+                                            "type":  "QWord",
+                                            "value":  1
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Show File Extensions",
+                       "description":  "Shows .exe, .png etc. in File Explorer.",
+                       "category":  "Explorer & Taskbar",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                                            "name":  "HideFileExt",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Show Hidden Files",
+                       "description":  "Reveals hidden files in File Explorer.",
+                       "category":  "Explorer & Taskbar",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                                            "name":  "Hidden",
+                                            "type":  "DWord",
+                                            "value":  1
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Dark Theme",
+                       "description":  "Enables dark mode for the system and apps.",
+                       "category":  "Explorer & Taskbar",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                                            "name":  "AppsUseLightTheme",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                                            "name":  "SystemUsesLightTheme",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Disable Lock Screen",
+                       "description":  "Skips the lock screen and goes straight to sign-in.",
+                       "category":  "Explorer & Taskbar",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\Personalization",
+                                            "name":  "NoLockScreen",
+                                            "type":  "DWord",
+                                            "value":  1
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Hide Start Menu Recommendations",
+                       "description":  "Removes the recommended section from the Start menu.",
+                       "category":  "Explorer & Taskbar",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\Start",
+                                            "name":  "HideRecommendedSection",
+                                            "type":  "DWord",
+                                            "value":  1
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\PolicyManager\\current\\device\\Education",
+                                            "name":  "IsEducationEnvironment",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\Explorer",
+                                            "name":  "HideRecommendedSection",
+                                            "type":  "DWord",
+                                            "value":  1
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Disable Bing in Start Search",
+                       "description":  "Removes Bing web results from Start menu search.",
+                       "category":  "Explorer & Taskbar",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Search",
+                                            "name":  "BingSearchEnabled",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "End Task with Right Click",
+                       "description":  "Adds an End Task option when right-clicking a program on the taskbar.",
+                       "category":  "Explorer & Taskbar",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced\\TaskbarDeveloperSettings",
+                                            "name":  "TaskbarEndTask",
+                                            "type":  "DWord",
+                                            "value":  1
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Taskbar Icons Left",
+                       "description":  "Aligns taskbar icons to the left like Windows 10.",
+                       "category":  "Explorer & Taskbar",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                                            "name":  "TaskbarAl",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Hide Widgets Button",
+                       "description":  "Removes the widgets button from the taskbar.",
+                       "category":  "Explorer & Taskbar",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                                            "name":  "TaskbarDa",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                                            "name":  "TaskbarMn",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Classic Right-Click Menu",
+                       "description":  "Restores the full classic context menu in File Explorer.",
+                       "category":  "Explorer & Taskbar",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}",
+                                            "name":  "",
+                                            "type":  "String",
+                                            "value":  ""
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\\InprocServer32",
+                                            "name":  "",
+                                            "type":  "String",
+                                            "value":  ""
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Enable Long Paths",
+                       "description":  "Supports file paths longer than 260 characters.",
+                       "category":  "Explorer & Taskbar",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\FileSystem",
+                                            "name":  "LongPathsEnabled",
+                                            "type":  "DWord",
+                                            "value":  1
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Game Mode",
+                       "description":  "Lets Windows prioritize system resources for games.",
+                       "category":  "Gaming & Performance",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\GameBar",
+                                            "name":  "AllowAutoGameMode",
+                                            "type":  "DWord",
+                                            "value":  1
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\GameBar",
+                                            "name":  "AutoGameModeEnabled",
+                                            "type":  "DWord",
+                                            "value":  1
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Disable Fullscreen Optimizations",
+                       "description":  "Disables FSO for all apps (can help with exclusive fullscreen games).",
+                       "category":  "Gaming & Performance",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\System\\GameConfigStore",
+                                            "name":  "GameDVR_DXGIHonorFSEWindowsCompatible",
+                                            "type":  "DWord",
+                                            "value":  1
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Disable Background Apps",
+                       "description":  "Stops Microsoft Store apps from running in the background.",
+                       "category":  "Gaming & Performance",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications",
+                                            "name":  "GlobalUserDisabled",
+                                            "type":  "DWord",
+                                            "value":  1
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Disable Mouse Acceleration",
+                       "description":  "Removes mouse acceleration for consistent aiming.",
+                       "category":  "Gaming & Performance",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Control Panel\\Mouse",
+                                            "name":  "MouseSpeed",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Control Panel\\Mouse",
+                                            "name":  "MouseThreshold1",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Control Panel\\Mouse",
+                                            "name":  "MouseThreshold2",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Disable Multiplane Overlay",
+                       "description":  "Can fix stutter caused by overlay composition issues on some GPUs.",
+                       "category":  "Gaming & Performance",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\Dwm",
+                                            "name":  "OverlayTestMode",
+                                            "type":  "DWord",
+                                            "value":  5
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers",
+                                            "name":  "DisableOverlays",
+                                            "type":  "DWord",
+                                            "value":  1
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Visual Effects: Best Performance",
+                       "description":  "Turns off animations and eye candy for snappier UI.",
+                       "category":  "Gaming & Performance",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Control Panel\\Desktop",
+                                            "name":  "DragFullWindows",
+                                            "type":  "String",
+                                            "value":  "0"
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Control Panel\\Desktop",
+                                            "name":  "MenuShowDelay",
+                                            "type":  "String",
+                                            "value":  "0"
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Control Panel\\Desktop\\WindowMetrics",
+                                            "name":  "MinAnimate",
+                                            "type":  "String",
+                                            "value":  "0"
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Control Panel\\Keyboard",
+                                            "name":  "KeyboardDelay",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                                            "name":  "ListviewAlphaSelect",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                                            "name":  "ListviewShadow",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                                            "name":  "TaskbarAnimations",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\VisualEffects",
+                                            "name":  "VisualFXSetting",
+                                            "type":  "DWord",
+                                            "value":  3
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\DWM",
+                                            "name":  "EnableAeroPeek",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                                            "name":  "TaskbarMn",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                                            "name":  "ShowTaskViewButton",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Search",
+                                            "name":  "SearchboxTaskbarMode",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Disable Hibernation",
+                       "description":  "Disables hibernation and removes hiberfil.sys (saves disk space).",
+                       "category":  "Gaming & Performance",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Power",
+                                            "name":  "HibernateEnabled",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FlyoutMenuSettings",
+                                            "name":  "ShowHibernateOption",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Disable Sticky Keys",
+                       "description":  "Stops the Shift-pressed-5-times Sticky Keys prompt.",
+                       "category":  "Gaming & Performance",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Control Panel\\Accessibility\\StickyKeys",
+                                            "name":  "Flags",
+                                            "type":  "DWord",
+                                            "value":  506
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Enable Hardware Accelerated GPU Scheduling",
+                       "description":  "Lets the GPU manage its own scheduling, reducing CPU overhead in games. Requires reboot.",
+                       "category":  "Hardware & Gaming",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\DirectX\\GraphicsSettings",
+                                            "name":  "HwSchMode",
+                                            "type":  "DWord",
+                                            "value":  2
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Disable Game DVR Recording",
+                       "description":  "Disables Game Bar background recording, a known source of micro-stutter in games.",
+                       "category":  "Hardware & Gaming",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\System\\GameConfigStore",
+                                            "name":  "GameDVR_Enabled",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\System\\GameConfigStore",
+                                            "name":  "GameDVR_FSEBehaviorMode",
+                                            "type":  "DWord",
+                                            "value":  2
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "High Performance Power Plan",
+                       "description":  "Switches Windows to the High Performance power plan so the CPU never downclocks.",
+                       "category":  "Hardware & Gaming",
+                       "kind":  "PowerPlan",
+                       "registry":  [
+
+                                    ]
+                   },
+                   {
+                       "name":  "Disable Memory Integrity (HVCI)",
+                       "description":  "Disables VBS memory integrity. Can improve FPS and frame pacing on older CPUs. Security tradeoff, requires reboot.",
+                       "category":  "Hardware & Gaming",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity",
+                                            "name":  "Enabled",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Disable CPU Mitigations",
+                       "description":  "Disables Spectre/Meltdown mitigations for a small CPU gain on older CPUs (pre-12th gen). Security tradeoff, requires reboot.",
+                       "category":  "Hardware & Gaming",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management",
+                                            "name":  "CpuMitigations",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Edge Debloat",
+                       "description":  "Disables Edge telemetry, shopping assistant, Rewards, first-run experience and more.",
+                       "category":  "Advanced",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\EdgeUpdate",
+                                            "name":  "CreateDesktopShortcutDefault",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Edge",
+                                            "name":  "PersonalizationReportingEnabled",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Edge\\ExtensionInstallBlocklist",
+                                            "name":  "1",
+                                            "type":  "String",
+                                            "value":  "ofefcgjbeghpigppfmkologfjadafddi"
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Edge",
+                                            "name":  "ShowRecommendationsEnabled",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Edge",
+                                            "name":  "HideFirstRunExperience",
+                                            "type":  "DWord",
+                                            "value":  1
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Edge",
+                                            "name":  "UserFeedbackAllowed",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Edge",
+                                            "name":  "ConfigureDoNotTrack",
+                                            "type":  "DWord",
+                                            "value":  1
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Edge",
+                                            "name":  "AlternateErrorPagesEnabled",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Edge",
+                                            "name":  "EdgeCollectionsEnabled",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Edge",
+                                            "name":  "EdgeShoppingAssistantEnabled",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Edge",
+                                            "name":  "MicrosoftEdgeInsiderPromotionEnabled",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Edge",
+                                            "name":  "ShowMicrosoftRewards",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Edge",
+                                            "name":  "WebWidgetAllowed",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Edge",
+                                            "name":  "DiagnosticData",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Edge",
+                                            "name":  "EdgeAssetDeliveryServiceEnabled",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Edge",
+                                            "name":  "WalletDonationEnabled",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Edge",
+                                            "name":  "DefaultBrowserSettingsCampaignEnabled",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Disable Storage Sense",
+                       "description":  "Prevents Windows from auto-deleting temp files.",
+                       "category":  "Advanced",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\StorageSense\\Parameters\\StoragePolicy",
+                                            "name":  "01",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Disable Reserved Storage",
+                       "description":  "Frees 7-10 GB held for updates (recommended only on small drives).",
+                       "category":  "Advanced",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\ReserveManager",
+                                            "name":  "ShippedWithReserves",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "File Explorer Home & Gallery",
+                       "description":  "Removes Home and Gallery from Explorer and opens This PC by default.",
+                       "category":  "Advanced",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Classes\\CLSID\\{f874310e-b6b7-47dc-bc84-b9e6b38f5903}",
+                                            "name":  "System.IsPinnedToNameSpaceTree",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Classes\\CLSID\\{e88865ea-0e1c-4e20-9aa6-edcd0212c87c}",
+                                            "name":  "System.IsPinnedToNameSpaceTree",
+                                            "type":  "DWord",
+                                            "value":  0
+                                        },
+                                        {
+                                            "path":  "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                                            "name":  "LaunchTo",
+                                            "type":  "DWord",
+                                            "value":  1
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Prefer IPv4 over IPv6",
+                       "description":  "Can improve latency on networks without IPv6.",
+                       "category":  "Advanced",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\Tcpip6\\Parameters",
+                                            "name":  "DisabledComponents",
+                                            "type":  "DWord",
+                                            "value":  32
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Disable Teredo",
+                       "description":  "Disables Teredo tunneling, which can cause latency in some games.",
+                       "category":  "Advanced",
+                       "kind":  "Registry",
+                       "registry":  [
+                                        {
+                                            "path":  "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\Tcpip6\\Parameters",
+                                            "name":  "DisabledComponents",
+                                            "type":  "DWord",
+                                            "value":  1
+                                        }
+                                    ]
+                   },
+                   {
+                       "name":  "Create Restore Point",
+                       "description":  "Creates a system restore point so you can revert tweaks.",
+                       "category":  "Advanced",
+                       "kind":  "RestorePoint",
+                       "registry":  [
+
+                                    ]
+                   },
+                   {
+                       "name":  "Disk Cleanup",
+                       "description":  "Runs Disk Cleanup and removes old Windows updates.",
+                       "category":  "Advanced",
+                       "kind":  "CleanDisk",
+                       "registry":  [
+
+                                    ]
+                   },
+                   {
+                       "name":  "Remove Temp Files",
+                       "description":  "Erases TEMP folders for all users.",
+                       "category":  "Advanced",
+                       "kind":  "CleanTemp",
+                       "registry":  [
+
+                                    ]
+                   }
+               ],
+    "source":  {
+                   "repo":  "https://github.com/Moscoviumdebloat/Moscovium.git",
+                   "commit":  "ad56ca1",
+                   "syncedUtc":  "2026-09-06T10:41:58.5541071Z"
+               }
+}

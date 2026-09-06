@@ -1,0 +1,28 @@
+{
+    "WPFTweaks":  [
+                      "WPFTweaksWifi",
+                      "WPFTweaksRightClickMenu",
+                      "WPFTweaksActivity",
+                      "WPFTweaksStorage",
+                      "WPFTweaksConsumerFeatures",
+                      "WPFTweaksDVR",
+                      "WPFTweaksTele",
+                      "WPFTweaksEndTaskOnTaskbar",
+                      "WPFTweaksRemoveCopilot",
+                      "WPFTweaksLoc",
+                      "WPFTweaksDisableExplorerAutoDiscovery",
+                      "WPFTweaksPowershell7Tele",
+                      "WPFTweaksUTC",
+                      "WPFTweaksRecallOff",
+                      "WPFTweaksDisableBGapps"
+                  ],
+    "Install":  [
+
+                ],
+    "WPFInstall":  [
+
+                   ],
+    "WPFFeature":  [
+
+                   ]
+}

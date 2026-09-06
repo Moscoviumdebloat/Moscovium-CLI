@@ -1,0 +1,286 @@
+<#
+.SYNOPSIS
+    Bundles src/ and data/ into the single-file moscovium.ps1.
+
+.DESCRIPTION
+    The distributed artifact has to be one self-contained file, because the
+    headline entry point is:
+
+        irm https://moscovium.win | iex
+
+    which has nowhere to put a second file. So this concatenates every src/*.ps1
+    in name order, embeds the JSON catalogs as here-strings, and wraps the whole
+    thing in a script block.
+
+    The script block matters: `iex` runs its input in the *caller's* scope, so a
+    bare concatenation would leave dozens of functions, a $Ctx variable and a
+    modified $ErrorActionPreference behind in the user's session. Invoking a
+    script block gives the run its own scope and leaves nothing behind.
+
+.EXAMPLE
+    ./build.ps1
+    ./build.ps1 -Check     # verify moscovium.ps1 is up to date, for CI
+#>
+
+[CmdletBinding()]
+param(
+    [string]$OutputPath = (Join-Path $PSScriptRoot 'moscovium.ps1'),
+    [switch]$Check
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$SrcDir  = Join-Path $PSScriptRoot 'src'
+$DataDir = Join-Path $PSScriptRoot 'data'
+$Version = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'VERSION') -Raw).Trim()
+
+# Default URL the bundle re-fetches from when it needs to relaunch elevated.
+$DefaultSourceUrl = 'https://raw.githubusercontent.com/Moscoviumdebloat/Moscovium-CLI/main/moscovium.ps1'
+
+function Read-DataFile {
+    param([Parameter(Mandatory)][string]$Name)
+
+    $path = Join-Path $DataDir $Name
+    if (-not (Test-Path -LiteralPath $path)) {
+        throw "Missing $path. Run tools/Sync-Catalog.ps1 first."
+    }
+
+    $text = (Get-Content -LiteralPath $path -Raw -Encoding UTF8).TrimEnd()
+
+    # A line consisting of '@ would terminate the here-string early. JSON never
+    # produces one, but fail loudly rather than emit a broken bundle.
+    if ($text -match '(?m)^\s*''@') {
+        throw "$Name contains a line that would close the embedding here-string."
+    }
+
+    # The catalogs are generated from the GUI's C# strings, which may contain
+    # non-ASCII text. data/ keeps it literal so diffs stay readable; the bundle
+    # must not, so re-escape it here. ConvertFrom-Json decodes \uXXXX at runtime,
+    # so this is lossless.
+    return [regex]::Replace($text, '[^\x00-\x7F]', {
+        param($m)
+        '\u{0:x4}' -f [int][char]$m.Value
+    })
+}
+
+# Replaces `$Name = ''` with a here-string holding $Content.
+#
+# Runs *after* the source has been indented into the script block, because a
+# here-string's closing '@ must sit at column 0. The assignment keeps whatever
+# indentation it had; the payload and terminator do not get any.
+function Set-EmbeddedLiteral {
+    param(
+        [Parameter(Mandatory)][string]$Text,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Content
+    )
+
+    # \r? because $ in multiline mode anchors before \n, leaving a stray \r that
+    # [ \t]* will not consume.
+    $pattern = "(?m)^([ \t]*)\`$$Name\s*=\s*''[ \t]*\r?$"
+    $match = [regex]::Match($Text, $pattern)
+    if (-not $match.Success) {
+        throw "No placeholder assignment for `$$Name found in the source."
+    }
+
+    # A literal here-string: no $ expansion, no backtick escapes, so registry
+    # paths and regex patterns survive untouched.
+    $replacement = "$($match.Groups[1].Value)`$$Name = @'`n$Content`n'@"
+    $Text.Substring(0, $match.Index) + $replacement + $Text.Substring($match.Index + $match.Length)
+}
+
+$header = @"
+<#
+    Moscovium CLI v$Version
+    Windows debloat and setup toolbox - the command line companion to
+    https://github.com/Moscoviumdebloat/Moscovium
+
+        irm https://moscovium.win | iex
+
+    GENERATED FILE - do not edit.
+    Built from src/ and data/ by build.ps1. Edit those and rebuild.
+#>
+
+[CmdletBinding()]
+param(
+    # Tweaks
+    [string[]]`$Apply,
+    [string[]]`$Revert,
+    [switch]  `$Status,
+
+    # Apps
+    [string[]]`$Install,
+    [switch]  `$UpgradeAll,
+    [switch]  `$VCRuntimes,
+    [switch]  `$WindowsUpdate,
+
+    # Other actions
+    [string]  `$Toolbox,
+    [string]  `$Profile,
+    [string]  `$SaveProfile,
+    [string[]]`$List,
+    [string]  `$Search,
+
+    # Flags
+    [switch]  `$DryRun,
+    [switch]  `$Yes,
+    [switch]  `$Elevate,
+    [switch]  `$NoColor,
+    [switch]  `$NoBanner,
+    [switch]  `$Version,
+    [switch]  `$Help,
+
+    # URL this script re-downloads from when relaunching elevated.
+    [string]  `$SourceUrl = '$DefaultSourceUrl'
+)
+
+# Everything runs inside this script block so that `iex`, which executes in the
+# caller's scope, leaves no functions, variables or preference changes behind.
+#
+# None of these parameters are Mandatory: with no arguments `$PSBoundParameters is
+# an empty dictionary, and PowerShell treats an empty collection as a missing
+# mandatory argument and would prompt for it.
+& {
+    param(`$Bound, [string]`$BuildVersion, [string]`$Source)
+
+    Set-StrictMode -Version Latest
+    `$ErrorActionPreference = 'Stop'
+
+    if (`$PSVersionTable.PSVersion.Major -lt 5) {
+        Write-Host 'Moscovium CLI needs Windows PowerShell 5.1 or newer.' -ForegroundColor Red
+        return
+    }
+
+    # `$PSBoundParameters is a Dictionary, not a hashtable; normalise it once.
+    `$BoundParameters = @{}
+    if (`$Bound) {
+        foreach (`$key in `$Bound.Keys) { `$BoundParameters[`$key] = `$Bound[`$key] }
+    }
+
+    # ContainsKey alone would treat an explicit -DryRun:`$false as "on".
+    function Test-Flag {
+        param([string]`$Name)
+        `$BoundParameters.ContainsKey(`$Name) -and [bool]`$BoundParameters[`$Name]
+    }
+
+"@
+
+$footer = @"
+
+    `$Ctx = New-MoscoviumContext -Version `$BuildVersion -SourceUrl `$Source ``
+        -DryRun:(Test-Flag 'DryRun') ``
+        -AssumeYes:(Test-Flag 'Yes') ``
+        -NoColor:(Test-Flag 'NoColor')
+
+    Initialize-State
+
+    if (-not (Test-Flag 'NoBanner') -and -not (Test-Flag 'Version') -and -not (Test-Flag 'Help')) {
+        Write-Banner
+    }
+
+    try {
+        `$exitCode = Invoke-Main -Bound `$BoundParameters
+        if (`$exitCode -ne 0) { `$global:LASTEXITCODE = `$exitCode }
+    }
+    catch {
+        Write-Host ''
+        Write-Host "  Moscovium stopped: `$(`$_.Exception.Message)" -ForegroundColor Red
+        try { Write-Log "FATAL: `$(`$_ | Out-String)" 'ERROR' } catch { }
+        `$global:LASTEXITCODE = 1
+    }
+
+} `$PSBoundParameters '$Version' `$SourceUrl
+"@
+
+# -----------------------------------------------------------------------------
+
+$sources = @(Get-ChildItem -LiteralPath $SrcDir -Filter '*.ps1' -File | Sort-Object -Property Name)
+if ($sources.Count -eq 0) { throw "No source files in $SrcDir." }
+
+$body = New-Object Text.StringBuilder
+
+foreach ($file in $sources) {
+    $text = (Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8).TrimEnd()
+
+    # Indent into the script block so the generated file reads as one unit.
+    $indented = New-Object Text.StringBuilder
+    foreach ($line in ($text -split "`r?`n")) {
+        if ($line.Trim().Length -eq 0) { [void]$indented.AppendLine() }
+        else { [void]$indented.AppendLine('    ' + $line) }
+    }
+    $text = $indented.ToString().TrimEnd()
+
+    # Embedding happens after indenting: see Set-EmbeddedLiteral.
+    if ($file.Name -eq '01-Catalog.ps1') {
+        $text = Set-EmbeddedLiteral -Text $text -Name 'EmbeddedTweaksJson' -Content (Read-DataFile 'tweaks.json')
+        $text = Set-EmbeddedLiteral -Text $text -Name 'EmbeddedAppsJson'   -Content (Read-DataFile 'apps.json')
+    }
+    if ($file.Name -eq '40-Toolbox.ps1') {
+        $text = Set-EmbeddedLiteral -Text $text -Name 'EmbeddedWinutilConfigJson' -Content (Read-DataFile 'winutil-debloat.json')
+    }
+
+    [void]$body.AppendLine()
+    [void]$body.AppendLine("# ===== src/$($file.Name) " + ('=' * [Math]::Max(0, 60 - $file.Name.Length)))
+    [void]$body.AppendLine()
+    [void]$body.AppendLine($text)
+}
+
+# Normalise to LF so the published file hashes identically regardless of
+# the machine that built it, and so `irm` never yields mixed endings.
+$bundle = ($header + $body.ToString() + $footer) -replace "`r`n", "`n"
+
+# The bundle ships without a BOM (Invoke-RestMethod would feed it straight to
+# iex), and Windows PowerShell 5.1 reads a BOM-less script as ANSI, not UTF-8.
+# Anything outside ASCII would therefore be corrupted when the file is run from
+# disk. Catalog text is escaped on the way in; this catches src/.
+$nonAscii = [regex]::Matches($bundle, '[^\x00-\x7F]')
+if ($nonAscii.Count -gt 0) {
+    $sample = ($nonAscii | ForEach-Object { $_.Value } | Select-Object -Unique -First 10 |
+        ForEach-Object { 'U+{0:X4}' -f [int][char]$_ }) -join ', '
+
+    # Report where, so the offending source file is obvious.
+    $before = $bundle.Substring(0, $nonAscii[0].Index)
+    $line = ($before -split "`n").Count
+
+    throw "Bundle contains $($nonAscii.Count) non-ASCII character(s) ($sample), first at line $line. Replace them in src/ with ASCII equivalents."
+}
+
+# Parse before writing: a bundle that does not compile must never be published.
+$parseErrors = $null
+[void][Management.Automation.Language.Parser]::ParseInput($bundle, [ref]$null, [ref]$parseErrors)
+
+if ($parseErrors -and $parseErrors.Count -gt 0) {
+    Write-Host "Generated bundle has $($parseErrors.Count) parse error(s):" -ForegroundColor Red
+    foreach ($e in $parseErrors | Select-Object -First 20) {
+        Write-Host ("  line {0}: {1}" -f $e.Extent.StartLineNumber, $e.Message) -ForegroundColor Red
+    }
+    throw 'Build aborted.'
+}
+
+if ($Check) {
+    if (-not (Test-Path -LiteralPath $OutputPath)) {
+        Write-Host "$OutputPath does not exist. Run build.ps1." -ForegroundColor Red
+        exit 1
+    }
+
+    $existing = (Get-Content -LiteralPath $OutputPath -Raw -Encoding UTF8)
+    if ($existing.TrimEnd() -ne $bundle.TrimEnd()) {
+        Write-Host "$OutputPath is stale. Run build.ps1 and commit the result." -ForegroundColor Red
+        exit 1
+    }
+
+    Write-Host "$OutputPath is up to date." -ForegroundColor Green
+    exit 0
+}
+
+# BOM-less UTF-8: Invoke-RestMethod would otherwise hand iex a leading U+FEFF.
+[IO.File]::WriteAllText($OutputPath, $bundle, (New-Object Text.UTF8Encoding $false))
+
+$size = (Get-Item -LiteralPath $OutputPath).Length
+$lines = ($bundle -split "`n").Count
+
+Write-Host ''
+Write-Host "  Built $OutputPath" -ForegroundColor Green
+Write-Host ("  v{0}  |  {1:N0} lines  |  {2:N1} KB  |  {3} source file(s)" -f $Version, $lines, ($size / 1KB), $sources.Count) -ForegroundColor DarkGray
+Write-Host ''
