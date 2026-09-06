@@ -779,6 +779,42 @@ Test-Case 'a progress sink receives both determinate and indeterminate work' {
     Assert-True ($seen[1].Fraction -lt 0) 'indeterminate work did not report a negative fraction'
 }
 
+Test-Case 'no event handler uses GetNewClosure' {
+    # This one shipped broken and only failed in the bundle.
+    #
+    # .GetNewClosure() binds a script block to a new dynamic module whose command
+    # lookup falls back to the *global* scope. The bundle runs everything inside
+    # `& { ... }`, so every engine function lives in that wrapper scope and a
+    # closure cannot call any of them - "Get-ToolboxActions is not recognized".
+    # Running from src/ hides it, because there the functions sit at script scope.
+    #
+    # Plain script blocks resolve functions and enclosing variables correctly, so
+    # handler state lives on $Ctx.Gui instead of being captured.
+    foreach ($file in (Get-ChildItem -LiteralPath (Join-Path $RepoRoot 'src') -Filter '*.ps1')) {
+        # Actual calls only - the note above this rule lives in a comment.
+        $lines = @(
+            Select-String -LiteralPath $file.FullName -Pattern '\.GetNewClosure\(' |
+                Where-Object { -not $_.Line.TrimStart().StartsWith('#') } |
+                ForEach-Object { $_.LineNumber }
+        )
+        Assert-Equal 0 $lines.Count "$($file.Name) line(s) $($lines -join ', ') call GetNewClosure"
+    }
+}
+
+Test-Case 'a plain script block can reach engine functions from the wrapper scope' {
+    # The property the fix depends on, asserted directly against the bundle's
+    # shape rather than trusted.
+    $probe = {
+        & {
+            function Get-EngineThing { 'reached' }
+            $captured = 'visible'
+            $handler = { "$(Get-EngineThing)/$captured" }
+            & $handler
+        }
+    }
+    Assert-Equal 'reached/visible' (& $probe)
+}
+
 Test-Case 'the GUI never reimplements what the CLI already does' {
     # Guard against the two front-ends drifting: the GUI must call the engine,
     # not grow its own registry writes or winget invocations.
@@ -848,6 +884,49 @@ if (Test-StaApartment) {
 }
 else {
     Write-Host '  SKIP  window construction (host is MTA; run under powershell.exe for these)' -ForegroundColor DarkYellow
+}
+
+Test-Case 'the built bundle can open the GUI for real' {
+    # The end-to-end check the unit tests could not give: construct the window
+    # from the *bundle*, inside its `& { }` wrapper, in a fresh STA process.
+    # Everything above runs against src/, where the scope differs - which is
+    # exactly how the GetNewClosure bug reached the user.
+    #
+    # -Gui is driven to build and immediately close, so no window is left behind.
+    $bundlePath = Join-Path $RepoRoot 'moscovium.ps1'
+    $marker = Join-Path $Ctx.StateDir 'gui-smoke.txt'
+
+    # A working GUI blocks in ShowDialog and stays alive; a broken one throws and
+    # exits at once, writing why. That difference is the assertion.
+    $driver = @"
+`$ErrorActionPreference = 'Stop'
+try {
+    `$sb = [scriptblock]::Create((Get-Content -LiteralPath '$bundlePath' -Raw))
+    & `$sb -Gui -NoBanner
+    'CLOSED' | Set-Content -LiteralPath '$marker'
+}
+catch {
+    "FAIL: `$(`$_.Exception.Message)" | Set-Content -LiteralPath '$marker'
+}
+"@
+
+    $driverPath = Join-Path $Ctx.StateDir 'gui-driver.ps1'
+    Set-Content -LiteralPath $driverPath -Value $driver -Encoding UTF8
+
+    $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') `
+        -ArgumentList @('-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', $driverPath) `
+        -WindowStyle Minimized -PassThru
+
+    $exitedEarly = $process.WaitForExit(12000)
+
+    if ($exitedEarly) {
+        $reason = if (Test-Path -LiteralPath $marker) { (Get-Content -LiteralPath $marker -Raw).Trim() } else { 'no output' }
+        throw "the GUI exited instead of staying open: $reason"
+    }
+
+    # Still running after 12s means the window built and ShowDialog is blocking.
+    try { $process.Kill() } catch { }
+    Assert-True $true
 }
 
 # -----------------------------------------------------------------------------

@@ -51,6 +51,11 @@ function New-MoscoviumContext {
         ProgressSink = $null
         ConfirmSink  = $null
 
+        # Live GUI state, parked here rather than captured in a closure: the
+        # wrapper scope stays reachable from plain script blocks, which is what
+        # WPF event handlers have to be. See the note at the top of 70-Gui.ps1.
+        Gui          = $null
+
         IsAdmin    = Test-Administrator
         StateDir   = $stateDir
         BackupDir  = Join-Path $stateDir 'backups'

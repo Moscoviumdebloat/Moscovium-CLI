@@ -260,9 +260,20 @@ leaves nothing behind. There is a test for it.
 ```
 
 The suite covers catalog integrity, name resolution, the registry engine, the
-apply/revert round-trip, profiles and the bundle itself. The registry tests
-write only to `HKCU\Software\MoscoviumCliTest`, which they create and remove; no
-real system setting is touched.
+apply/revert round-trip, the theme, menu geometry, profiles, the GUI and the
+bundle itself. The registry tests write only to
+`HKCU\Software\MoscoviumCliTest`, which they create and remove; no real system
+setting is touched.
+
+Two things to expect while it runs:
+
+- A minimised PowerShell window appears for about twelve seconds. That is the
+  GUI smoke test launching the **built bundle** with `-Gui`. It has to be the
+  bundle rather than `src/`, because the bundle wraps everything in `& { ... }`
+  and that scope difference is real: it is where a working GUI and a broken one
+  diverge. Run the suite under `powershell.exe`, not `pwsh` — WPF needs STA, and
+  the three window-construction tests skip on an MTA host.
+- The registry tests briefly create and delete their scratch key.
 
 ## Keeping up with the GUI
 

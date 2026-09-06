@@ -128,6 +128,11 @@ param(
             ProgressSink = $null
             ConfirmSink  = $null
 
+            # Live GUI state, parked here rather than captured in a closure: the
+            # wrapper scope stays reachable from plain script blocks, which is what
+            # WPF event handlers have to be. See the note at the top of 70-Gui.ps1.
+            Gui          = $null
+
             IsAdmin    = Test-Administrator
             StateDir   = $stateDir
             BackupDir  = Join-Path $stateDir 'backups'
@@ -5751,15 +5756,30 @@ param(
     # their output into the log pane, progress bar and dialogs.
     #
     # WPF ships with .NET Framework, so this still needs nothing installed and still
-    # works from `irm ... | iex`. Two constraints come with that:
+    # works from `irm ... | iex`.
     #
-    #   - WPF requires an STA thread. powershell.exe is STA, but pwsh is MTA by
-    #     default, so an MTA host is relaunched into an STA one.
-    #   - Rows are built as real controls rather than data-bound. Binding to
-    #     PSCustomObject works, but writing back through the PSObject adapter is
-    #     fiddly enough that explicit controls are the more predictable choice.
+    # -----------------------------------------------------------------------------
+    # Why there is not a single .GetNewClosure() in this file
+    # -----------------------------------------------------------------------------
+    # Event handlers fire after the function that registered them has returned, so
+    # the obvious move is to capture state with .GetNewClosure(). That breaks here,
+    # and only in the shipped bundle:
     #
-    # The XAML is ASCII only, like the rest of src/.
+    #   .GetNewClosure() binds the script block to a new dynamic module. Command
+    #   lookup from inside that module falls back to the *global* scope - it does not
+    #   see the enclosing one. The bundle runs everything inside `& { ... }`, so
+    #   every engine function lives in that wrapper scope, and a closure cannot call
+    #   any of them. Running from src/ hides this, because there the functions are at
+    #   script scope, which a closure can reach.
+    #
+    #   A plain script block is the mirror image: it resolves functions and enclosing
+    #   variables fine, but not the locals of a function that has already returned.
+    #
+    # So: plain script blocks everywhere, and no handler depends on a dead function's
+    # locals. Per-window state hangs off $Ctx.Gui, which lives in the wrapper scope
+    # and stays reachable, and per-row state is read back from $sender.
+    #
+    # The XAML is ASCII only, like the rest of src/, and lives in data/gui.xaml.
     # =============================================================================
 
     # Populated by build.ps1 from data/gui.xaml. Empty in the source tree, where
@@ -6257,18 +6277,18 @@ param(
         param($Color)
 
         $hex = switch ([string]$Color) {
-            'Green'     { '#FF7BD88F' }
-            'DarkGreen' { '#FF5FA86F' }
-            'Yellow'    { '#FFF0C674' }
-            'DarkYellow'{ '#FFD0A354' }
-            'Red'       { '#FFF07178' }
-            'DarkRed'   { '#FFC05058' }
-            'Cyan'      { '#FF4FC3F7' }
-            'DarkCyan'  { '#FF3A93BC' }
-            'White'     { '#FFF4F4F8' }
-            'Gray'      { '#FFC8C8D2' }
-            'DarkGray'  { '#FF8E8E9C' }
-            default     { '#FFE4E4EA' }
+            'Green'      { '#FF7BD88F' }
+            'DarkGreen'  { '#FF5FA86F' }
+            'Yellow'     { '#FFF0C674' }
+            'DarkYellow' { '#FFD0A354' }
+            'Red'        { '#FFF07178' }
+            'DarkRed'    { '#FFC05058' }
+            'Cyan'       { '#FF4FC3F7' }
+            'DarkCyan'   { '#FF3A93BC' }
+            'White'      { '#FFF4F4F8' }
+            'Gray'       { '#FFC8C8D2' }
+            'DarkGray'   { '#FF8E8E9C' }
+            default      { '#FFE4E4EA' }
         }
 
         New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($hex))
@@ -6287,6 +6307,22 @@ param(
         [Windows.Threading.Dispatcher]::CurrentDispatcher.BeginInvoke(
             [Windows.Threading.DispatcherPriority]::Background, $callback, $frame) | Out-Null
         [Windows.Threading.Dispatcher]::PushFrame($frame)
+    }
+
+    # Tints a row while its checkbox is ticked. Reached from $sender rather than a
+    # captured $border: CheckBox -> Grid -> Border.
+    function Set-GuiRowTint {
+        param([Parameter(Mandatory)]$CheckBox)
+
+        $border = $CheckBox.Parent.Parent
+        if (-not $border) { return }
+
+        if ($CheckBox.IsChecked -eq $true) {
+            $border.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString('#FF17323C'))
+        }
+        else {
+            $border.Background = [Windows.Media.Brushes]::Transparent
+        }
     }
 
     # One row: a checkbox, a primary label, a secondary line, and a status chip.
@@ -6320,6 +6356,11 @@ param(
         $check.Foreground = ConvertTo-Brush 'Gray'
         $check.Tag = $Item
         if ($NoCheckBox) { $check.Visibility = 'Hidden' }
+
+        # A tick is easy to lose in a list of 127, so tint the whole row.
+        $check.Add_Checked({   param($sender, $e) Set-GuiRowTint -CheckBox $sender })
+        $check.Add_Unchecked({ param($sender, $e) Set-GuiRowTint -CheckBox $sender })
+
         [Windows.Controls.Grid]::SetColumn($check, 0)
         $grid.Children.Add($check) | Out-Null
 
@@ -6355,18 +6396,14 @@ param(
             $grid.Children.Add($chip) | Out-Null
         }
 
-        # Tint the row while it is ticked - the checkbox alone is easy to lose in
-        # a list of 127.
-        $check.Add_Checked({   $border.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString("#FF17323C")) }.GetNewClosure())
-        $check.Add_Unchecked({ $border.Background = [Windows.Media.Brushes]::Transparent }.GetNewClosure())
-
         $border.Child = $grid
+
         # Clicking anywhere on the row toggles it, not just the 13px checkbox.
         $border.Add_MouseLeftButtonUp({
             param($sender, $e)
             $box = $sender.Child.Children[0]
             if ($box.Visibility -eq 'Visible') { $box.IsChecked = -not $box.IsChecked }
-        }.GetNewClosure())
+        })
 
         [pscustomobject]@{ Element = $border; CheckBox = $check; Item = $Item }
     }
@@ -6374,6 +6411,110 @@ param(
     function Get-CheckedItem {
         param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Rows)
         @($Rows | Where-Object { $_.CheckBox.IsChecked -eq $true } | ForEach-Object { $_.Item })
+    }
+
+    # -----------------------------------------------------------------------------
+    # Row population
+    #
+    # Functions rather than script blocks, so handlers can call them by name. They
+    # read the window out of $Ctx.Gui, which outlives New-GuiWindow.
+    # -----------------------------------------------------------------------------
+
+    function Update-GuiTweakRow {
+        if (-not $Ctx.Gui) { return }
+        $ui = $Ctx.Gui.Ui
+
+        $ui.TweakRows.Children.Clear()
+        $built = [System.Collections.Generic.List[object]]::new()
+
+        $search = [string]$ui.TweakSearch.Text
+        $category = [string]$ui.TweakCategory.SelectedItem
+
+        foreach ($tweak in $Ctx.Tweaks) {
+            if ($category -and $category -ne 'All categories' -and $tweak.category -ne $category) { continue }
+            if ($search -and -not (
+                (Test-NameMatch -Value $tweak.name -Pattern $search) -or
+                (Test-NameMatch -Value $tweak.description -Pattern $search) -or
+                (Test-NameMatch -Value $tweak.category -Pattern $search))) { continue }
+
+            $status = Get-TweakStatus -Tweak $tweak
+            $label, $brush = switch ($status) {
+                'Applied' { 'applied', '#FF7BD88F' }
+                'Partial' { 'partial', '#FFF0C674' }
+                'Action'  { 'action',  '#FF4FC3F7' }
+                default   { '',        '#FF8E8E9C' }
+            }
+
+            $row = New-GuiRow -Item $tweak -Primary $tweak.name -Secondary $tweak.description -Status $label -StatusBrush $brush
+            $ui.TweakRows.Children.Add($row.Element) | Out-Null
+            $built.Add($row)
+        }
+
+        $Ctx.Gui.Rows.Tweaks = @($built)
+    }
+
+    function Update-GuiAppRow {
+        if (-not $Ctx.Gui) { return }
+        $ui = $Ctx.Gui.Ui
+
+        $ui.AppRows.Children.Clear()
+        $built = [System.Collections.Generic.List[object]]::new()
+
+        $search = [string]$ui.AppSearch.Text
+        $category = [string]$ui.AppCategory.SelectedItem
+
+        foreach ($app in $Ctx.Apps) {
+            if ($category -and $category -ne 'All categories' -and $app.category -ne $category) { continue }
+            if ($search -and -not (
+                (Test-NameMatch -Value $app.name -Pattern $search) -or
+                (Test-NameMatch -Value $app.id -Pattern $search) -or
+                (Test-NameMatch -Value ([string]$app.description) -Pattern $search))) { continue }
+
+            $how = if ($app.scriptUrl) { 'script' }
+                   elseif ($app.zipUrl) { 'archive' }
+                   elseif ($app.downloadUrl) { 'download' }
+                   else { 'winget' }
+
+            $row = New-GuiRow -Item $app -Primary $app.name -Secondary ([string]$app.description) -Status $how -StatusBrush '#FF8E8E9C'
+            $ui.AppRows.Children.Add($row.Element) | Out-Null
+            $built.Add($row)
+        }
+
+        $Ctx.Gui.Rows.Apps = @($built)
+    }
+
+    function Update-GuiToolboxRow {
+        if (-not $Ctx.Gui) { return }
+        $ui = $Ctx.Gui.Ui
+
+        $ui.ToolboxRows.Children.Clear()
+        $built = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($action in Get-ToolboxActions) {
+            $row = New-GuiRow -Item $action -Primary $action.Name -Secondary $action.Description -NoCheckBox
+
+            # One click runs it; a checkbox would imply batching, which these are not.
+            $run = New-Object Windows.Controls.Button
+            $run.Content = 'Run'
+            $run.Padding = New-Object Windows.Thickness 12, 4, 12, 4
+            $run.Margin = New-Object Windows.Thickness 8, 0, 0, 0
+            $run.VerticalAlignment = 'Center'
+            $run.Tag = $action.Id
+            [Windows.Controls.Grid]::SetColumn($run, 2)
+
+            $run.Add_Click({
+                param($sender, $e)
+                $id = [string]$sender.Tag
+                Invoke-GuiWork -Label "toolbox: $id" -Work { Invoke-ToolboxAction -Id $id }
+            })
+
+            $row.Element.Child.Children.Add($run) | Out-Null
+
+            $ui.ToolboxRows.Children.Add($row.Element) | Out-Null
+            $built.Add($row)
+        }
+
+        $Ctx.Gui.Rows.Toolbox = @($built)
     }
 
     # -----------------------------------------------------------------------------
@@ -6404,66 +6545,82 @@ param(
 
         # ---- log pane ----------------------------------------------------------
         $document = New-Object Windows.Documents.FlowDocument
-        # Track the pane width: wide enough that rules and status lines never wrap,
-        # without the permanent horizontal scrollbar a fixed width would cause.
+        # Wide enough that rules and status lines never wrap, without the permanent
+        # horizontal scrollbar a fixed large width would cause. Tracked on resize.
         $document.PageWidth = 900
         $paragraph = New-Object Windows.Documents.Paragraph
         $paragraph.Margin = New-Object Windows.Thickness 0
         $paragraph.LineHeight = 15
         $document.Blocks.Add($paragraph)
         $ui.LogBox.Document = $document
-        $ui.LogBox.Add_SizeChanged({
-            param($sender, $e)
-            $document.PageWidth = [Math]::Max(600, $sender.ActualWidth - 24)
-        }.GetNewClosure())
 
-        $logState = [pscustomobject]@{ Paragraph = $paragraph; Box = $ui.LogBox }
+        # ---- shared state ------------------------------------------------------
+        # Everything a handler needs, parked somewhere it can still reach once this
+        # function has returned. See the note at the top of the file.
+        $Ctx.Gui = [pscustomobject]@{
+            Window    = $window
+            Ui        = $ui
+            Paragraph = $paragraph
+            Rows      = [pscustomobject]@{ Tweaks = @(); Apps = @(); Toolbox = @() }
+            Bound     = $BoundParameters
+            Glyphs    = $Ctx.Theme.Glyph
+        }
 
         # The console glyph set may have fallen back to ASCII because conhost cannot
-        # encode box drawing. WPF has no such problem, so the log pane always gets
-        # the good glyphs. Stashed so closing the window leaves the console as it was.
-        $previousGlyphs = $Ctx.Theme.Glyph
+        # encode box drawing. WPF has no such problem, so the log pane always gets the
+        # good glyphs; the console's set is restored when the window closes.
         $Ctx.Theme.Glyph = New-GlyphSet -Unicode $true
+
+        $ui.LogBox.Add_SizeChanged({
+            param($sender, $e)
+            if ($sender.Document) { $sender.Document.PageWidth = [Math]::Max(600, $sender.ActualWidth - 24) }
+        })
 
         # Redirecting Write-Line is what lets every engine function report into the
         # window without knowing the window exists.
         $Ctx.Sink = {
             param($text, $color, $newline)
+            if (-not $Ctx.Gui) { return }
 
             $run = New-Object Windows.Documents.Run ([string]$text)
             if ($color) { $run.Foreground = ConvertTo-Brush $color }
-            $logState.Paragraph.Inlines.Add($run)
-            if ($newline) { $logState.Paragraph.Inlines.Add((New-Object Windows.Documents.LineBreak)) }
+            $Ctx.Gui.Paragraph.Inlines.Add($run)
+            if ($newline) { $Ctx.Gui.Paragraph.Inlines.Add((New-Object Windows.Documents.LineBreak)) }
 
-            $logState.Box.ScrollToEnd()
+            $Ctx.Gui.Ui.LogBox.ScrollToEnd()
             Invoke-UiEvents
-        }.GetNewClosure()
+        }
 
         $Ctx.ProgressSink = {
             param($label, $fraction, $detail)
+            if (-not $Ctx.Gui) { return }
 
-            $ui.Progress.Visibility = 'Visible'
+            $bar = $Ctx.Gui.Ui.Progress
+            $bar.Visibility = 'Visible'
+
             if ($fraction -lt 0) {
-                $ui.Progress.IsIndeterminate = $true
+                $bar.IsIndeterminate = $true
             }
             else {
-                $ui.Progress.IsIndeterminate = $false
-                $ui.Progress.Value = [Math]::Round($fraction * 100)
+                $bar.IsIndeterminate = $false
+                $bar.Value = [Math]::Round($fraction * 100)
             }
 
-            $ui.StatusText.Text = if ($detail) { "$label   $detail" } else { [string]$label }
+            $Ctx.Gui.Ui.StatusText.Text = if ($detail) { "$label   $detail" } else { [string]$label }
             Invoke-UiEvents
-        }.GetNewClosure()
+        }
 
         $Ctx.ConfirmSink = {
             param($message, $defaultYes)
 
             $default = if ($defaultYes) { [Windows.MessageBoxResult]::Yes } else { [Windows.MessageBoxResult]::No }
-            $answer = [Windows.MessageBox]::Show($window, [string]$message, 'Moscovium',
+            $owner = if ($Ctx.Gui) { $Ctx.Gui.Window } else { $null }
+
+            $answer = [Windows.MessageBox]::Show($owner, [string]$message, 'Moscovium',
                 [Windows.MessageBoxButton]::YesNo, [Windows.MessageBoxImage]::Question, $default)
 
             return ($answer -eq [Windows.MessageBoxResult]::Yes)
-        }.GetNewClosure()
+        }
 
         # ---- header ------------------------------------------------------------
         $ui.VersionText.Text = "v$($Ctx.Version)"
@@ -6479,112 +6636,25 @@ param(
         }
 
         $ui.DryRunToggle.IsChecked = $Ctx.DryRun
-        $ui.DryRunToggle.Add_Click({ $Ctx.DryRun = [bool]$ui.DryRunToggle.IsChecked }.GetNewClosure())
+        $ui.DryRunToggle.Add_Click({ param($sender, $e) $Ctx.DryRun = [bool]$sender.IsChecked })
 
         $ui.BtnElevate.Add_Click({
-            if (Invoke-SelfElevate -BoundParameters $BoundParameters) { $window.Close() }
-        }.GetNewClosure())
+            param($sender, $e)
+            if (Invoke-SelfElevate -BoundParameters $Ctx.Gui.Bound) { $Ctx.Gui.Window.Close() }
+        })
 
-        $ui.BtnClearLog.Add_Click({ $logState.Paragraph.Inlines.Clear() }.GetNewClosure())
+        $ui.BtnClearLog.Add_Click({ if ($Ctx.Gui) { $Ctx.Gui.Paragraph.Inlines.Clear() } })
 
         # ---- navigation --------------------------------------------------------
-        $panels = @($ui.TweaksPanel, $ui.AppsPanel, $ui.ToolboxPanel, $ui.ProfilesPanel)
         $ui.NavList.Add_SelectionChanged({
+            param($sender, $e)
+            if (-not $Ctx.Gui) { return }
+
+            $panels = @($Ctx.Gui.Ui.TweaksPanel, $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.ProfilesPanel)
             for ($i = 0; $i -lt $panels.Count; $i++) {
-                $panels[$i].Visibility = if ($i -eq $ui.NavList.SelectedIndex) { 'Visible' } else { 'Collapsed' }
+                $panels[$i].Visibility = if ($i -eq $sender.SelectedIndex) { 'Visible' } else { 'Collapsed' }
             }
-        }.GetNewClosure())
-
-        # ---- rows --------------------------------------------------------------
-        $rows = [pscustomobject]@{ Tweaks = @(); Apps = @(); Toolbox = @() }
-
-        $buildTweaks = {
-            $ui.TweakRows.Children.Clear()
-            $built = [System.Collections.Generic.List[object]]::new()
-
-            $search = [string]$ui.TweakSearch.Text
-            $category = [string]$ui.TweakCategory.SelectedItem
-
-            foreach ($tweak in $Ctx.Tweaks) {
-                if ($category -and $category -ne 'All categories' -and $tweak.category -ne $category) { continue }
-                if ($search -and -not (
-                    (Test-NameMatch -Value $tweak.name -Pattern $search) -or
-                    (Test-NameMatch -Value $tweak.description -Pattern $search) -or
-                    (Test-NameMatch -Value $tweak.category -Pattern $search))) { continue }
-
-                $status = Get-TweakStatus -Tweak $tweak
-                $label, $brush = switch ($status) {
-                    'Applied' { 'applied', '#FF7BD88F' }
-                    'Partial' { 'partial', '#FFF0C674' }
-                    'Action'  { 'action',  '#FF4FC3F7' }
-                    default   { '',        '#FF8E8E9C' }
-                }
-
-                $row = New-GuiRow -Item $tweak -Primary $tweak.name -Secondary $tweak.description -Status $label -StatusBrush $brush
-                $ui.TweakRows.Children.Add($row.Element) | Out-Null
-                $built.Add($row)
-            }
-
-            $rows.Tweaks = @($built)
-            $ui.StatusText.Text = "$($built.Count) tweak(s) shown"
-        }.GetNewClosure()
-
-        $buildApps = {
-            $ui.AppRows.Children.Clear()
-            $built = [System.Collections.Generic.List[object]]::new()
-
-            $search = [string]$ui.AppSearch.Text
-            $category = [string]$ui.AppCategory.SelectedItem
-
-            foreach ($app in $Ctx.Apps) {
-                if ($category -and $category -ne 'All categories' -and $app.category -ne $category) { continue }
-                if ($search -and -not (
-                    (Test-NameMatch -Value $app.name -Pattern $search) -or
-                    (Test-NameMatch -Value $app.id -Pattern $search) -or
-                    (Test-NameMatch -Value ([string]$app.description) -Pattern $search))) { continue }
-
-                $how = if ($app.scriptUrl) { 'script' }
-                       elseif ($app.zipUrl) { 'archive' }
-                       elseif ($app.downloadUrl) { 'download' }
-                       else { 'winget' }
-
-                $row = New-GuiRow -Item $app -Primary $app.name -Secondary ([string]$app.description) -Status $how -StatusBrush '#FF8E8E9C'
-                $ui.AppRows.Children.Add($row.Element) | Out-Null
-                $built.Add($row)
-            }
-
-            $rows.Apps = @($built)
-            $ui.StatusText.Text = "$($built.Count) app(s) shown"
-        }.GetNewClosure()
-
-        $buildToolbox = {
-            $ui.ToolboxRows.Children.Clear()
-            $built = [System.Collections.Generic.List[object]]::new()
-
-            foreach ($action in Get-ToolboxActions) {
-                $row = New-GuiRow -Item $action -Primary $action.Name -Secondary $action.Description -NoCheckBox
-
-                # One click runs it; a checkbox would imply batching, which these are not.
-                $run = New-Object Windows.Controls.Button
-                $run.Content = 'Run'
-                $run.Padding = New-Object Windows.Thickness 12, 4, 12, 4
-                $run.Margin = New-Object Windows.Thickness 8, 0, 0, 0
-                $run.VerticalAlignment = 'Center'
-                $run.Tag = $action.Id
-                [Windows.Controls.Grid]::SetColumn($run, 2)
-                $run.Add_Click({
-                    param($sender, $e)
-                    $id = [string]$sender.Tag
-                    Invoke-GuiWork -Ui $ui -Label "toolbox: $id" -Work { Invoke-ToolboxAction -Id $id }.GetNewClosure()
-                }.GetNewClosure())
-                $row.Element.Child.Children.Add($run) | Out-Null
-
-                $ui.ToolboxRows.Children.Add($row.Element) | Out-Null
-                $built.Add($row)
-            }
-
-            $rows.Toolbox = @($built)
-        }.GetNewClosure()
+        })
 
         # ---- filters -----------------------------------------------------------
         $ui.TweakCategory.Items.Add('All categories') | Out-Null
@@ -6595,49 +6665,53 @@ param(
         foreach ($c in $Ctx.AppCategories) { $ui.AppCategory.Items.Add($c) | Out-Null }
         $ui.AppCategory.SelectedIndex = 0
 
-        $ui.TweakSearch.Add_TextChanged($buildTweaks)
-        $ui.TweakCategory.Add_SelectionChanged($buildTweaks)
-        $ui.AppSearch.Add_TextChanged($buildApps)
-        $ui.AppCategory.Add_SelectionChanged($buildApps)
+        $ui.TweakSearch.Add_TextChanged({ Update-GuiTweakRow })
+        $ui.TweakCategory.Add_SelectionChanged({ Update-GuiTweakRow })
+        $ui.AppSearch.Add_TextChanged({ Update-GuiAppRow })
+        $ui.AppCategory.Add_SelectionChanged({ Update-GuiAppRow })
 
-        $ui.BtnTweakAll.Add_Click({ foreach ($r in $rows.Tweaks) { $r.CheckBox.IsChecked = $true } }.GetNewClosure())
-        $ui.BtnTweakNone.Add_Click({ foreach ($r in $rows.Tweaks) { $r.CheckBox.IsChecked = $false } }.GetNewClosure())
-        $ui.BtnAppNone.Add_Click({ foreach ($r in $rows.Apps) { $r.CheckBox.IsChecked = $false } }.GetNewClosure())
+        $ui.BtnTweakAll.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Tweaks) { $r.CheckBox.IsChecked = $true } })
+        $ui.BtnTweakNone.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Tweaks) { $r.CheckBox.IsChecked = $false } })
+        $ui.BtnAppNone.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Apps) { $r.CheckBox.IsChecked = $false } })
 
         # ---- actions -----------------------------------------------------------
         $ui.BtnApply.Add_Click({
-            $selected = Get-CheckedItem -Rows $rows.Tweaks
-            if ($selected.Count -eq 0) { $ui.StatusText.Text = 'Nothing selected.'; return }
-            Invoke-GuiWork -Ui $ui -Label 'applying tweaks' -Work { Invoke-Tweaks -Tweaks $selected -Mode Apply }.GetNewClosure()
-            & $buildTweaks
-        }.GetNewClosure())
+            $selected = Get-CheckedItem -Rows $Ctx.Gui.Rows.Tweaks
+            if ($selected.Count -eq 0) { $Ctx.Gui.Ui.StatusText.Text = 'Nothing selected.'; return }
+
+            Invoke-GuiWork -Label 'applying tweaks' -Work { Invoke-Tweaks -Tweaks $selected -Mode Apply }
+            Update-GuiTweakRow
+        })
 
         $ui.BtnRevert.Add_Click({
-            $selected = Get-CheckedItem -Rows $rows.Tweaks
-            if ($selected.Count -eq 0) { $ui.StatusText.Text = 'Nothing selected.'; return }
-            Invoke-GuiWork -Ui $ui -Label 'reverting tweaks' -Work { Invoke-Tweaks -Tweaks $selected -Mode Revert }.GetNewClosure()
-            & $buildTweaks
-        }.GetNewClosure())
+            $selected = Get-CheckedItem -Rows $Ctx.Gui.Rows.Tweaks
+            if ($selected.Count -eq 0) { $Ctx.Gui.Ui.StatusText.Text = 'Nothing selected.'; return }
+
+            Invoke-GuiWork -Label 'reverting tweaks' -Work { Invoke-Tweaks -Tweaks $selected -Mode Revert }
+            Update-GuiTweakRow
+        })
 
         $ui.BtnInstall.Add_Click({
-            $selected = Get-CheckedItem -Rows $rows.Apps
-            if ($selected.Count -eq 0) { $ui.StatusText.Text = 'Nothing selected.'; return }
-            Invoke-GuiWork -Ui $ui -Label 'installing apps' -Work { Invoke-AppInstall -Apps $selected }.GetNewClosure()
-        }.GetNewClosure())
+            $selected = Get-CheckedItem -Rows $Ctx.Gui.Rows.Apps
+            if ($selected.Count -eq 0) { $Ctx.Gui.Ui.StatusText.Text = 'Nothing selected.'; return }
+
+            Invoke-GuiWork -Label 'installing apps' -Work { Invoke-AppInstall -Apps $selected }
+        })
 
         # ---- profiles ----------------------------------------------------------
         $ui.BtnBrowseProfile.Add_Click({
             $dialog = New-Object Windows.Forms.OpenFileDialog
             $dialog.Filter = 'Moscovium profile (*.json)|*.json|All files (*.*)|*.*'
-            if ($dialog.ShowDialog() -eq [Windows.Forms.DialogResult]::OK) { $ui.ProfilePath.Text = $dialog.FileName }
-        }.GetNewClosure())
+            if ($dialog.ShowDialog() -eq [Windows.Forms.DialogResult]::OK) { $Ctx.Gui.Ui.ProfilePath.Text = $dialog.FileName }
+        })
 
         $ui.BtnRunProfile.Add_Click({
-            $path = [string]$ui.ProfilePath.Text
-            if (-not $path) { $ui.StatusText.Text = 'Choose a profile first.'; return }
-            Invoke-GuiWork -Ui $ui -Label 'running profile' -Work { Invoke-SetupProfile -Path $path }.GetNewClosure()
-            & $buildTweaks
-        }.GetNewClosure())
+            $path = [string]$Ctx.Gui.Ui.ProfilePath.Text
+            if (-not $path) { $Ctx.Gui.Ui.StatusText.Text = 'Choose a profile first.'; return }
+
+            Invoke-GuiWork -Label 'running profile' -Work { Invoke-SetupProfile -Path $path }
+            Update-GuiTweakRow
+        })
 
         $ui.BtnSaveProfile.Add_Click({
             $dialog = New-Object Windows.Forms.SaveFileDialog
@@ -6647,20 +6721,27 @@ param(
 
             $target = $dialog.FileName
             $setupProfile = New-SetupProfile `
-                -Tweaks @(Get-CheckedItem -Rows $rows.Tweaks | ForEach-Object { $_.name }) `
-                -Apps   @(Get-CheckedItem -Rows $rows.Apps   | ForEach-Object { $_.id })
+                -Tweaks @(Get-CheckedItem -Rows $Ctx.Gui.Rows.Tweaks | ForEach-Object { $_.name }) `
+                -Apps   @(Get-CheckedItem -Rows $Ctx.Gui.Rows.Apps   | ForEach-Object { $_.id })
 
-            Invoke-GuiWork -Ui $ui -Label 'saving profile' -Work {
-                Save-SetupProfile -SetupProfile $setupProfile -Path $target | Out-Null
-            }.GetNewClosure()
+            Invoke-GuiWork -Label 'saving profile' -Work { Save-SetupProfile -SetupProfile $setupProfile -Path $target | Out-Null }
+            $Ctx.Gui.Ui.ProfilePath.Text = $target
+        })
 
-            $ui.ProfilePath.Text = $target
-        }.GetNewClosure())
+        # Put the console back the way we found it.
+        $window.Add_Closed({
+            param($sender, $e)
+            if ($Ctx.Gui) { $Ctx.Theme.Glyph = $Ctx.Gui.Glyphs }
+            $Ctx.Gui = $null
+            $Ctx.Sink = $null
+            $Ctx.ProgressSink = $null
+            $Ctx.ConfirmSink = $null
+        })
 
         # ---- go ----------------------------------------------------------------
-        & $buildTweaks
-        & $buildApps
-        & $buildToolbox
+        Update-GuiTweakRow
+        Update-GuiAppRow
+        Update-GuiToolboxRow
 
         $ui.StatusText.Text = 'Ready'
 
@@ -6668,20 +6749,10 @@ param(
         Write-Info "$($Ctx.Tweaks.Count) tweaks, $($Ctx.Apps.Count) apps loaded."
         if (-not $Ctx.IsAdmin) { Write-Warn 'Not elevated - machine-wide tweaks will be skipped.' }
 
-        # Put the sinks back so anything running after the window closes reports to
-        # the console again.
-        $window.Add_Closed({
-            $Ctx.Sink = $null
-            $Ctx.ProgressSink = $null
-            $Ctx.ConfirmSink = $null
-            $Ctx.Theme.Glyph = $previousGlyphs
-        }.GetNewClosure())
-
         [pscustomobject]@{
-            Window  = $window
-            Ui      = $ui
-            Rows    = $rows
-            Refresh = $buildTweaks
+            Window = $window
+            Ui     = $ui
+            Rows   = $Ctx.Gui.Rows
         }
     }
 
@@ -6711,26 +6782,28 @@ param(
     # live, so a long install cannot be started twice and the window still repaints.
     function Invoke-GuiWork {
         param(
-            [Parameter(Mandatory)][hashtable]$Ui,
             [Parameter(Mandatory)][string]$Label,
             [Parameter(Mandatory)][scriptblock]$Work
         )
 
-        $buttons = @('BtnApply', 'BtnRevert', 'BtnInstall', 'BtnRunProfile', 'BtnSaveProfile')
-        foreach ($name in $buttons) { $Ui[$name].IsEnabled = $false }
+        if (-not $Ctx.Gui) { & $Work; return }
 
-        $Ui.StatusText.Text = $Label
-        $Ui.Progress.Visibility = 'Visible'
-        $Ui.Progress.IsIndeterminate = $true
+        $ui = $Ctx.Gui.Ui
+        $buttons = @('BtnApply', 'BtnRevert', 'BtnInstall', 'BtnRunProfile', 'BtnSaveProfile')
+        foreach ($name in $buttons) { $ui[$name].IsEnabled = $false }
+
+        $ui.StatusText.Text = $Label
+        $ui.Progress.Visibility = 'Visible'
+        $ui.Progress.IsIndeterminate = $true
         Invoke-UiEvents
 
         try { & $Work }
         catch { Write-Err $_.Exception.Message }
         finally {
-            foreach ($name in $buttons) { $Ui[$name].IsEnabled = $true }
-            $Ui.Progress.IsIndeterminate = $false
-            $Ui.Progress.Visibility = 'Hidden'
-            $Ui.StatusText.Text = 'Ready'
+            foreach ($name in $buttons) { $ui[$name].IsEnabled = $true }
+            $ui.Progress.IsIndeterminate = $false
+            $ui.Progress.Visibility = 'Hidden'
+            $ui.StatusText.Text = 'Ready'
             Invoke-UiEvents
         }
     }
