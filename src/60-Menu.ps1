@@ -475,7 +475,7 @@ function Show-ProfileMenu {
     $extras = Show-Selector -Items @(
         [pscustomobject]@{ Name = 'Install Visual C++ runtimes'; Key = 'InstallVCRuntimes' }
         [pscustomobject]@{ Name = 'Upgrade all winget apps';     Key = 'UpgradeAllApps' }
-        [pscustomobject]@{ Name = 'Run WinUtil preset';          Key = 'RunChrisTitus' }
+        [pscustomobject]@{ Name = 'Open WinUtil with preset';    Key = 'RunChrisTitus' }
         [pscustomobject]@{ Name = 'Run Win11Debloat preset';     Key = 'RunRaphi' }
         [pscustomobject]@{ Name = 'Run Windows Update';          Key = 'RunWindowsUpdate' }
     ) -Title 'Profile: extras' -Subtitle 'Optional steps, run after tweaks and apps' -Label { param($e) $e.Name }

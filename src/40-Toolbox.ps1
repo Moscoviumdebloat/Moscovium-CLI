@@ -15,21 +15,23 @@ $EmbeddedWinutilConfigJson = ''
 
 function Get-ToolboxActions {
     @(
+        # The four below launch a third-party script in its own elevated window,
+        # so they do not require Moscovium itself to be elevated first.
         [pscustomobject]@{
-            Id = 'winutil'; Name = 'Chris Titus WinUtil'; Admin = $true
-            Description = 'Opens the interactive WinUtil TUI (christitus.com/win).'
+            Id = 'winutil'; Name = 'Chris Titus WinUtil'; Admin = $false
+            Description = 'Opens the WinUtil GUI (christitus.com/win) in a new elevated window.'
         }
         [pscustomobject]@{
-            Id = 'winutil-auto'; Name = 'WinUtil (Moscovium preset)'; Admin = $true
-            Description = 'Runs WinUtil unattended with the 15-tweak preset the GUI bundles.'
+            Id = 'winutil-preset'; Name = 'WinUtil (Moscovium preset)'; Admin = $false
+            Description = 'Opens WinUtil with the GUI''s 15 tweaks preselected. You still press Run Tweaks - WinUtil has no unattended mode.'
         }
         [pscustomobject]@{
-            Id = 'raphi'; Name = 'Raphi Win11Debloat'; Admin = $true
+            Id = 'raphi'; Name = 'Raphi Win11Debloat'; Admin = $false
             Description = 'Opens the interactive Win11Debloat menu (debloat.raphi.re).'
         }
         [pscustomobject]@{
-            Id = 'raphi-auto'; Name = 'Raphi Win11Debloat (Moscovium preset)'; Admin = $true
-            Description = 'Runs Win11Debloat unattended with the GUI''s 23-flag preset.'
+            Id = 'raphi-auto'; Name = 'Raphi Win11Debloat (Moscovium preset)'; Admin = $false
+            Description = 'Runs Win11Debloat unattended with the GUI''s 24-flag preset.'
         }
         [pscustomobject]@{
             Id = 'network-better'; Name = 'Network: disable TCP autotuning'; Admin = $true
@@ -101,38 +103,109 @@ function Resolve-ToolboxAction {
     return $null
 }
 
-# Fetches a remote script, shows the user where it came from, and runs it in
-# this session after an explicit yes.
+# WinUtil prefers pwsh when it is installed; match that so the script behaves the
+# same launched from here as launched by hand.
+function Get-PowerShellHost {
+    $pwsh = Get-Command -Name 'pwsh.exe' -ErrorAction SilentlyContinue
+    if ($pwsh) { return $pwsh.Source }
+    return (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')
+}
+
+# Builds the canonical one-liner for a remote script: the exact command a user
+# would paste. With no arguments that is `irm <url> | iex`; with arguments it is
+# the script-block form, because iex cannot take parameters.
+function New-RemoteScriptCommand {
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [string[]]$ScriptArguments = @()
+    )
+
+    $safeUrl = $Url -replace "'", "''"
+
+    if (-not $ScriptArguments -or $ScriptArguments.Count -eq 0) {
+        return "irm '$safeUrl' | iex"
+    }
+
+    # Switches pass through bare; values get quoted, since paths contain spaces.
+    $rendered = foreach ($argument in $ScriptArguments) {
+        if ($argument -match '^-[A-Za-z]') { $argument }
+        else { "'" + ($argument -replace "'", "''") + "'" }
+    }
+
+    "& ([scriptblock]::Create((irm '$safeUrl'))) $($rendered -join ' ')"
+}
+
+# Runs a third-party script the way its authors document it: as `irm <url> | iex`
+# in a *separate* PowerShell process, after showing the user the URL.
+#
+# It has to be a separate process, not `& ([scriptblock]::Create($text))` in this
+# one. Three reasons, all of which broke WinUtil:
+#
+#   1. This bundle runs under Set-StrictMode -Version Latest and
+#      $ErrorActionPreference = 'Stop'. Child scopes inherit both, and a
+#      15,000-line WPF script is not written to survive either.
+#   2. WinUtil calls a bare `break` when it decides to self-elevate. In-process
+#      that unwinds into whatever loop we are running, including the menu loop.
+#   3. WinUtil is a WPF application and wants its own host and console.
 function Invoke-RemoteScript {
     param(
         [Parameter(Mandatory)][string]$Url,
         [Parameter(Mandatory)][string]$Label,
-        [string[]]$ScriptArguments = @()
+        [string[]]$ScriptArguments = @(),
+        [switch]$Wait
     )
+
+    $command = New-RemoteScriptCommand -Url $Url -ScriptArguments $ScriptArguments
+
+    $where = if ($Ctx.IsAdmin) { 'a new window, elevated as you already are' }
+             else { 'a new window, which will ask for administrator rights' }
 
     Write-Line ''
     Write-Warn "$Label runs a script published by a third party:"
     Write-Line "      $Url" -Color White
-    if ($ScriptArguments.Count -gt 0) {
-        Write-Info "arguments: $($ScriptArguments -join ' ')"
-    }
     Write-Info 'Moscovium does not review or pin the contents of that script.'
+    Write-Line ''
+    Write-Info "It will run in $where as:"
+    Write-Line "      $command" -Color Gray
 
-    if (-not (Confirm-Action "Download and run it now?")) {
+    if (-not (Confirm-Action "Run it now?")) {
         Write-Warn "$Label - skipped."
-        return
+        return $false
     }
 
-    Write-Step "Fetching $Url"
-    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
+    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass')
+    # Keep the window open afterwards so the user can read what happened; an
+    # install we are waiting on should close on its own instead.
+    if (-not $Wait) { $arguments += '-NoExit' }
+    $arguments += @('-Command', $command)
 
-    $text = Invoke-RestMethod -Uri $Url -TimeoutSec 120
-    $block = [scriptblock]::Create($text)
+    $start = @{
+        FilePath     = Get-PowerShellHost
+        ArgumentList = $arguments
+        ErrorAction  = 'Stop'
+    }
+    # Already elevated: the child inherits it. Otherwise ask, rather than letting
+    # the script discover it is unelevated and relaunch itself.
+    if (-not $Ctx.IsAdmin) { $start.Verb = 'RunAs' }
+    if ($Wait) { $start.Wait = $true; $start.PassThru = $true }
 
-    Write-Step "Running $Label"
-    if ($ScriptArguments.Count -gt 0) { & $block @ScriptArguments } else { & $block }
+    Write-Step "Launching $Label"
+    Write-Log "remote script: $command"
 
-    Write-Ok "$Label finished."
+    $process = Start-Process @start
+
+    if ($Wait) {
+        if ($process -and $process.ExitCode -ne 0) {
+            Write-Warn "$Label exited with code $($process.ExitCode)."
+            return $false
+        }
+        Write-Ok "$Label finished."
+    }
+    else {
+        Write-Ok "$Label is running in its own window."
+    }
+
+    return $true
 }
 
 function Get-WinutilConfigPath {
@@ -212,23 +285,28 @@ function Invoke-ToolboxAction {
         switch ($action.Id) {
 
             'winutil' {
-                Invoke-RemoteScript -Url 'https://christitus.com/win' -Label 'WinUtil'
+                Invoke-RemoteScript -Url 'https://christitus.com/win' -Label 'WinUtil' | Out-Null
             }
 
-            'winutil-auto' {
+            'winutil-preset' {
                 $config = Get-WinutilConfigPath
                 Write-Info "preset: $config"
+
+                # -Config imports the selections into the GUI; there is no -Run
+                # switch. The GUI passes one, which is why its "Automated" button
+                # fails outright - WinUtil rejects the unknown parameter. This is
+                # the same command WinUtil's own "copy config command" produces.
                 Invoke-RemoteScript -Url 'https://christitus.com/win' -Label 'WinUtil (preset)' `
-                    -ScriptArguments @('-Config', $config, '-Run')
+                    -ScriptArguments @('-Config', $config) | Out-Null
             }
 
             'raphi' {
-                Invoke-RemoteScript -Url 'https://debloat.raphi.re/' -Label 'Win11Debloat'
+                Invoke-RemoteScript -Url 'https://debloat.raphi.re/' -Label 'Win11Debloat' | Out-Null
             }
 
             'raphi-auto' {
                 Invoke-RemoteScript -Url 'https://debloat.raphi.re/' -Label 'Win11Debloat (preset)' `
-                    -ScriptArguments (@('-RunDefaults') + (Get-RaphiPresetArguments))
+                    -ScriptArguments (@('-RunDefaults') + (Get-RaphiPresetArguments)) | Out-Null
             }
 
             'network-better' {

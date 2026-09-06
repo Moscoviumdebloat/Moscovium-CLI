@@ -229,21 +229,13 @@ function Find-ZipInstaller {
 function Install-FromScript {
     param([Parameter(Mandatory)]$App)
 
-    Write-Line ''
-    Write-Warn "$($App.name) installs by running a script downloaded from the internet:"
-    Write-Line "      $($App.scriptUrl)" -Color White
-    Write-Info 'This executes with your privileges and is not verified by Moscovium.'
+    # Shares Invoke-RemoteScript with the toolbox: a bootstrap script gets its own
+    # process rather than running inside this one, for the reasons documented
+    # there. -Wait because an install should finish before we report on it.
+    $ran = Invoke-RemoteScript -Url $App.scriptUrl -Label $App.name -Wait
 
-    if (-not (Confirm-Action "Download and run this script?")) {
-        Write-Warn "$($App.name) - skipped."
-        $Ctx.Skipped++
-        return $false
-    }
-
-    Write-Step "Running bootstrap for $($App.name)"
-    $script = Invoke-RestMethod -Uri $App.scriptUrl -TimeoutSec 120
-    & ([scriptblock]::Create($script))
-    return $true
+    if (-not $ran) { $Ctx.Skipped++ }
+    return $ran
 }
 
 function Install-App {

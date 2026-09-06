@@ -507,6 +507,48 @@ Test-Case 'every toolbox action resolves to itself' {
     }
 }
 
+Test-Case 'a remote script with no arguments is the canonical irm one-liner' {
+    Assert-Equal "irm 'https://christitus.com/win' | iex" `
+        (New-RemoteScriptCommand -Url 'https://christitus.com/win')
+}
+
+Test-Case 'a remote script with arguments uses the script-block form' {
+    # iex cannot take parameters, so anything with arguments has to go through
+    # [scriptblock]::Create - the form both WinUtil and Win11Debloat document.
+    $command = New-RemoteScriptCommand -Url 'https://debloat.raphi.re/' -ScriptArguments @('-RunDefaults', '-Silent')
+    Assert-Equal "& ([scriptblock]::Create((irm 'https://debloat.raphi.re/'))) -RunDefaults -Silent" $command
+}
+
+Test-Case 'remote script values are quoted, switches are not' {
+    $command = New-RemoteScriptCommand -Url 'https://example.invalid/x' `
+        -ScriptArguments @('-Config', 'C:\Program Files\a b.json')
+
+    Assert-True ($command -like "*-Config 'C:\Program Files\a b.json'*") "path was not quoted: $command"
+    Assert-True ($command -notlike "*'-Config'*") 'the switch itself was quoted'
+}
+
+Test-Case 'WinUtil is never passed the -Run switch it no longer has' {
+    # The desktop app passes -Config <path> -Run. Current WinUtil declares only
+    # -Config, -Preset and -Offline, so -Run is a parameter-binding failure -
+    # which is exactly why the GUI's automated button does nothing.
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/40-Toolbox.ps1') -Raw
+    Assert-True ($source -notmatch "'-Run'") 'src still passes -Run to WinUtil'
+
+    $bundle = Get-Content -LiteralPath (Join-Path $RepoRoot 'moscovium.ps1') -Raw
+    Assert-True ($bundle -notmatch "'-Run'") 'the built bundle still passes -Run to WinUtil'
+}
+
+Test-Case 'remote scripts are launched out of process, not invoked inline' {
+    # Running them in this process would inherit Set-StrictMode -Version Latest
+    # and $ErrorActionPreference = 'Stop', and would let WinUtil's bare `break`
+    # unwind into our own loops.
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/40-Toolbox.ps1') -Raw
+
+    Assert-True ($source -match 'Start-Process') 'Invoke-RemoteScript no longer starts a process'
+    Assert-True ($source -notmatch '&\s*\$block') 'a remote script is still invoked inline'
+    Assert-True ($source -match '-NoProfile') 'the child process does not use -NoProfile'
+}
+
 Test-Case 'licence-circumvention entries are absent from the catalog' {
     # MAS activation and the StartAllBack trial reset are deliberately not ported.
     foreach ($app in $Ctx.Apps) {

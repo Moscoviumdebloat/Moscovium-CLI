@@ -104,7 +104,7 @@ silently.
 
 ```powershell
 .\moscovium.ps1 -List toolbox
-.\moscovium.ps1 -Toolbox winutil-auto
+.\moscovium.ps1 -Toolbox winutil-preset
 .\moscovium.ps1 -Toolbox network-better
 ```
 
@@ -221,9 +221,28 @@ wallpaper setting, and the CS2/CS:GO config pages.
 
 ## Third-party scripts
 
-WinUtil, Win11Debloat and any catalog entry with a `scriptUrl` fetch and run code
-published by someone else. The CLI prints the URL and asks before fetching any of
-them, every time. It does not pin or review their contents — nor does the GUI.
+WinUtil, Win11Debloat and any catalog entry with a `scriptUrl` run code published
+by someone else. The CLI shows the URL *and the exact command* and asks first,
+every time. It does not pin or review their contents — nor does the GUI.
+
+They are launched as `irm <url> | iex` in a **separate PowerShell process**, not
+executed inside the CLI. That matters:
+
+- This bundle runs under `Set-StrictMode -Version Latest` and
+  `$ErrorActionPreference = 'Stop'`, and child scopes inherit both. A
+  15,000-line WPF script is not written to survive either.
+- WinUtil calls a bare `break` when it self-elevates, which in-process would
+  unwind whatever loop the CLI was running, including the menu.
+- WinUtil is a WPF app and wants its own host and console.
+
+**On `winutil-preset`:** current WinUtil takes `-Config`, `-Preset` and
+`-Offline`. There is no `-Run`, and `-Config` only *preselects* tweaks in the
+GUI — you still press Run Tweaks. The desktop app passes `-Config <path> -Run`,
+which today fails parameter binding outright, so its "Automated" button does
+nothing. The CLI sends `-Config` alone, which is exactly what WinUtil's own
+"copy config command" button produces.
+
+`raphi-auto` genuinely is unattended; all 24 of its flags are still valid.
 
 ## Requirements
 

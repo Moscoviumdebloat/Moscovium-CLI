@@ -208,7 +208,7 @@ function Invoke-SetupProfile {
     }
 
     if (Get-ProfileProperty -SetupProfile $setupProfile -Name 'RunChrisTitus' -Default $false) {
-        Invoke-ToolboxAction -Id 'winutil-auto'
+        Invoke-ToolboxAction -Id 'winutil-preset'
     }
 
     if (Get-ProfileProperty -SetupProfile $setupProfile -Name 'RunRaphi' -Default $false) {
