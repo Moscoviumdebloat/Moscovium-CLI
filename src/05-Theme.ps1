@@ -264,9 +264,12 @@ function Write-ProgressBar {
         [int]$Width = 26
     )
 
+    $Fraction = [Math]::Max(0.0, [Math]::Min(1.0, $Fraction))
+
+    # The GUI drives a real progress bar from the same call sites.
+    if ($Ctx.ProgressSink) { & $Ctx.ProgressSink $Label $Fraction $Detail; return }
     if (-not $Ctx.Animate) { return }
 
-    $Fraction = [Math]::Max(0.0, [Math]::Min(1.0, $Fraction))
     $filled = [int][Math]::Round($Width * $Fraction)
 
     $bar = ((Get-Glyph 'BarFull') * $filled) + ((Get-Glyph 'BarEmpty') * ($Width - $filled))
@@ -281,6 +284,8 @@ function Write-Activity {
         [Parameter(Mandatory)][int]$Tick
     )
 
+    # Indeterminate work: report it as a pulsing bar in the GUI.
+    if ($Ctx.ProgressSink) { & $Ctx.ProgressSink $Message (-1.0) ''; return }
     if (-not $Ctx.Animate) { return }
 
     $frames = @(Get-Glyph 'Spinner')

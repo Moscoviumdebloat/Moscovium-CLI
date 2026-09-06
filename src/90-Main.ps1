@@ -28,6 +28,7 @@ function Show-Help {
     Write-Line '    -WindowsUpdate     install pending Windows updates via PSWindowsUpdate' -Color Gray
     Write-Line ''
     Write-Line '  OTHER' -Color White
+    Write-Line '    -Gui               open the graphical interface' -Color Gray
     Write-Line '    -Toolbox <id>      run a toolbox action (see -List toolbox)' -Color Gray
     Write-Line '    -Profile <path>    run a saved setup profile' -Color Gray
     Write-Line '    -SaveProfile <path>  write the current -Apply/-Install selection as a profile' -Color Gray
@@ -209,6 +210,8 @@ function Invoke-Main {
         if (Invoke-SelfElevate -BoundParameters $forward) { return 0 }
         Write-Line ''
     }
+
+    if (& $has 'Gui') { return (Show-Gui -BoundParameters $Bound) }
 
     $didSomething = $false
 

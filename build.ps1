@@ -39,7 +39,12 @@ $Version = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'VERSION') -Raw).T
 $DefaultSourceUrl = 'https://raw.githubusercontent.com/Moscoviumdebloat/Moscovium-CLI/main/moscovium.ps1'
 
 function Read-DataFile {
-    param([Parameter(Mandatory)][string]$Name)
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        # XAML has no \uXXXX escape, so markup must be rejected rather than
+        # escaped if it ever stops being ASCII.
+        [switch]$MustBeAscii
+    )
 
     $path = Join-Path $DataDir $Name
     if (-not (Test-Path -LiteralPath $path)) {
@@ -52,6 +57,14 @@ function Read-DataFile {
     # produces one, but fail loudly rather than emit a broken bundle.
     if ($text -match '(?m)^\s*''@') {
         throw "$Name contains a line that would close the embedding here-string."
+    }
+
+    if ($MustBeAscii) {
+        $bad = [regex]::Matches($text, '[^\x00-\x7F]')
+        if ($bad.Count -gt 0) {
+            throw "$Name contains $($bad.Count) non-ASCII character(s). Markup cannot be \u-escaped; use ASCII."
+        }
+        return $text
     }
 
     # The catalogs are generated from the GUI's C# strings, which may contain
@@ -116,6 +129,7 @@ param(
     [switch]  `$WindowsUpdate,
 
     # Other actions
+    [switch]  `$Gui,
     [string]  `$Toolbox,
     [string]  `$Profile,
     [string]  `$SaveProfile,
@@ -223,6 +237,9 @@ foreach ($file in $sources) {
     }
     if ($file.Name -eq '40-Toolbox.ps1') {
         $text = Set-EmbeddedLiteral -Text $text -Name 'EmbeddedWinutilConfigJson' -Content (Read-DataFile 'winutil-debloat.json')
+    }
+    if ($file.Name -eq '70-Gui.ps1') {
+        $text = Set-EmbeddedLiteral -Text $text -Name 'EmbeddedGuiXaml' -Content (Read-DataFile 'gui.xaml' -MustBeAscii)
     }
 
     [void]$body.AppendLine()

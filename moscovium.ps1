@@ -23,6 +23,7 @@ param(
     [switch]  $WindowsUpdate,
 
     # Other actions
+    [switch]  $Gui,
     [string]  $Toolbox,
     [string]  $Profile,
     [string]  $SaveProfile,
@@ -116,6 +117,17 @@ param(
             # sense on a real console.
             Animate    = (-not $redirected)
             Theme      = (New-Theme -Ascii:$Ascii)
+
+            # Output sinks. Left null, everything goes to the console. The GUI sets
+            # them so the exact same engine functions drive a window instead - no
+            # duplicate apply/install/toolbox logic anywhere.
+            #   Sink         (text, color, newline)      -> log pane
+            #   ProgressSink (label, fraction, detail)   -> progress bar
+            #   ConfirmSink  (message, defaultYes)       -> modal dialog, returns bool
+            Sink         = $null
+            ProgressSink = $null
+            ConfirmSink  = $null
+
             IsAdmin    = Test-Administrator
             StateDir   = $stateDir
             BackupDir  = Join-Path $stateDir 'backups'
@@ -160,6 +172,15 @@ param(
             [ConsoleColor]$Background,
             [switch]$NoNewline
         )
+
+        # Every piece of console output in the CLI funnels through here, so a sink
+        # set on the context redirects all of it - status lines, rules, chips and
+        # summaries alike - without any caller knowing.
+        if ($Ctx.Sink) {
+            $sinkColor = if ($PSBoundParameters.ContainsKey('Color')) { $Color } else { $null }
+            & $Ctx.Sink $Text $sinkColor (-not $NoNewline)
+            return
+        }
 
         if (-not $Ctx.UseColor) {
             Write-Host $Text -NoNewline:$NoNewline
@@ -303,6 +324,11 @@ param(
         )
 
         if ($Ctx.AssumeYes) { return $true }
+
+        # The GUI answers with a modal dialog rather than Read-Host, so third-party
+        # script prompts stay real questions instead of being auto-accepted.
+        if ($Ctx.ConfirmSink) { return [bool](& $Ctx.ConfirmSink $Message ([bool]$DefaultYes)) }
+
         if (-not (Test-Interactive)) {
             Write-Warn "Cannot prompt for confirmation in a non-interactive host. Pass -Yes to proceed."
             return $false
@@ -3422,9 +3448,12 @@ param(
             [int]$Width = 26
         )
 
+        $Fraction = [Math]::Max(0.0, [Math]::Min(1.0, $Fraction))
+
+        # The GUI drives a real progress bar from the same call sites.
+        if ($Ctx.ProgressSink) { & $Ctx.ProgressSink $Label $Fraction $Detail; return }
         if (-not $Ctx.Animate) { return }
 
-        $Fraction = [Math]::Max(0.0, [Math]::Min(1.0, $Fraction))
         $filled = [int][Math]::Round($Width * $Fraction)
 
         $bar = ((Get-Glyph 'BarFull') * $filled) + ((Get-Glyph 'BarEmpty') * ($Width - $filled))
@@ -3439,6 +3468,8 @@ param(
             [Parameter(Mandatory)][int]$Tick
         )
 
+        # Indeterminate work: report it as a pulsing bar in the GUI.
+        if ($Ctx.ProgressSink) { & $Ctx.ProgressSink $Message (-1.0) ''; return }
         if (-not $Ctx.Animate) { return }
 
         $frames = @(Get-Glyph 'Spinner')
@@ -5680,6 +5711,7 @@ param(
             [pscustomobject]@{ Name = 'Toolbox';  Hint = 'Debloat scripts, network, boot, control panels';         Action = 'toolbox' }
             [pscustomobject]@{ Name = 'Profiles'; Hint = 'Save or run a setup checklist';                          Action = 'profiles' }
             [pscustomobject]@{ Name = 'Status';   Hint = 'What is currently applied on this machine';              Action = 'status' }
+            [pscustomobject]@{ Name = 'GUI';      Hint = 'Open the same thing as a window';                       Action = 'gui' }
             [pscustomobject]@{ Name = 'Quit';     Hint = '';                                                       Action = 'quit' }
         )
 
@@ -5701,8 +5733,1005 @@ param(
                 'toolbox'  { Show-ToolboxMenu }
                 'profiles' { Show-ProfileMenu }
                 'status'   { Write-Banner; Show-TweakStatus; Wait-ForKey }
+                'gui'      { Clear-Host; Show-Gui | Out-Null; Clear-Host }
                 'quit'     { return }
             }
+        }
+    }
+
+# ===== src/70-Gui.ps1 ==================================================
+
+    # =============================================================================
+    # GUI mode.
+    #
+    # A WPF window that is a second front-end on the same engine, not a second
+    # implementation. Every button ends up in Invoke-Tweaks, Invoke-AppInstall,
+    # Invoke-ToolboxAction or Invoke-SetupProfile - the identical functions the CLI
+    # calls - with $Ctx.Sink, $Ctx.ProgressSink and $Ctx.ConfirmSink redirecting
+    # their output into the log pane, progress bar and dialogs.
+    #
+    # WPF ships with .NET Framework, so this still needs nothing installed and still
+    # works from `irm ... | iex`. Two constraints come with that:
+    #
+    #   - WPF requires an STA thread. powershell.exe is STA, but pwsh is MTA by
+    #     default, so an MTA host is relaunched into an STA one.
+    #   - Rows are built as real controls rather than data-bound. Binding to
+    #     PSCustomObject works, but writing back through the PSObject adapter is
+    #     fiddly enough that explicit controls are the more predictable choice.
+    #
+    # The XAML is ASCII only, like the rest of src/.
+    # =============================================================================
+
+    # Populated by build.ps1 from data/gui.xaml. Empty in the source tree, where
+    # Get-GuiXaml falls back to reading that file - the same arrangement as the
+    # catalogs, and for the same reason: a here-string cannot survive being indented
+    # into the bundle's script block.
+    $EmbeddedGuiXaml = @'
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Moscovium" Height="760" Width="1120" MinHeight="560" MinWidth="900"
+        WindowStartupLocation="CenterScreen" Background="#FF16161A">
+
+  <Window.Resources>
+    <SolidColorBrush x:Key="Bg"      Color="#FF16161A"/>
+    <SolidColorBrush x:Key="Panel"   Color="#FF1E1E24"/>
+    <SolidColorBrush x:Key="Panel2"  Color="#FF24242C"/>
+    <SolidColorBrush x:Key="Line"    Color="#FF32323C"/>
+    <SolidColorBrush x:Key="Text"    Color="#FFE4E4EA"/>
+    <SolidColorBrush x:Key="Muted"   Color="#FF8E8E9C"/>
+    <SolidColorBrush x:Key="Accent"  Color="#FF4FC3F7"/>
+    <SolidColorBrush x:Key="Ok"      Color="#FF7BD88F"/>
+    <SolidColorBrush x:Key="Warn"    Color="#FFF0C674"/>
+    <SolidColorBrush x:Key="Err"     Color="#FFF07178"/>
+
+    <Style TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+    </Style>
+
+    <Style TargetType="Button">
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="Background" Value="{StaticResource Panel2}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="14,7"/>
+      <Setter Property="Margin" Value="0,0,8,0"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Chrome" CornerRadius="5" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                Margin="{TemplateBinding Padding}"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="#FF2E2E38"/>
+                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource Accent}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.4"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="Primary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="Background" Value="#FF19566B"/>
+      <Setter Property="BorderBrush" Value="{StaticResource Accent}"/>
+    </Style>
+
+    <Style TargetType="CheckBox">
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <Style TargetType="TextBox">
+      <Setter Property="Background" Value="{StaticResource Panel2}"/>
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="7,5"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="CaretBrush" Value="{StaticResource Text}"/>
+    </Style>
+
+    <!-- The stock ComboBox and ScrollBar chrome is light, and ignores Background,
+         so both need a template to sit on a dark window. -->
+    <Style TargetType="ComboBoxItem">
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="Padding" Value="10,6"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ComboBoxItem">
+            <Border x:Name="Chrome" Background="Transparent" Padding="{TemplateBinding Padding}">
+              <ContentPresenter/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsHighlighted" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="#FF19566B"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style TargetType="ComboBox">
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ComboBox">
+            <Grid>
+              <ToggleButton Focusable="False" ClickMode="Press"
+                            IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                <ToggleButton.Template>
+                  <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Chrome" Background="{StaticResource Panel2}" BorderBrush="{StaticResource Line}"
+                            BorderThickness="1" CornerRadius="5">
+                      <Path HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,10,0"
+                            Data="M 0 0 L 8 0 L 4 5 Z" Fill="{StaticResource Muted}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True">
+                        <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </ToggleButton.Template>
+              </ToggleButton>
+              <ContentPresenter Margin="11,0,28,0" VerticalAlignment="Center" IsHitTestVisible="False"
+                                Content="{TemplateBinding SelectionBoxItem}"
+                                ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"/>
+              <Popup IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" AllowsTransparency="True"
+                     Focusable="False" PopupAnimation="Fade">
+                <Border Background="{StaticResource Panel2}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                        CornerRadius="5" MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                        MaxHeight="320" Margin="0,2,0,0">
+                  <ScrollViewer>
+                    <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
+                  </ScrollViewer>
+                </Border>
+              </Popup>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Placeholder text: a TextBlock behind the box, shown only while empty. -->
+    <Style x:Key="Watermark" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource Muted}"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Margin" Value="11,0,0,0"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+      <Setter Property="IsHitTestVisible" Value="False"/>
+    </Style>
+
+    <Style x:Key="ScrollThumb" TargetType="Thumb">
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Thumb">
+            <Border x:Name="Chrome" Background="#FF3A3A46" CornerRadius="3" Margin="3,0"/>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="#FF525263"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style TargetType="ScrollBar">
+      <Setter Property="Width" Value="10"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ScrollBar">
+            <Grid Background="Transparent">
+              <Track x:Name="PART_Track" IsDirectionReversed="True">
+                <Track.DecreaseRepeatButton>
+                  <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False"/>
+                </Track.DecreaseRepeatButton>
+                <Track.Thumb>
+                  <Thumb Style="{StaticResource ScrollThumb}"/>
+                </Track.Thumb>
+                <Track.IncreaseRepeatButton>
+                  <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False"/>
+                </Track.IncreaseRepeatButton>
+              </Track>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+      <Style.Triggers>
+        <Trigger Property="Orientation" Value="Horizontal">
+          <Setter Property="Width" Value="Auto"/>
+          <Setter Property="Height" Value="10"/>
+        </Trigger>
+      </Style.Triggers>
+    </Style>
+
+    <Style x:Key="NavItem" TargetType="ListBoxItem">
+      <Setter Property="Foreground" Value="{StaticResource Muted}"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="FontSize" Value="14"/>
+      <Setter Property="Padding" Value="16,11"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListBoxItem">
+            <Border x:Name="Chrome" Background="Transparent" BorderThickness="3,0,0,0" BorderBrush="Transparent">
+              <ContentPresenter Margin="{TemplateBinding Padding}"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="#FF24242C"/>
+              </Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="#FF24242C"/>
+                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                <Setter Property="Foreground" Value="{StaticResource Text}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+  </Window.Resources>
+
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <!-- header -->
+    <Border Grid.Row="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
+      <Grid Margin="20,14">
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+          <TextBlock Text="MOSCOVIUM" FontSize="19" FontWeight="SemiBold" Foreground="{StaticResource Accent}"/>
+          <TextBlock x:Name="VersionText" Text="v0.0.0" FontSize="12" Foreground="{StaticResource Muted}"
+                     VerticalAlignment="Center" Margin="10,3,0,0"/>
+          <Border Background="{StaticResource Panel2}" CornerRadius="9" Padding="9,3" Margin="16,0,0,0">
+            <TextBlock x:Name="CatalogChip" Text="" FontSize="11" Foreground="{StaticResource Muted}"/>
+          </Border>
+          <Border x:Name="ElevChipBorder" Background="{StaticResource Panel2}" CornerRadius="9" Padding="9,3" Margin="8,0,0,0">
+            <TextBlock x:Name="ElevChip" Text="" FontSize="11" Foreground="{StaticResource Warn}"/>
+          </Border>
+        </StackPanel>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+          <CheckBox x:Name="DryRunToggle" Content="Dry run" Margin="0,0,16,0"
+                    ToolTip="Show what would change without changing anything"/>
+          <Button x:Name="BtnElevate" Content="Restart as admin"/>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- body -->
+    <Grid Grid.Row="1">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="188"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+
+      <Border Grid.Column="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,1,0">
+        <ListBox x:Name="NavList" Background="Transparent" BorderThickness="0" Margin="0,10,0,0"
+                 ItemContainerStyle="{StaticResource NavItem}">
+          <ListBoxItem Content="Tweaks" IsSelected="True"/>
+          <ListBoxItem Content="Apps"/>
+          <ListBoxItem Content="Toolbox"/>
+          <ListBoxItem Content="Profiles"/>
+        </ListBox>
+      </Border>
+
+      <Grid Grid.Column="1">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="*" MinHeight="180"/>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="200"/>
+        </Grid.RowDefinitions>
+
+        <!-- pages share this cell; only one is visible at a time -->
+        <Grid Grid.Row="0" Margin="20,16,20,0">
+
+          <Grid x:Name="TweaksPanel">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <TextBlock Grid.Row="0" Text="Registry tweaks" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
+            <DockPanel Grid.Row="1" Margin="0,0,0,10" LastChildFill="False">
+              <Grid Width="230" DockPanel.Dock="Left" Margin="0,0,8,0">
+                <TextBox x:Name="TweakSearch" ToolTip="Filter by name, description or category"/>
+                <TextBlock Text="Search tweaks">
+                  <TextBlock.Style>
+                    <Style TargetType="TextBlock" BasedOn="{StaticResource Watermark}">
+                      <Setter Property="Visibility" Value="Collapsed"/>
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding Text, ElementName=TweakSearch}" Value="">
+                          <Setter Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </TextBlock.Style>
+                </TextBlock>
+              </Grid>
+              <ComboBox x:Name="TweakCategory" Width="180" DockPanel.Dock="Left" Margin="0,0,8,0"/>
+              <Button x:Name="BtnTweakAll" Content="All" DockPanel.Dock="Left"/>
+              <Button x:Name="BtnTweakNone" Content="None" DockPanel.Dock="Left"/>
+              <Button x:Name="BtnRevert" Content="Revert selected" DockPanel.Dock="Right" Margin="8,0,0,0"/>
+              <Button x:Name="BtnApply" Content="Apply selected" DockPanel.Dock="Right" Style="{StaticResource Primary}"/>
+            </DockPanel>
+            <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="6">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="6">
+                <StackPanel x:Name="TweakRows"/>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+
+          <Grid x:Name="AppsPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <TextBlock Grid.Row="0" Text="Applications" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
+            <DockPanel Grid.Row="1" Margin="0,0,0,10" LastChildFill="False">
+              <Grid Width="230" DockPanel.Dock="Left" Margin="0,0,8,0">
+                <TextBox x:Name="AppSearch" ToolTip="Filter by name, id or description"/>
+                <TextBlock Text="Search apps">
+                  <TextBlock.Style>
+                    <Style TargetType="TextBlock" BasedOn="{StaticResource Watermark}">
+                      <Setter Property="Visibility" Value="Collapsed"/>
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding Text, ElementName=AppSearch}" Value="">
+                          <Setter Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </TextBlock.Style>
+                </TextBlock>
+              </Grid>
+              <ComboBox x:Name="AppCategory" Width="180" DockPanel.Dock="Left" Margin="0,0,8,0"/>
+              <Button x:Name="BtnAppNone" Content="None" DockPanel.Dock="Left"/>
+              <Button x:Name="BtnInstall" Content="Install selected" DockPanel.Dock="Right" Style="{StaticResource Primary}"/>
+            </DockPanel>
+            <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="6">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="6">
+                <StackPanel x:Name="AppRows"/>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+
+          <Grid x:Name="ToolboxPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <TextBlock Grid.Row="0" Text="Toolbox" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
+            <Border Grid.Row="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="6">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="6">
+                <StackPanel x:Name="ToolboxRows"/>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+
+          <Grid x:Name="ProfilesPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <TextBlock Grid.Row="0" Text="Setup profiles" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,6"/>
+            <TextBlock Grid.Row="1" TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="0,0,0,14"
+                       Text="A profile is a saved checklist of tweaks and apps. The format matches the Moscovium desktop app, so profiles move between them."/>
+            <StackPanel Grid.Row="2">
+              <TextBlock Text="Profile file" Foreground="{StaticResource Muted}" Margin="0,0,0,6"/>
+              <DockPanel LastChildFill="True" Margin="0,0,0,14">
+                <Button x:Name="BtnBrowseProfile" Content="Browse" DockPanel.Dock="Right" Margin="8,0,0,0"/>
+                <TextBox x:Name="ProfilePath"/>
+              </DockPanel>
+              <StackPanel Orientation="Horizontal">
+                <Button x:Name="BtnRunProfile" Content="Run profile" Style="{StaticResource Primary}"/>
+                <Button x:Name="BtnSaveProfile" Content="Save current selection"/>
+              </StackPanel>
+            </StackPanel>
+          </Grid>
+
+        </Grid>
+
+        <GridSplitter Grid.Row="1" Height="4" HorizontalAlignment="Stretch" Background="{StaticResource Line}"
+                      VerticalAlignment="Center" Margin="0,10,0,0"/>
+
+        <Border Grid.Row="2" Background="#FF101014" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0">
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <DockPanel Grid.Row="0" Margin="20,8,20,4" LastChildFill="False">
+              <TextBlock Text="Output" Foreground="{StaticResource Muted}" FontSize="11" DockPanel.Dock="Left"/>
+              <Button x:Name="BtnClearLog" Content="Clear" DockPanel.Dock="Right" Padding="9,2" Margin="0"/>
+            </DockPanel>
+            <RichTextBox x:Name="LogBox" Grid.Row="1" Margin="14,0,14,10" Background="Transparent"
+                         Foreground="{StaticResource Text}" BorderThickness="0" IsReadOnly="True"
+                         FontFamily="Consolas" FontSize="12"
+                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+          </Grid>
+        </Border>
+      </Grid>
+    </Grid>
+
+    <!-- status bar -->
+    <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0">
+      <Grid Margin="20,9">
+        <TextBlock x:Name="StatusText" Text="Ready" Foreground="{StaticResource Muted}" FontSize="12" VerticalAlignment="Center"/>
+        <ProgressBar x:Name="Progress" Width="260" Height="6" HorizontalAlignment="Right" VerticalAlignment="Center"
+                     Background="{StaticResource Panel2}" Foreground="{StaticResource Accent}" BorderThickness="0"
+                     Visibility="Hidden"/>
+      </Grid>
+    </Border>
+  </Grid>
+</Window>
+'@
+
+    function Get-GuiXaml {
+        if (-not [string]::IsNullOrWhiteSpace($EmbeddedGuiXaml)) { return $EmbeddedGuiXaml }
+
+        $roots = @()
+        if ($PSScriptRoot) { $roots += (Join-Path $PSScriptRoot '..\data') }
+        if ($PSCommandPath) { $roots += (Join-Path (Split-Path -Parent $PSCommandPath) 'data') }
+        $roots += (Join-Path (Get-Location).Path 'data')
+
+        foreach ($root in $roots) {
+            $candidate = Join-Path $root 'gui.xaml'
+            if (Test-Path -LiteralPath $candidate) { return (Get-Content -LiteralPath $candidate -Raw -Encoding UTF8) }
+        }
+
+        throw 'The GUI layout is neither embedded in this build nor present at data/gui.xaml.'
+    }
+
+    # -----------------------------------------------------------------------------
+    # Host requirements
+    # -----------------------------------------------------------------------------
+
+    function Test-StaApartment {
+        try { return ([Threading.Thread]::CurrentThread.GetApartmentState() -eq [Threading.ApartmentState]::STA) }
+        catch { return $false }
+    }
+
+    function Import-WpfAssembly {
+        foreach ($name in @('PresentationFramework', 'PresentationCore', 'WindowsBase', 'System.Xaml', 'System.Windows.Forms')) {
+            Add-Type -AssemblyName $name -ErrorAction Stop
+        }
+    }
+
+    # WPF cannot run on an MTA thread. powershell.exe is STA; pwsh is not, so a run
+    # started there is relaunched into an STA host rather than failing.
+    function Invoke-StaRelaunch {
+        param([hashtable]$BoundParameters = @{})
+
+        Write-Warn 'The GUI needs an STA thread, and this PowerShell host is running MTA.'
+
+        $command = Get-RelaunchCommand -BoundParameters $BoundParameters
+        $host51 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+
+        Write-Step 'Relaunching in an STA host'
+        Write-Log "STA relaunch: $command"
+
+        try {
+            Start-Process -FilePath $host51 -ArgumentList @(
+                '-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', $command
+            ) -ErrorAction Stop | Out-Null
+            return $true
+        }
+        catch {
+            Write-Err "Could not start an STA host: $($_.Exception.Message)"
+            return $false
+        }
+    }
+
+    # -----------------------------------------------------------------------------
+    # Small WPF helpers
+    # -----------------------------------------------------------------------------
+
+    # Console colours mapped onto the window's palette, so log output reads the same
+    # as it does in the terminal.
+    function ConvertTo-Brush {
+        param($Color)
+
+        $hex = switch ([string]$Color) {
+            'Green'     { '#FF7BD88F' }
+            'DarkGreen' { '#FF5FA86F' }
+            'Yellow'    { '#FFF0C674' }
+            'DarkYellow'{ '#FFD0A354' }
+            'Red'       { '#FFF07178' }
+            'DarkRed'   { '#FFC05058' }
+            'Cyan'      { '#FF4FC3F7' }
+            'DarkCyan'  { '#FF3A93BC' }
+            'White'     { '#FFF4F4F8' }
+            'Gray'      { '#FFC8C8D2' }
+            'DarkGray'  { '#FF8E8E9C' }
+            default     { '#FFE4E4EA' }
+        }
+
+        New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($hex))
+    }
+
+    # Lets the window repaint and handle input during a long synchronous run. The
+    # engine functions are ordinary blocking PowerShell, so without this the window
+    # would freeze for the length of an install.
+    function Invoke-UiEvents {
+        $frame = New-Object Windows.Threading.DispatcherFrame
+        $callback = [Windows.Threading.DispatcherOperationCallback] {
+            param($state)
+            $state.Continue = $false
+            return $null
+        }
+        [Windows.Threading.Dispatcher]::CurrentDispatcher.BeginInvoke(
+            [Windows.Threading.DispatcherPriority]::Background, $callback, $frame) | Out-Null
+        [Windows.Threading.Dispatcher]::PushFrame($frame)
+    }
+
+    # One row: a checkbox, a primary label, a secondary line, and a status chip.
+    # The catalog item rides along in .Tag so selection can be read back directly.
+    function New-GuiRow {
+        param(
+            [Parameter(Mandatory)]$Item,
+            [Parameter(Mandatory)][string]$Primary,
+            [AllowEmptyString()][string]$Secondary = '',
+            [AllowEmptyString()][string]$Status = '',
+            [string]$StatusBrush = '#FF8E8E9C',
+            [switch]$NoCheckBox
+        )
+
+        $border = New-Object Windows.Controls.Border
+        $border.Padding = New-Object Windows.Thickness 8, 6, 8, 6
+        $border.CornerRadius = New-Object Windows.CornerRadius 4
+        $border.Margin = New-Object Windows.Thickness 0, 0, 0, 2
+
+        # checkbox | text (fills) | status chip
+        $grid = New-Object Windows.Controls.Grid
+        foreach ($unit in @([Windows.GridUnitType]::Auto, [Windows.GridUnitType]::Star, [Windows.GridUnitType]::Auto)) {
+            $column = New-Object Windows.Controls.ColumnDefinition
+            $column.Width = New-Object Windows.GridLength 1, $unit
+            $grid.ColumnDefinitions.Add($column)
+        }
+
+        $check = New-Object Windows.Controls.CheckBox
+        $check.VerticalAlignment = 'Center'
+        $check.Margin = New-Object Windows.Thickness 0, 0, 10, 0
+        $check.Foreground = ConvertTo-Brush 'Gray'
+        $check.Tag = $Item
+        if ($NoCheckBox) { $check.Visibility = 'Hidden' }
+        [Windows.Controls.Grid]::SetColumn($check, 0)
+        $grid.Children.Add($check) | Out-Null
+
+        $stack = New-Object Windows.Controls.StackPanel
+        [Windows.Controls.Grid]::SetColumn($stack, 1)
+
+        $title = New-Object Windows.Controls.TextBlock
+        $title.Text = $Primary
+        $title.Foreground = ConvertTo-Brush 'White'
+        $title.FontSize = 13
+        $stack.Children.Add($title) | Out-Null
+
+        if ($Secondary) {
+            $sub = New-Object Windows.Controls.TextBlock
+            $sub.Text = $Secondary
+            $sub.Foreground = ConvertTo-Brush 'DarkGray'
+            $sub.FontSize = 11
+            $sub.TextWrapping = 'Wrap'
+            $sub.Margin = New-Object Windows.Thickness 0, 1, 0, 0
+            $stack.Children.Add($sub) | Out-Null
+        }
+
+        $grid.Children.Add($stack) | Out-Null
+
+        if ($Status) {
+            $chip = New-Object Windows.Controls.TextBlock
+            $chip.Text = $Status
+            $chip.FontSize = 11
+            $chip.VerticalAlignment = 'Center'
+            $chip.Margin = New-Object Windows.Thickness 10, 0, 4, 0
+            $chip.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($StatusBrush))
+            [Windows.Controls.Grid]::SetColumn($chip, 2)
+            $grid.Children.Add($chip) | Out-Null
+        }
+
+        # Tint the row while it is ticked - the checkbox alone is easy to lose in
+        # a list of 127.
+        $check.Add_Checked({   $border.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString("#FF17323C")) }.GetNewClosure())
+        $check.Add_Unchecked({ $border.Background = [Windows.Media.Brushes]::Transparent }.GetNewClosure())
+
+        $border.Child = $grid
+        # Clicking anywhere on the row toggles it, not just the 13px checkbox.
+        $border.Add_MouseLeftButtonUp({
+            param($sender, $e)
+            $box = $sender.Child.Children[0]
+            if ($box.Visibility -eq 'Visible') { $box.IsChecked = -not $box.IsChecked }
+        }.GetNewClosure())
+
+        [pscustomobject]@{ Element = $border; CheckBox = $check; Item = $Item }
+    }
+
+    function Get-CheckedItem {
+        param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Rows)
+        @($Rows | Where-Object { $_.CheckBox.IsChecked -eq $true } | ForEach-Object { $_.Item })
+    }
+
+    # -----------------------------------------------------------------------------
+    # The window
+    # -----------------------------------------------------------------------------
+
+    # Builds and wires the window without showing it. Split out from Show-Gui so the
+    # whole thing can be constructed, populated and rendered to an image in a test
+    # without a human clicking anything.
+    function New-GuiWindow {
+        param([hashtable]$BoundParameters = @{})
+
+        $reader = New-Object Xml.XmlNodeReader ([xml](Get-GuiXaml))
+        $window = [Windows.Markup.XamlReader]::Load($reader)
+
+        # Pull every x:Name into a lookup so handlers read as $ui.BtnApply.
+        $ui = @{}
+        foreach ($name in @(
+            'VersionText', 'CatalogChip', 'ElevChip', 'ElevChipBorder', 'DryRunToggle', 'BtnElevate',
+            'NavList', 'TweaksPanel', 'AppsPanel', 'ToolboxPanel', 'ProfilesPanel',
+            'TweakSearch', 'TweakCategory', 'TweakRows', 'BtnApply', 'BtnRevert', 'BtnTweakAll', 'BtnTweakNone',
+            'AppSearch', 'AppCategory', 'AppRows', 'BtnInstall', 'BtnAppNone',
+            'ToolboxRows',
+            'ProfilePath', 'BtnBrowseProfile', 'BtnRunProfile', 'BtnSaveProfile',
+            'LogBox', 'BtnClearLog', 'StatusText', 'Progress')) {
+            $ui[$name] = $window.FindName($name)
+        }
+
+        # ---- log pane ----------------------------------------------------------
+        $document = New-Object Windows.Documents.FlowDocument
+        # Track the pane width: wide enough that rules and status lines never wrap,
+        # without the permanent horizontal scrollbar a fixed width would cause.
+        $document.PageWidth = 900
+        $paragraph = New-Object Windows.Documents.Paragraph
+        $paragraph.Margin = New-Object Windows.Thickness 0
+        $paragraph.LineHeight = 15
+        $document.Blocks.Add($paragraph)
+        $ui.LogBox.Document = $document
+        $ui.LogBox.Add_SizeChanged({
+            param($sender, $e)
+            $document.PageWidth = [Math]::Max(600, $sender.ActualWidth - 24)
+        }.GetNewClosure())
+
+        $logState = [pscustomobject]@{ Paragraph = $paragraph; Box = $ui.LogBox }
+
+        # The console glyph set may have fallen back to ASCII because conhost cannot
+        # encode box drawing. WPF has no such problem, so the log pane always gets
+        # the good glyphs. Stashed so closing the window leaves the console as it was.
+        $previousGlyphs = $Ctx.Theme.Glyph
+        $Ctx.Theme.Glyph = New-GlyphSet -Unicode $true
+
+        # Redirecting Write-Line is what lets every engine function report into the
+        # window without knowing the window exists.
+        $Ctx.Sink = {
+            param($text, $color, $newline)
+
+            $run = New-Object Windows.Documents.Run ([string]$text)
+            if ($color) { $run.Foreground = ConvertTo-Brush $color }
+            $logState.Paragraph.Inlines.Add($run)
+            if ($newline) { $logState.Paragraph.Inlines.Add((New-Object Windows.Documents.LineBreak)) }
+
+            $logState.Box.ScrollToEnd()
+            Invoke-UiEvents
+        }.GetNewClosure()
+
+        $Ctx.ProgressSink = {
+            param($label, $fraction, $detail)
+
+            $ui.Progress.Visibility = 'Visible'
+            if ($fraction -lt 0) {
+                $ui.Progress.IsIndeterminate = $true
+            }
+            else {
+                $ui.Progress.IsIndeterminate = $false
+                $ui.Progress.Value = [Math]::Round($fraction * 100)
+            }
+
+            $ui.StatusText.Text = if ($detail) { "$label   $detail" } else { [string]$label }
+            Invoke-UiEvents
+        }.GetNewClosure()
+
+        $Ctx.ConfirmSink = {
+            param($message, $defaultYes)
+
+            $default = if ($defaultYes) { [Windows.MessageBoxResult]::Yes } else { [Windows.MessageBoxResult]::No }
+            $answer = [Windows.MessageBox]::Show($window, [string]$message, 'Moscovium',
+                [Windows.MessageBoxButton]::YesNo, [Windows.MessageBoxImage]::Question, $default)
+
+            return ($answer -eq [Windows.MessageBoxResult]::Yes)
+        }.GetNewClosure()
+
+        # ---- header ------------------------------------------------------------
+        $ui.VersionText.Text = "v$($Ctx.Version)"
+        $ui.CatalogChip.Text = "$($Ctx.Tweaks.Count) tweaks   $($Ctx.Apps.Count) apps"
+
+        if ($Ctx.IsAdmin) {
+            $ui.ElevChip.Text = 'elevated'
+            $ui.ElevChip.Foreground = ConvertTo-Brush 'Green'
+            $ui.BtnElevate.Visibility = 'Collapsed'
+        }
+        else {
+            $ui.ElevChip.Text = 'not elevated'
+        }
+
+        $ui.DryRunToggle.IsChecked = $Ctx.DryRun
+        $ui.DryRunToggle.Add_Click({ $Ctx.DryRun = [bool]$ui.DryRunToggle.IsChecked }.GetNewClosure())
+
+        $ui.BtnElevate.Add_Click({
+            if (Invoke-SelfElevate -BoundParameters $BoundParameters) { $window.Close() }
+        }.GetNewClosure())
+
+        $ui.BtnClearLog.Add_Click({ $logState.Paragraph.Inlines.Clear() }.GetNewClosure())
+
+        # ---- navigation --------------------------------------------------------
+        $panels = @($ui.TweaksPanel, $ui.AppsPanel, $ui.ToolboxPanel, $ui.ProfilesPanel)
+        $ui.NavList.Add_SelectionChanged({
+            for ($i = 0; $i -lt $panels.Count; $i++) {
+                $panels[$i].Visibility = if ($i -eq $ui.NavList.SelectedIndex) { 'Visible' } else { 'Collapsed' }
+            }
+        }.GetNewClosure())
+
+        # ---- rows --------------------------------------------------------------
+        $rows = [pscustomobject]@{ Tweaks = @(); Apps = @(); Toolbox = @() }
+
+        $buildTweaks = {
+            $ui.TweakRows.Children.Clear()
+            $built = [System.Collections.Generic.List[object]]::new()
+
+            $search = [string]$ui.TweakSearch.Text
+            $category = [string]$ui.TweakCategory.SelectedItem
+
+            foreach ($tweak in $Ctx.Tweaks) {
+                if ($category -and $category -ne 'All categories' -and $tweak.category -ne $category) { continue }
+                if ($search -and -not (
+                    (Test-NameMatch -Value $tweak.name -Pattern $search) -or
+                    (Test-NameMatch -Value $tweak.description -Pattern $search) -or
+                    (Test-NameMatch -Value $tweak.category -Pattern $search))) { continue }
+
+                $status = Get-TweakStatus -Tweak $tweak
+                $label, $brush = switch ($status) {
+                    'Applied' { 'applied', '#FF7BD88F' }
+                    'Partial' { 'partial', '#FFF0C674' }
+                    'Action'  { 'action',  '#FF4FC3F7' }
+                    default   { '',        '#FF8E8E9C' }
+                }
+
+                $row = New-GuiRow -Item $tweak -Primary $tweak.name -Secondary $tweak.description -Status $label -StatusBrush $brush
+                $ui.TweakRows.Children.Add($row.Element) | Out-Null
+                $built.Add($row)
+            }
+
+            $rows.Tweaks = @($built)
+            $ui.StatusText.Text = "$($built.Count) tweak(s) shown"
+        }.GetNewClosure()
+
+        $buildApps = {
+            $ui.AppRows.Children.Clear()
+            $built = [System.Collections.Generic.List[object]]::new()
+
+            $search = [string]$ui.AppSearch.Text
+            $category = [string]$ui.AppCategory.SelectedItem
+
+            foreach ($app in $Ctx.Apps) {
+                if ($category -and $category -ne 'All categories' -and $app.category -ne $category) { continue }
+                if ($search -and -not (
+                    (Test-NameMatch -Value $app.name -Pattern $search) -or
+                    (Test-NameMatch -Value $app.id -Pattern $search) -or
+                    (Test-NameMatch -Value ([string]$app.description) -Pattern $search))) { continue }
+
+                $how = if ($app.scriptUrl) { 'script' }
+                       elseif ($app.zipUrl) { 'archive' }
+                       elseif ($app.downloadUrl) { 'download' }
+                       else { 'winget' }
+
+                $row = New-GuiRow -Item $app -Primary $app.name -Secondary ([string]$app.description) -Status $how -StatusBrush '#FF8E8E9C'
+                $ui.AppRows.Children.Add($row.Element) | Out-Null
+                $built.Add($row)
+            }
+
+            $rows.Apps = @($built)
+            $ui.StatusText.Text = "$($built.Count) app(s) shown"
+        }.GetNewClosure()
+
+        $buildToolbox = {
+            $ui.ToolboxRows.Children.Clear()
+            $built = [System.Collections.Generic.List[object]]::new()
+
+            foreach ($action in Get-ToolboxActions) {
+                $row = New-GuiRow -Item $action -Primary $action.Name -Secondary $action.Description -NoCheckBox
+
+                # One click runs it; a checkbox would imply batching, which these are not.
+                $run = New-Object Windows.Controls.Button
+                $run.Content = 'Run'
+                $run.Padding = New-Object Windows.Thickness 12, 4, 12, 4
+                $run.Margin = New-Object Windows.Thickness 8, 0, 0, 0
+                $run.VerticalAlignment = 'Center'
+                $run.Tag = $action.Id
+                [Windows.Controls.Grid]::SetColumn($run, 2)
+                $run.Add_Click({
+                    param($sender, $e)
+                    $id = [string]$sender.Tag
+                    Invoke-GuiWork -Ui $ui -Label "toolbox: $id" -Work { Invoke-ToolboxAction -Id $id }.GetNewClosure()
+                }.GetNewClosure())
+                $row.Element.Child.Children.Add($run) | Out-Null
+
+                $ui.ToolboxRows.Children.Add($row.Element) | Out-Null
+                $built.Add($row)
+            }
+
+            $rows.Toolbox = @($built)
+        }.GetNewClosure()
+
+        # ---- filters -----------------------------------------------------------
+        $ui.TweakCategory.Items.Add('All categories') | Out-Null
+        foreach ($c in $Ctx.TweakCategories) { $ui.TweakCategory.Items.Add($c) | Out-Null }
+        $ui.TweakCategory.SelectedIndex = 0
+
+        $ui.AppCategory.Items.Add('All categories') | Out-Null
+        foreach ($c in $Ctx.AppCategories) { $ui.AppCategory.Items.Add($c) | Out-Null }
+        $ui.AppCategory.SelectedIndex = 0
+
+        $ui.TweakSearch.Add_TextChanged($buildTweaks)
+        $ui.TweakCategory.Add_SelectionChanged($buildTweaks)
+        $ui.AppSearch.Add_TextChanged($buildApps)
+        $ui.AppCategory.Add_SelectionChanged($buildApps)
+
+        $ui.BtnTweakAll.Add_Click({ foreach ($r in $rows.Tweaks) { $r.CheckBox.IsChecked = $true } }.GetNewClosure())
+        $ui.BtnTweakNone.Add_Click({ foreach ($r in $rows.Tweaks) { $r.CheckBox.IsChecked = $false } }.GetNewClosure())
+        $ui.BtnAppNone.Add_Click({ foreach ($r in $rows.Apps) { $r.CheckBox.IsChecked = $false } }.GetNewClosure())
+
+        # ---- actions -----------------------------------------------------------
+        $ui.BtnApply.Add_Click({
+            $selected = Get-CheckedItem -Rows $rows.Tweaks
+            if ($selected.Count -eq 0) { $ui.StatusText.Text = 'Nothing selected.'; return }
+            Invoke-GuiWork -Ui $ui -Label 'applying tweaks' -Work { Invoke-Tweaks -Tweaks $selected -Mode Apply }.GetNewClosure()
+            & $buildTweaks
+        }.GetNewClosure())
+
+        $ui.BtnRevert.Add_Click({
+            $selected = Get-CheckedItem -Rows $rows.Tweaks
+            if ($selected.Count -eq 0) { $ui.StatusText.Text = 'Nothing selected.'; return }
+            Invoke-GuiWork -Ui $ui -Label 'reverting tweaks' -Work { Invoke-Tweaks -Tweaks $selected -Mode Revert }.GetNewClosure()
+            & $buildTweaks
+        }.GetNewClosure())
+
+        $ui.BtnInstall.Add_Click({
+            $selected = Get-CheckedItem -Rows $rows.Apps
+            if ($selected.Count -eq 0) { $ui.StatusText.Text = 'Nothing selected.'; return }
+            Invoke-GuiWork -Ui $ui -Label 'installing apps' -Work { Invoke-AppInstall -Apps $selected }.GetNewClosure()
+        }.GetNewClosure())
+
+        # ---- profiles ----------------------------------------------------------
+        $ui.BtnBrowseProfile.Add_Click({
+            $dialog = New-Object Windows.Forms.OpenFileDialog
+            $dialog.Filter = 'Moscovium profile (*.json)|*.json|All files (*.*)|*.*'
+            if ($dialog.ShowDialog() -eq [Windows.Forms.DialogResult]::OK) { $ui.ProfilePath.Text = $dialog.FileName }
+        }.GetNewClosure())
+
+        $ui.BtnRunProfile.Add_Click({
+            $path = [string]$ui.ProfilePath.Text
+            if (-not $path) { $ui.StatusText.Text = 'Choose a profile first.'; return }
+            Invoke-GuiWork -Ui $ui -Label 'running profile' -Work { Invoke-SetupProfile -Path $path }.GetNewClosure()
+            & $buildTweaks
+        }.GetNewClosure())
+
+        $ui.BtnSaveProfile.Add_Click({
+            $dialog = New-Object Windows.Forms.SaveFileDialog
+            $dialog.Filter = 'Moscovium profile (*.json)|*.json'
+            $dialog.FileName = 'moscovium-profile.json'
+            if ($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { return }
+
+            $target = $dialog.FileName
+            $setupProfile = New-SetupProfile `
+                -Tweaks @(Get-CheckedItem -Rows $rows.Tweaks | ForEach-Object { $_.name }) `
+                -Apps   @(Get-CheckedItem -Rows $rows.Apps   | ForEach-Object { $_.id })
+
+            Invoke-GuiWork -Ui $ui -Label 'saving profile' -Work {
+                Save-SetupProfile -SetupProfile $setupProfile -Path $target | Out-Null
+            }.GetNewClosure()
+
+            $ui.ProfilePath.Text = $target
+        }.GetNewClosure())
+
+        # ---- go ----------------------------------------------------------------
+        & $buildTweaks
+        & $buildApps
+        & $buildToolbox
+
+        $ui.StatusText.Text = 'Ready'
+
+        Write-Rule -Title 'Moscovium' -Suffix "v$($Ctx.Version)"
+        Write-Info "$($Ctx.Tweaks.Count) tweaks, $($Ctx.Apps.Count) apps loaded."
+        if (-not $Ctx.IsAdmin) { Write-Warn 'Not elevated - machine-wide tweaks will be skipped.' }
+
+        # Put the sinks back so anything running after the window closes reports to
+        # the console again.
+        $window.Add_Closed({
+            $Ctx.Sink = $null
+            $Ctx.ProgressSink = $null
+            $Ctx.ConfirmSink = $null
+            $Ctx.Theme.Glyph = $previousGlyphs
+        }.GetNewClosure())
+
+        [pscustomobject]@{
+            Window  = $window
+            Ui      = $ui
+            Rows    = $rows
+            Refresh = $buildTweaks
+        }
+    }
+
+    function Show-Gui {
+        param([hashtable]$BoundParameters = @{})
+
+        if (-not (Test-StaApartment)) {
+            if (Invoke-StaRelaunch -BoundParameters $BoundParameters) {
+                Write-Ok 'GUI launched in a separate STA window.'
+                return 0
+            }
+            return 1
+        }
+
+        try { Import-WpfAssembly }
+        catch {
+            Write-Err "WPF is not available on this machine: $($_.Exception.Message)"
+            return 1
+        }
+
+        $gui = New-GuiWindow -BoundParameters $BoundParameters
+        $gui.Window.ShowDialog() | Out-Null
+        return 0
+    }
+
+    # Runs an engine call with the action buttons disabled and the progress bar
+    # live, so a long install cannot be started twice and the window still repaints.
+    function Invoke-GuiWork {
+        param(
+            [Parameter(Mandatory)][hashtable]$Ui,
+            [Parameter(Mandatory)][string]$Label,
+            [Parameter(Mandatory)][scriptblock]$Work
+        )
+
+        $buttons = @('BtnApply', 'BtnRevert', 'BtnInstall', 'BtnRunProfile', 'BtnSaveProfile')
+        foreach ($name in $buttons) { $Ui[$name].IsEnabled = $false }
+
+        $Ui.StatusText.Text = $Label
+        $Ui.Progress.Visibility = 'Visible'
+        $Ui.Progress.IsIndeterminate = $true
+        Invoke-UiEvents
+
+        try { & $Work }
+        catch { Write-Err $_.Exception.Message }
+        finally {
+            foreach ($name in $buttons) { $Ui[$name].IsEnabled = $true }
+            $Ui.Progress.IsIndeterminate = $false
+            $Ui.Progress.Visibility = 'Hidden'
+            $Ui.StatusText.Text = 'Ready'
+            Invoke-UiEvents
         }
     }
 
@@ -5738,6 +6767,7 @@ param(
         Write-Line '    -WindowsUpdate     install pending Windows updates via PSWindowsUpdate' -Color Gray
         Write-Line ''
         Write-Line '  OTHER' -Color White
+        Write-Line '    -Gui               open the graphical interface' -Color Gray
         Write-Line '    -Toolbox <id>      run a toolbox action (see -List toolbox)' -Color Gray
         Write-Line '    -Profile <path>    run a saved setup profile' -Color Gray
         Write-Line '    -SaveProfile <path>  write the current -Apply/-Install selection as a profile' -Color Gray
@@ -5919,6 +6949,8 @@ param(
             if (Invoke-SelfElevate -BoundParameters $forward) { return 0 }
             Write-Line ''
         }
+
+        if (& $has 'Gui') { return (Show-Gui -BoundParameters $Bound) }
 
         $didSomething = $false
 

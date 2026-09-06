@@ -40,6 +40,17 @@ function New-MoscoviumContext {
         # sense on a real console.
         Animate    = (-not $redirected)
         Theme      = (New-Theme -Ascii:$Ascii)
+
+        # Output sinks. Left null, everything goes to the console. The GUI sets
+        # them so the exact same engine functions drive a window instead - no
+        # duplicate apply/install/toolbox logic anywhere.
+        #   Sink         (text, color, newline)      -> log pane
+        #   ProgressSink (label, fraction, detail)   -> progress bar
+        #   ConfirmSink  (message, defaultYes)       -> modal dialog, returns bool
+        Sink         = $null
+        ProgressSink = $null
+        ConfirmSink  = $null
+
         IsAdmin    = Test-Administrator
         StateDir   = $stateDir
         BackupDir  = Join-Path $stateDir 'backups'
@@ -84,6 +95,15 @@ function Write-Line {
         [ConsoleColor]$Background,
         [switch]$NoNewline
     )
+
+    # Every piece of console output in the CLI funnels through here, so a sink
+    # set on the context redirects all of it - status lines, rules, chips and
+    # summaries alike - without any caller knowing.
+    if ($Ctx.Sink) {
+        $sinkColor = if ($PSBoundParameters.ContainsKey('Color')) { $Color } else { $null }
+        & $Ctx.Sink $Text $sinkColor (-not $NoNewline)
+        return
+    }
 
     if (-not $Ctx.UseColor) {
         Write-Host $Text -NoNewline:$NoNewline
@@ -227,6 +247,11 @@ function Confirm-Action {
     )
 
     if ($Ctx.AssumeYes) { return $true }
+
+    # The GUI answers with a modal dialog rather than Read-Host, so third-party
+    # script prompts stay real questions instead of being auto-accepted.
+    if ($Ctx.ConfirmSink) { return [bool](& $Ctx.ConfirmSink $Message ([bool]$DefaultYes)) }
+
     if (-not (Test-Interactive)) {
         Write-Warn "Cannot prompt for confirmation in a non-interactive host. Pass -Yes to proceed."
         return $false

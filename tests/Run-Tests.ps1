@@ -686,6 +686,171 @@ Test-Case 'licence-circumvention entries are absent from the catalog' {
 }
 
 # -----------------------------------------------------------------------------
+Write-Section 'GUI'
+
+$xamlPath = Join-Path $RepoRoot 'data/gui.xaml'
+
+Test-Case 'gui.xaml is well-formed and pure ASCII' {
+    $raw = Get-Content -LiteralPath $xamlPath -Raw -Encoding UTF8
+    $null = [xml]$raw
+    # XAML has no \uXXXX escape, so build.ps1 rejects rather than escapes it.
+    Assert-True ($raw -notmatch '[^\x00-\x7F]') 'gui.xaml contains non-ASCII characters'
+}
+
+Test-Case 'every control the code looks up exists in the XAML' {
+    # A typo here would only surface as a null reference when the window opens.
+    $xml = [xml](Get-Content -LiteralPath $xamlPath -Raw -Encoding UTF8)
+    $namespace = New-Object Xml.XmlNamespaceManager $xml.NameTable
+    $namespace.AddNamespace('x', 'http://schemas.microsoft.com/winfx/2006/xaml')
+
+    $declared = @($xml.SelectNodes('//*[@x:Name]', $namespace) | ForEach-Object { $_.GetAttribute('Name', 'http://schemas.microsoft.com/winfx/2006/xaml') })
+
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/70-Gui.ps1') -Raw
+    $block = [regex]::Match($source, '\$ui = @\{\}\s*foreach \(\$name in @\((?<list>.*?)\)\) \{', 'Singleline')
+    Assert-True $block.Success 'could not find the FindName list in 70-Gui.ps1'
+
+    $wanted = @([regex]::Matches($block.Groups['list'].Value, "'([A-Za-z0-9_]+)'") | ForEach-Object { $_.Groups[1].Value })
+    Assert-True ($wanted.Count -gt 20) "only found $($wanted.Count) names to check"
+
+    $missing = @($wanted | Where-Object { $declared -notcontains $_ })
+    Assert-Equal 0 $missing.Count "looked up but not in the XAML: $($missing -join ', ')"
+}
+
+Test-Case 'the bundle embeds the XAML' {
+    $bundle = Get-Content -LiteralPath (Join-Path $RepoRoot 'moscovium.ps1') -Raw
+    Assert-True ($bundle -match '<Window xmlns=') 'gui.xaml was not embedded into the bundle'
+    Assert-True ($bundle -match 'EmbeddedGuiXaml = @''') 'the XAML placeholder was not replaced'
+}
+
+Test-Case 'a sink redirects every kind of engine output' {
+    # This is what makes the GUI a second front-end rather than a second
+    # implementation: the engine writes the same way, the sink catches it.
+    $captured = [System.Collections.Generic.List[object]]::new()
+    $Ctx.Sink = { param($text, $color, $newline) $captured.Add([pscustomobject]@{ Text = $text; Color = $color }) }.GetNewClosure()
+
+    try {
+        Write-Ok 'ok line'
+        Write-Warn 'warn line'
+        Write-Err 'err line'
+        Write-Info 'info line'
+        Write-Rule -Title 'a rule'
+    }
+    finally { $Ctx.Sink = $null }
+
+    $all = ($captured | ForEach-Object { $_.Text }) -join ''
+    foreach ($expected in @('ok line', 'warn line', 'err line', 'info line', 'a rule')) {
+        Assert-True ($all -like "*$expected*") "'$expected' never reached the sink"
+    }
+
+    # Colour has to survive, or the log pane cannot colour errors red.
+    $colors = @($captured | Where-Object { $_.Color } | ForEach-Object { [string]$_.Color })
+    Assert-True ($colors -contains 'Red') 'no red reached the sink'
+    Assert-True ($colors -contains 'Green') 'no green reached the sink'
+}
+
+Test-Case 'a confirm sink answers instead of Read-Host' {
+    $asked = [System.Collections.Generic.List[string]]::new()
+    $Ctx.ConfirmSink = { param($message, $defaultYes) $asked.Add([string]$message); return $true }.GetNewClosure()
+
+    try {
+        Assert-Equal $true (Confirm-Action 'proceed?')
+        Assert-Equal 1 $asked.Count
+        Assert-Equal 'proceed?' $asked[0]
+
+        $Ctx.ConfirmSink = { param($message, $defaultYes) return $false }.GetNewClosure()
+        Assert-Equal $false (Confirm-Action 'proceed?' -DefaultYes)
+    }
+    finally { $Ctx.ConfirmSink = $null }
+}
+
+Test-Case 'a progress sink receives both determinate and indeterminate work' {
+    $seen = [System.Collections.Generic.List[object]]::new()
+    $Ctx.ProgressSink = { param($label, $fraction, $detail) $seen.Add([pscustomobject]@{ Label = $label; Fraction = $fraction }) }.GetNewClosure()
+
+    try {
+        Write-ProgressBar -Label 'downloading' -Fraction 0.25 -Detail '1 MB'
+        Write-Activity -Message 'installing' -Tick 3
+    }
+    finally { $Ctx.ProgressSink = $null }
+
+    Assert-Equal 2 $seen.Count
+    Assert-Equal 0.25 $seen[0].Fraction
+    # Write-Activity has no percentage, so it reports -1 for "pulse".
+    Assert-True ($seen[1].Fraction -lt 0) 'indeterminate work did not report a negative fraction'
+}
+
+Test-Case 'the GUI never reimplements what the CLI already does' {
+    # Guard against the two front-ends drifting: the GUI must call the engine,
+    # not grow its own registry writes or winget invocations.
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/70-Gui.ps1') -Raw
+
+    # Start-Process is fine here - Invoke-StaRelaunch needs it to reach an STA
+    # host - so the check is about engine logic, not process launching.
+    foreach ($forbidden in @('Set-RegistryValue', 'Remove-RegistryValue', 'winget.exe', 'Invoke-WebRequest')) {
+        Assert-True ($source -notmatch [regex]::Escape($forbidden)) "70-Gui.ps1 calls $forbidden directly"
+    }
+    foreach ($required in @('Invoke-Tweaks', 'Invoke-AppInstall', 'Invoke-ToolboxAction', 'Invoke-SetupProfile')) {
+        Assert-True ($source -match [regex]::Escape($required)) "70-Gui.ps1 no longer routes through $required"
+    }
+}
+
+if (Test-StaApartment) {
+    Test-Case 'the window builds and populates from the real catalog' {
+        Import-WpfAssembly
+        $gui = New-GuiWindow
+
+        try {
+            Assert-True ($null -ne $gui.Window) 'no window was created'
+            Assert-Equal $Ctx.Tweaks.Count $gui.Rows.Tweaks.Count
+            Assert-Equal $Ctx.Apps.Count $gui.Rows.Apps.Count
+            Assert-Equal @(Get-ToolboxActions).Count $gui.Rows.Toolbox.Count
+
+            # Category pickers get an "All" entry plus one per category.
+            Assert-Equal ($Ctx.TweakCategories.Count + 1) $gui.Ui.TweakCategory.Items.Count
+            Assert-Equal ($Ctx.AppCategories.Count + 1) $gui.Ui.AppCategory.Items.Count
+
+            Assert-Equal "v$($Ctx.Version)" $gui.Ui.VersionText.Text
+        }
+        finally { $gui.Window.Close() }
+    }
+
+    Test-Case 'ticking rows is what selection reads back' {
+        Import-WpfAssembly
+        $gui = New-GuiWindow
+
+        try {
+            Assert-Equal 0 @(Get-CheckedItem -Rows $gui.Rows.Tweaks).Count
+
+            $gui.Rows.Tweaks[0].CheckBox.IsChecked = $true
+            $gui.Rows.Tweaks[3].CheckBox.IsChecked = $true
+
+            $selected = @(Get-CheckedItem -Rows $gui.Rows.Tweaks)
+            Assert-Equal 2 $selected.Count
+            Assert-Equal $gui.Rows.Tweaks[0].Item.name $selected[0].name
+
+            # And those items must resolve against the catalog unchanged.
+            Assert-Equal 0 (Resolve-Tweak -Names @($selected | ForEach-Object { $_.name })).Unknown.Count
+        }
+        finally { $gui.Window.Close() }
+    }
+
+    Test-Case 'closing the window puts the console sinks back' {
+        Import-WpfAssembly
+        $gui = New-GuiWindow
+
+        Assert-True ($null -ne $Ctx.Sink) 'the window did not install a sink'
+        $gui.Window.Close()
+
+        Assert-True ($null -eq $Ctx.Sink) 'the sink outlived the window'
+        Assert-True ($null -eq $Ctx.ProgressSink) 'the progress sink outlived the window'
+        Assert-True ($null -eq $Ctx.ConfirmSink) 'the confirm sink outlived the window'
+    }
+}
+else {
+    Write-Host '  SKIP  window construction (host is MTA; run under powershell.exe for these)' -ForegroundColor DarkYellow
+}
+
+# -----------------------------------------------------------------------------
 Write-Section 'Bundle'
 
 Test-Case 'moscovium.ps1 is up to date with src/ and data/' {

@@ -1,8 +1,9 @@
 # Moscovium CLI
 
 The command-line companion to [Moscovium](https://github.com/Moscoviumdebloat/Moscovium),
-the Windows debloat and setup toolbox. Same tweaks, same app catalog, no GUI —
-and it runs from a single line on a machine you just finished installing.
+the Windows debloat and setup toolbox. Same tweaks, same app catalog, and a
+window when you want one - all from a single line on a machine you just
+finished installing.
 
 ```powershell
 irm https://raw.githubusercontent.com/Moscoviumdebloat/Moscovium-CLI/main/moscovium.ps1 | iex
@@ -22,11 +23,12 @@ which ships with Windows, is enough.
 | **127 apps** | The full curated winget catalog, plus direct-download and archive installers, across 8 categories. |
 | **15 toolbox actions** | WinUtil, Win11Debloat, TCP autotuning, dynamic tick, CPU priority, and the classic control panels. |
 | **Profiles** | Setup checklists, interchangeable with the desktop app's. |
+| **Two front-ends** | The same engine drives a terminal UI and a window. `-Gui` opens the window. |
 
 Everything in the tweak and app catalogs is generated directly from the GUI's C#
 source, so the two stay in step. See [Keeping up with the GUI](#keeping-up-with-the-gui).
 
-## Two things the GUI does not do
+## Two things the desktop app does not do
 
 **Revert.** Before writing anything, the CLI records the prior state of every
 registry value it is about to touch — the old value and type, or the fact that
@@ -50,6 +52,38 @@ none of them.
 ```powershell
 .\moscovium.ps1 -Apply "Privacy & Telemetry" -DryRun
 ```
+
+## GUI
+
+`moscovium.ps1 -Gui` opens a window. It is the same file, the same catalogs and
+the same engine - not a second implementation.
+
+![The Moscovium GUI](docs/gui.png)
+
+```powershell
+irm <url> | iex                                    # menu, then pick GUI
+& ([scriptblock]::Create((irm <url>))) -Gui        # straight to the window
+.\moscovium.ps1 -Gui
+```
+
+Every button calls the function the CLI calls: `Invoke-Tweaks`,
+`Invoke-AppInstall`, `Invoke-ToolboxAction`, `Invoke-SetupProfile`. What makes
+that possible is three optional sinks on the shared context - `Sink`,
+`ProgressSink` and `ConfirmSink`. Leave them unset and output goes to the
+console; the window sets them, and the identical engine calls end up in the log
+pane, the progress bar and modal dialogs instead. There is a test that fails if
+the GUI ever grows its own registry writes or winget calls.
+
+It uses WPF, which ships with .NET Framework, so there is still nothing to
+install and it still works straight from `irm`. Two consequences worth knowing:
+
+- **WPF needs an STA thread.** `powershell.exe` is STA; `pwsh` is not. Started
+  from `pwsh`, the GUI relaunches itself in an STA host rather than failing.
+- **Long work runs on the UI thread**, pumping the dispatcher between items, so
+  the window keeps painting and the action buttons disable while it runs. It is
+  cooperative rather than a background runspace - honest about what it is.
+
+Dry run is a toggle in the header, and applies to everything the window does.
 
 ## Usage
 
@@ -130,6 +164,7 @@ saved in the GUI runs here and vice versa.
 |---|---|
 | `-DryRun` | print the plan, change nothing |
 | `-Yes` | skip confirmations |
+| `-Gui` | open the graphical interface |
 | `-Elevate` | relaunch elevated immediately |
 | `-NoColor` | plain output |
 | `-Ascii` | ASCII glyphs instead of box drawing |
@@ -185,17 +220,19 @@ build.ps1         bundles src/ + data/ into it
 VERSION
 
 src/              function libraries, concatenated in name order
-  00-Core         context, output, prompting, elevation
+  00-Core         context, output sinks, prompting, elevation
   01-Catalog      catalog loading and name resolution
+  05-Theme        terminal capabilities, glyphs, rules, progress
   10-Registry     registry read/write, snapshots, backups
   20-Tweaks       apply, revert, status
   30-Apps         winget, download, zip and script installs
   40-Toolbox      one-shot actions
   50-Profile      setup profiles
   60-Menu         interactive selectors and screens
+  70-Gui          the WPF window
   90-Main         argument dispatch
 
-data/             generated catalogs, embedded at build time
+data/             generated catalogs and gui.xaml, embedded at build time
 tools/            Sync-Catalog.ps1 and the C# literal parser it uses
 tests/            Run-Tests.ps1
 deploy/           Cloudflare Worker for the short irm URL

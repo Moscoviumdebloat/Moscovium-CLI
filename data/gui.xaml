@@ -1,0 +1,422 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Moscovium" Height="760" Width="1120" MinHeight="560" MinWidth="900"
+        WindowStartupLocation="CenterScreen" Background="#FF16161A">
+
+  <Window.Resources>
+    <SolidColorBrush x:Key="Bg"      Color="#FF16161A"/>
+    <SolidColorBrush x:Key="Panel"   Color="#FF1E1E24"/>
+    <SolidColorBrush x:Key="Panel2"  Color="#FF24242C"/>
+    <SolidColorBrush x:Key="Line"    Color="#FF32323C"/>
+    <SolidColorBrush x:Key="Text"    Color="#FFE4E4EA"/>
+    <SolidColorBrush x:Key="Muted"   Color="#FF8E8E9C"/>
+    <SolidColorBrush x:Key="Accent"  Color="#FF4FC3F7"/>
+    <SolidColorBrush x:Key="Ok"      Color="#FF7BD88F"/>
+    <SolidColorBrush x:Key="Warn"    Color="#FFF0C674"/>
+    <SolidColorBrush x:Key="Err"     Color="#FFF07178"/>
+
+    <Style TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+    </Style>
+
+    <Style TargetType="Button">
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="Background" Value="{StaticResource Panel2}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="14,7"/>
+      <Setter Property="Margin" Value="0,0,8,0"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Chrome" CornerRadius="5" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                Margin="{TemplateBinding Padding}"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="#FF2E2E38"/>
+                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource Accent}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.4"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="Primary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="Background" Value="#FF19566B"/>
+      <Setter Property="BorderBrush" Value="{StaticResource Accent}"/>
+    </Style>
+
+    <Style TargetType="CheckBox">
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <Style TargetType="TextBox">
+      <Setter Property="Background" Value="{StaticResource Panel2}"/>
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="7,5"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="CaretBrush" Value="{StaticResource Text}"/>
+    </Style>
+
+    <!-- The stock ComboBox and ScrollBar chrome is light, and ignores Background,
+         so both need a template to sit on a dark window. -->
+    <Style TargetType="ComboBoxItem">
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="Padding" Value="10,6"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ComboBoxItem">
+            <Border x:Name="Chrome" Background="Transparent" Padding="{TemplateBinding Padding}">
+              <ContentPresenter/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsHighlighted" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="#FF19566B"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style TargetType="ComboBox">
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ComboBox">
+            <Grid>
+              <ToggleButton Focusable="False" ClickMode="Press"
+                            IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                <ToggleButton.Template>
+                  <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Chrome" Background="{StaticResource Panel2}" BorderBrush="{StaticResource Line}"
+                            BorderThickness="1" CornerRadius="5">
+                      <Path HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,10,0"
+                            Data="M 0 0 L 8 0 L 4 5 Z" Fill="{StaticResource Muted}"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True">
+                        <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </ToggleButton.Template>
+              </ToggleButton>
+              <ContentPresenter Margin="11,0,28,0" VerticalAlignment="Center" IsHitTestVisible="False"
+                                Content="{TemplateBinding SelectionBoxItem}"
+                                ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"/>
+              <Popup IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" AllowsTransparency="True"
+                     Focusable="False" PopupAnimation="Fade">
+                <Border Background="{StaticResource Panel2}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                        CornerRadius="5" MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                        MaxHeight="320" Margin="0,2,0,0">
+                  <ScrollViewer>
+                    <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
+                  </ScrollViewer>
+                </Border>
+              </Popup>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- Placeholder text: a TextBlock behind the box, shown only while empty. -->
+    <Style x:Key="Watermark" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="{StaticResource Muted}"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Margin" Value="11,0,0,0"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+      <Setter Property="IsHitTestVisible" Value="False"/>
+    </Style>
+
+    <Style x:Key="ScrollThumb" TargetType="Thumb">
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Thumb">
+            <Border x:Name="Chrome" Background="#FF3A3A46" CornerRadius="3" Margin="3,0"/>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="#FF525263"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style TargetType="ScrollBar">
+      <Setter Property="Width" Value="10"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ScrollBar">
+            <Grid Background="Transparent">
+              <Track x:Name="PART_Track" IsDirectionReversed="True">
+                <Track.DecreaseRepeatButton>
+                  <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False"/>
+                </Track.DecreaseRepeatButton>
+                <Track.Thumb>
+                  <Thumb Style="{StaticResource ScrollThumb}"/>
+                </Track.Thumb>
+                <Track.IncreaseRepeatButton>
+                  <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False"/>
+                </Track.IncreaseRepeatButton>
+              </Track>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+      <Style.Triggers>
+        <Trigger Property="Orientation" Value="Horizontal">
+          <Setter Property="Width" Value="Auto"/>
+          <Setter Property="Height" Value="10"/>
+        </Trigger>
+      </Style.Triggers>
+    </Style>
+
+    <Style x:Key="NavItem" TargetType="ListBoxItem">
+      <Setter Property="Foreground" Value="{StaticResource Muted}"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="FontSize" Value="14"/>
+      <Setter Property="Padding" Value="16,11"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListBoxItem">
+            <Border x:Name="Chrome" Background="Transparent" BorderThickness="3,0,0,0" BorderBrush="Transparent">
+              <ContentPresenter Margin="{TemplateBinding Padding}"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="#FF24242C"/>
+              </Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="#FF24242C"/>
+                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                <Setter Property="Foreground" Value="{StaticResource Text}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+  </Window.Resources>
+
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <!-- header -->
+    <Border Grid.Row="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
+      <Grid Margin="20,14">
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+          <TextBlock Text="MOSCOVIUM" FontSize="19" FontWeight="SemiBold" Foreground="{StaticResource Accent}"/>
+          <TextBlock x:Name="VersionText" Text="v0.0.0" FontSize="12" Foreground="{StaticResource Muted}"
+                     VerticalAlignment="Center" Margin="10,3,0,0"/>
+          <Border Background="{StaticResource Panel2}" CornerRadius="9" Padding="9,3" Margin="16,0,0,0">
+            <TextBlock x:Name="CatalogChip" Text="" FontSize="11" Foreground="{StaticResource Muted}"/>
+          </Border>
+          <Border x:Name="ElevChipBorder" Background="{StaticResource Panel2}" CornerRadius="9" Padding="9,3" Margin="8,0,0,0">
+            <TextBlock x:Name="ElevChip" Text="" FontSize="11" Foreground="{StaticResource Warn}"/>
+          </Border>
+        </StackPanel>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+          <CheckBox x:Name="DryRunToggle" Content="Dry run" Margin="0,0,16,0"
+                    ToolTip="Show what would change without changing anything"/>
+          <Button x:Name="BtnElevate" Content="Restart as admin"/>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- body -->
+    <Grid Grid.Row="1">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="188"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+
+      <Border Grid.Column="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,1,0">
+        <ListBox x:Name="NavList" Background="Transparent" BorderThickness="0" Margin="0,10,0,0"
+                 ItemContainerStyle="{StaticResource NavItem}">
+          <ListBoxItem Content="Tweaks" IsSelected="True"/>
+          <ListBoxItem Content="Apps"/>
+          <ListBoxItem Content="Toolbox"/>
+          <ListBoxItem Content="Profiles"/>
+        </ListBox>
+      </Border>
+
+      <Grid Grid.Column="1">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="*" MinHeight="180"/>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="200"/>
+        </Grid.RowDefinitions>
+
+        <!-- pages share this cell; only one is visible at a time -->
+        <Grid Grid.Row="0" Margin="20,16,20,0">
+
+          <Grid x:Name="TweaksPanel">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <TextBlock Grid.Row="0" Text="Registry tweaks" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
+            <DockPanel Grid.Row="1" Margin="0,0,0,10" LastChildFill="False">
+              <Grid Width="230" DockPanel.Dock="Left" Margin="0,0,8,0">
+                <TextBox x:Name="TweakSearch" ToolTip="Filter by name, description or category"/>
+                <TextBlock Text="Search tweaks">
+                  <TextBlock.Style>
+                    <Style TargetType="TextBlock" BasedOn="{StaticResource Watermark}">
+                      <Setter Property="Visibility" Value="Collapsed"/>
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding Text, ElementName=TweakSearch}" Value="">
+                          <Setter Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </TextBlock.Style>
+                </TextBlock>
+              </Grid>
+              <ComboBox x:Name="TweakCategory" Width="180" DockPanel.Dock="Left" Margin="0,0,8,0"/>
+              <Button x:Name="BtnTweakAll" Content="All" DockPanel.Dock="Left"/>
+              <Button x:Name="BtnTweakNone" Content="None" DockPanel.Dock="Left"/>
+              <Button x:Name="BtnRevert" Content="Revert selected" DockPanel.Dock="Right" Margin="8,0,0,0"/>
+              <Button x:Name="BtnApply" Content="Apply selected" DockPanel.Dock="Right" Style="{StaticResource Primary}"/>
+            </DockPanel>
+            <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="6">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="6">
+                <StackPanel x:Name="TweakRows"/>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+
+          <Grid x:Name="AppsPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <TextBlock Grid.Row="0" Text="Applications" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
+            <DockPanel Grid.Row="1" Margin="0,0,0,10" LastChildFill="False">
+              <Grid Width="230" DockPanel.Dock="Left" Margin="0,0,8,0">
+                <TextBox x:Name="AppSearch" ToolTip="Filter by name, id or description"/>
+                <TextBlock Text="Search apps">
+                  <TextBlock.Style>
+                    <Style TargetType="TextBlock" BasedOn="{StaticResource Watermark}">
+                      <Setter Property="Visibility" Value="Collapsed"/>
+                      <Style.Triggers>
+                        <DataTrigger Binding="{Binding Text, ElementName=AppSearch}" Value="">
+                          <Setter Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                      </Style.Triggers>
+                    </Style>
+                  </TextBlock.Style>
+                </TextBlock>
+              </Grid>
+              <ComboBox x:Name="AppCategory" Width="180" DockPanel.Dock="Left" Margin="0,0,8,0"/>
+              <Button x:Name="BtnAppNone" Content="None" DockPanel.Dock="Left"/>
+              <Button x:Name="BtnInstall" Content="Install selected" DockPanel.Dock="Right" Style="{StaticResource Primary}"/>
+            </DockPanel>
+            <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="6">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="6">
+                <StackPanel x:Name="AppRows"/>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+
+          <Grid x:Name="ToolboxPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <TextBlock Grid.Row="0" Text="Toolbox" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
+            <Border Grid.Row="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="6">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="6">
+                <StackPanel x:Name="ToolboxRows"/>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+
+          <Grid x:Name="ProfilesPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <TextBlock Grid.Row="0" Text="Setup profiles" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,6"/>
+            <TextBlock Grid.Row="1" TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="0,0,0,14"
+                       Text="A profile is a saved checklist of tweaks and apps. The format matches the Moscovium desktop app, so profiles move between them."/>
+            <StackPanel Grid.Row="2">
+              <TextBlock Text="Profile file" Foreground="{StaticResource Muted}" Margin="0,0,0,6"/>
+              <DockPanel LastChildFill="True" Margin="0,0,0,14">
+                <Button x:Name="BtnBrowseProfile" Content="Browse" DockPanel.Dock="Right" Margin="8,0,0,0"/>
+                <TextBox x:Name="ProfilePath"/>
+              </DockPanel>
+              <StackPanel Orientation="Horizontal">
+                <Button x:Name="BtnRunProfile" Content="Run profile" Style="{StaticResource Primary}"/>
+                <Button x:Name="BtnSaveProfile" Content="Save current selection"/>
+              </StackPanel>
+            </StackPanel>
+          </Grid>
+
+        </Grid>
+
+        <GridSplitter Grid.Row="1" Height="4" HorizontalAlignment="Stretch" Background="{StaticResource Line}"
+                      VerticalAlignment="Center" Margin="0,10,0,0"/>
+
+        <Border Grid.Row="2" Background="#FF101014" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0">
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <DockPanel Grid.Row="0" Margin="20,8,20,4" LastChildFill="False">
+              <TextBlock Text="Output" Foreground="{StaticResource Muted}" FontSize="11" DockPanel.Dock="Left"/>
+              <Button x:Name="BtnClearLog" Content="Clear" DockPanel.Dock="Right" Padding="9,2" Margin="0"/>
+            </DockPanel>
+            <RichTextBox x:Name="LogBox" Grid.Row="1" Margin="14,0,14,10" Background="Transparent"
+                         Foreground="{StaticResource Text}" BorderThickness="0" IsReadOnly="True"
+                         FontFamily="Consolas" FontSize="12"
+                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
+          </Grid>
+        </Border>
+      </Grid>
+    </Grid>
+
+    <!-- status bar -->
+    <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0">
+      <Grid Margin="20,9">
+        <TextBlock x:Name="StatusText" Text="Ready" Foreground="{StaticResource Muted}" FontSize="12" VerticalAlignment="Center"/>
+        <ProgressBar x:Name="Progress" Width="260" Height="6" HorizontalAlignment="Right" VerticalAlignment="Center"
+                     Background="{StaticResource Panel2}" Foreground="{StaticResource Accent}" BorderThickness="0"
+                     Visibility="Hidden"/>
+      </Grid>
+    </Border>
+  </Grid>
+</Window>
