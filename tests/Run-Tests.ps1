@@ -361,6 +361,100 @@ Test-Case 'reverting a tweak with no backup is a skip, not a failure' {
 }
 
 # -----------------------------------------------------------------------------
+Write-Section 'Theme'
+
+Test-Case 'both glyph sets define exactly the same names' {
+    # A name present in one set but not the other renders as an empty string on
+    # whichever console gets the other set.
+    $unicode = New-GlyphSet -Unicode $true
+    $ascii   = New-GlyphSet -Unicode $false
+
+    $onlyUnicode = @($unicode.Keys | Where-Object { -not $ascii.ContainsKey($_) })
+    $onlyAscii   = @($ascii.Keys   | Where-Object { -not $unicode.ContainsKey($_) })
+
+    Assert-Equal 0 $onlyUnicode.Count "missing from the ASCII set: $($onlyUnicode -join ', ')"
+    Assert-Equal 0 $onlyAscii.Count   "missing from the Unicode set: $($onlyAscii -join ', ')"
+}
+
+Test-Case 'no glyph is empty in either set' {
+    foreach ($unicode in @($true, $false)) {
+        $set = New-GlyphSet -Unicode $unicode
+        foreach ($name in $set.Keys) {
+            $value = $set[$name]
+            $text = if ($value -is [array]) { -join $value } else { [string]$value }
+            Assert-True ($text.Length -gt 0) "glyph '$name' is empty (unicode=$unicode)"
+        }
+    }
+}
+
+Test-Case 'the ASCII set really is ASCII' {
+    # This is the set a legacy conhost gets; a stray box-drawing character in it
+    # would render as a question mark.
+    $ascii = New-GlyphSet -Unicode $false
+    foreach ($name in $ascii.Keys) {
+        $value = $ascii[$name]
+        $text = if ($value -is [array]) { -join $value } else { [string]$value }
+        Assert-True ($text -notmatch '[^\x00-\x7F]') "ASCII glyph '$name' contains a non-ASCII character"
+    }
+}
+
+Test-Case 'the Unicode set really uses box drawing' {
+    $unicode = New-GlyphSet -Unicode $true
+    foreach ($name in @('HLine', 'Checked', 'Unchecked', 'Pointer', 'BarFull', 'Ok', 'Err')) {
+        Assert-True ([string]$unicode[$name] -match '[^\x00-\x7F]') "'$name' did not switch to a Unicode glyph"
+    }
+}
+
+Test-Case 'the spinner has multiple distinct frames in both sets' {
+    foreach ($unicode in @($true, $false)) {
+        $frames = @((New-GlyphSet -Unicode $unicode).Spinner)
+        Assert-True ($frames.Count -ge 4) "only $($frames.Count) spinner frames (unicode=$unicode)"
+        Assert-Equal $frames.Count @($frames | Select-Object -Unique).Count 'spinner frames repeat'
+    }
+}
+
+Test-Case '-Ascii forces the plain theme regardless of the terminal' {
+    Assert-Equal $false (New-Theme -Ascii).Unicode
+    Assert-Equal '[x]' (New-Theme -Ascii).Glyph.Checked
+}
+
+Test-Case 'the palette defines every colour the code asks for' {
+    $palette = New-Palette
+    foreach ($name in @('Accent', 'AccentDim', 'Ok', 'Warn', 'Err', 'Text', 'Bright', 'Muted',
+                        'HighlightFg', 'HighlightBg', 'SelectedFg')) {
+        Assert-True ($palette.ContainsKey($name)) "palette is missing '$name'"
+        Assert-True ($palette[$name] -is [ConsoleColor]) "'$name' is not a ConsoleColor"
+    }
+}
+
+Test-Case 'the selection bar uses a background colour, not just brightness' {
+    # Write-Frame only paints a bar when the line carries a Background.
+    $line = New-FrameLine 'row' ([ConsoleColor]::White) ([ConsoleColor]::DarkCyan)
+    Assert-Equal 'DarkCyan' $line.Background
+    Assert-Equal 'White' $line.Color
+
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/60-Menu.ps1') -Raw
+    Assert-True ($source -match 'HighlightBg') 'the cursor row no longer uses the highlight background'
+}
+
+Test-Case 'rule width stays inside a sane range' {
+    $width = Get-RuleWidth
+    Assert-True ($width -ge 20 -and $width -le 78) "rule width $width is out of range"
+}
+
+Test-Case 'progress bar and spinner stay silent when output is redirected' {
+    # They rewrite the current line, which would otherwise fill a log file.
+    $animate = $Ctx.Animate
+    try {
+        $Ctx.Animate = $false
+        Write-ProgressBar -Label 'x' -Fraction 0.5
+        Write-Activity -Message 'x' -Tick 1
+        Clear-InlineLine
+    }
+    finally { $Ctx.Animate = $animate }
+}
+
+# -----------------------------------------------------------------------------
 Write-Section 'Menu geometry'
 
 $menuItems = @(1..20 | ForEach-Object { [pscustomobject]@{ Name = "Item $_"; Note = "note$_" } })

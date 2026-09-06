@@ -127,6 +127,7 @@ param(
     [switch]  `$Yes,
     [switch]  `$Elevate,
     [switch]  `$NoColor,
+    [switch]  `$Ascii,
     [switch]  `$NoBanner,
     [switch]  `$Version,
     [switch]  `$Help,
@@ -171,13 +172,14 @@ $footer = @"
     `$Ctx = New-MoscoviumContext -Version `$BuildVersion -SourceUrl `$Source ``
         -DryRun:(Test-Flag 'DryRun') ``
         -AssumeYes:(Test-Flag 'Yes') ``
-        -NoColor:(Test-Flag 'NoColor')
+        -NoColor:(Test-Flag 'NoColor') ``
+        -Ascii:(Test-Flag 'Ascii')
 
     Initialize-State
 
-    if (-not (Test-Flag 'NoBanner') -and -not (Test-Flag 'Version') -and -not (Test-Flag 'Help')) {
-        Write-Banner
-    }
+    # Box drawing needs a UTF-8 console. Native tools are decoded through the
+    # same setting, so it is put back before we return.
+    `$previousEncoding = Initialize-ConsoleEncoding
 
     try {
         `$exitCode = Invoke-Main -Bound `$BoundParameters
@@ -188,6 +190,9 @@ $footer = @"
         Write-Host "  Moscovium stopped: `$(`$_.Exception.Message)" -ForegroundColor Red
         try { Write-Log "FATAL: `$(`$_ | Out-String)" 'ERROR' } catch { }
         `$global:LASTEXITCODE = 1
+    }
+    finally {
+        Restore-ConsoleEncoding -Previous `$previousEncoding
     }
 
 } `$PSBoundParameters '$Version' `$SourceUrl

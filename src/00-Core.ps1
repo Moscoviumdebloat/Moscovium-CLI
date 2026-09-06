@@ -21,17 +21,25 @@ function New-MoscoviumContext {
         [Parameter(Mandatory)][string]$SourceUrl,
         [switch]$DryRun,
         [switch]$AssumeYes,
-        [switch]$NoColor
+        [switch]$NoColor,
+        [switch]$Ascii
     )
 
     $stateDir = Join-Path $env:LOCALAPPDATA 'Moscovium'
+
+    $redirected = $true
+    try { $redirected = [Console]::IsOutputRedirected } catch { }
 
     [pscustomobject]@{
         Version    = $Version
         SourceUrl  = $SourceUrl
         DryRun     = [bool]$DryRun
         AssumeYes  = [bool]$AssumeYes
-        UseColor   = (-not $NoColor) -and (-not [Console]::IsOutputRedirected)
+        UseColor   = (-not $NoColor) -and (-not $redirected)
+        # Spinners and progress bars rewrite the current line, which only makes
+        # sense on a real console.
+        Animate    = (-not $redirected)
+        Theme      = (New-Theme -Ascii:$Ascii)
         IsAdmin    = Test-Administrator
         StateDir   = $stateDir
         BackupDir  = Join-Path $stateDir 'backups'
@@ -73,55 +81,69 @@ function Write-Line {
     param(
         [Parameter(Position = 0)][AllowEmptyString()][string]$Text = '',
         [ConsoleColor]$Color,
+        [ConsoleColor]$Background,
         [switch]$NoNewline
     )
 
-    if ($PSBoundParameters.ContainsKey('Color') -and $Ctx.UseColor) {
-        Write-Host $Text -ForegroundColor $Color -NoNewline:$NoNewline
-    }
-    else {
+    if (-not $Ctx.UseColor) {
         Write-Host $Text -NoNewline:$NoNewline
+        return
     }
+
+    $splat = @{ Object = $Text; NoNewline = $NoNewline }
+    if ($PSBoundParameters.ContainsKey('Color'))      { $splat.ForegroundColor = $Color }
+    if ($PSBoundParameters.ContainsKey('Background')) { $splat.BackgroundColor = $Background }
+
+    Write-Host @splat
+}
+
+# Status lines share one shape: two spaces, a coloured glyph, the message. The
+# glyph set swaps to ASCII on a console that cannot render the nicer one.
+function Write-Status {
+    param(
+        [Parameter(Mandatory)][string]$Glyph,
+        [Parameter(Mandatory)][ConsoleColor]$Color,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Message,
+        [ConsoleColor]$MessageColor
+    )
+
+    Write-Line ('  ' + $Glyph + ' ') -Color $Color -NoNewline
+    if ($PSBoundParameters.ContainsKey('MessageColor')) { Write-Line $Message -Color $MessageColor }
+    else { Write-Line $Message }
 }
 
 function Write-Step {
     param([Parameter(Mandatory)][string]$Message)
-    Write-Line '  ~ ' -Color DarkCyan -NoNewline
-    Write-Line $Message
+    Write-Status -Glyph (Get-Glyph 'Step') -Color (Get-Color 'AccentDim') -Message $Message
     Write-Log $Message
 }
 
 function Write-Ok {
     param([Parameter(Mandatory)][string]$Message)
-    Write-Line '  + ' -Color Green -NoNewline
-    Write-Line $Message
+    Write-Status -Glyph (Get-Glyph 'Ok') -Color (Get-Color 'Ok') -Message $Message
     Write-Log $Message 'OK'
 }
 
 function Write-Warn {
     param([Parameter(Mandatory)][string]$Message)
-    Write-Line '  ! ' -Color Yellow -NoNewline
-    Write-Line $Message -Color Yellow
+    Write-Status -Glyph (Get-Glyph 'Warn') -Color (Get-Color 'Warn') -Message $Message -MessageColor (Get-Color 'Warn')
     Write-Log $Message 'WARN'
 }
 
 function Write-Err {
     param([Parameter(Mandatory)][string]$Message)
-    Write-Line '  x ' -Color Red -NoNewline
-    Write-Line $Message -Color Red
+    Write-Status -Glyph (Get-Glyph 'Err') -Color (Get-Color 'Err') -Message $Message -MessageColor (Get-Color 'Err')
     Write-Log $Message 'ERROR'
 }
 
 function Write-Info {
     param([AllowEmptyString()][string]$Message = '')
-    Write-Line "    $Message" -Color DarkGray
+    Write-Line "      $Message" -Color (Get-Color 'Muted')
 }
 
 function Write-SectionHeading {
-    param([Parameter(Mandatory)][string]$Title)
-    Write-Line ''
-    Write-Line "  $Title" -Color White
-    Write-Line ('  ' + ('-' * $Title.Length)) -Color DarkGray
+    param([Parameter(Mandatory)][string]$Title, [AllowEmptyString()][string]$Suffix = '')
+    Write-Rule -Title $Title -Suffix $Suffix -TitleColor (Get-Color 'Bright')
 }
 
 function Write-Banner {
@@ -138,14 +160,45 @@ function Write-Banner {
         '  |_|  |_| \___/ |___/ \___| \___/   \_/   |_| \__,_||_| |_| |_|'
     )
 
-    foreach ($line in $art) { Write-Line $line -Color Cyan }
+    # Top-down brightness gradient. Only 16 colours are in play, so the ramp is
+    # White -> Cyan -> DarkCyan rather than anything smoother, but it reads well
+    # and needs no ANSI support.
+    $ramp = @(
+        [ConsoleColor]::White
+        [ConsoleColor]::White
+        [ConsoleColor]::Cyan
+        [ConsoleColor]::Cyan
+        [ConsoleColor]::DarkCyan
+        [ConsoleColor]::DarkCyan
+    )
 
-    Write-Line ("  CLI v{0}   Windows debloat and setup toolbox" -f $Ctx.Version) -Color DarkGray
+    for ($i = 0; $i -lt $art.Count; $i++) {
+        Write-Line $art[$i] -Color $ramp[[Math]::Min($i, $ramp.Count - 1)]
+    }
 
-    $badges = @()
-    if ($Ctx.IsAdmin) { $badges += 'elevated' } else { $badges += 'NOT elevated' }
-    if ($Ctx.DryRun)  { $badges += 'dry run' }
-    Write-Line ('  ' + ($badges -join '  |  ')) -Color DarkGray
+    Write-Rule
+
+    $chips = @(New-Chip -Text "v$($Ctx.Version)" -Color (Get-Color 'Bright'))
+
+    # Counts are only meaningful once the catalog has loaded.
+    if ($Ctx.Tweaks.Count -gt 0) {
+        $chips += New-Chip -Text "$($Ctx.Tweaks.Count) tweaks" -Color (Get-Color 'Text')
+        $chips += New-Chip -Text "$($Ctx.Apps.Count) apps" -Color (Get-Color 'Text')
+    }
+
+    if ($Ctx.IsAdmin) {
+        $chips += New-Chip -Text 'elevated' -Color (Get-Color 'Ok') -Glyph (Get-Glyph 'Dot')
+    }
+    else {
+        $chips += New-Chip -Text 'not elevated' -Color (Get-Color 'Warn') -Glyph (Get-Glyph 'Dot')
+    }
+
+    if ($Ctx.DryRun) {
+        $chips += New-Chip -Text 'dry run' -Color (Get-Color 'Warn') -Glyph (Get-Glyph 'Dot')
+    }
+
+    Write-Chips -Chips $chips
+    Write-Rule -Tight
     Write-Line ''
 }
 

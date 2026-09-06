@@ -132,7 +132,40 @@ saved in the GUI runs here and vice versa.
 | `-Yes` | skip confirmations |
 | `-Elevate` | relaunch elevated immediately |
 | `-NoColor` | plain output |
+| `-Ascii` | ASCII glyphs instead of box drawing |
 | `-NoBanner` | skip the banner |
+
+## How it looks
+
+```
+   __  __                                   _
+  |  \/  |  ___   ___   ___   ___  __   __ (_) _   _  _ __ ___
+  | |\/| | / _ \ / __| / __| / _ \ \ \ / / | || | | || '_ ` _ \
+  | |  | || (_) |\__ \| (__ | (_) | \ V /  | || |_| || | | | | |
+  |_|  |_| \___/ |___/ \___| \___/   \_/   |_| \__,_||_| |_| |_|
+
+  ──────────────────────────────────────────────────────────────────────────────
+  v1.0.0   ·   40 tweaks   ·   127 apps   ·   ● elevated
+  ──────────────────────────────────────────────────────────────────────────────
+
+  ─── Privacy & Telemetry ────────────────────────────────────────────────── 6/7
+  ◉ Disable Telemetry                             applied
+  ◉ Disable Activity History                      applied
+  ○ Set Time to UTC
+
+    NVIDIA App  ███████████░░░░░░░░░░░░░░░   42%   87.4 MB / 208.0 MB   8.5 MB/s
+```
+
+Everything degrades. On a console that cannot render box drawing the same
+screens come out as `---`, `[x]`, `[ ]` and `#`, which is what a fresh Windows
+install in legacy conhost gets. `-Ascii` forces that mode; `-NoColor` drops
+colour too.
+
+There are no ANSI escape sequences anywhere — legacy conhost does not process
+them by default, and a debloat tool is exactly what people run on a machine in
+that state. The selection bar, the status colours and the banner gradient are
+all built from Write-Host's sixteen colours, which behave identically in conhost
+and Windows Terminal.
 
 ## Elevation
 

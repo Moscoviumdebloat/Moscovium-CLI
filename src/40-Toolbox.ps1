@@ -287,8 +287,7 @@ function Invoke-ToolboxAction {
     }
 
     if ($Ctx.DryRun) {
-        Write-Line '  . ' -Color DarkYellow -NoNewline
-        Write-Line "$($action.Name)" -Color DarkYellow
+        Write-Status -Glyph (Get-Glyph 'Info') -Color (Get-Color 'Warn') -Message $action.Name -MessageColor (Get-Color 'Warn')
         Write-Info "would run toolbox action '$($action.Id)'"
         return
     }

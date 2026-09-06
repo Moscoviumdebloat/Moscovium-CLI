@@ -42,10 +42,16 @@ function Write-Frame {
     foreach ($line in $Lines) {
         $text = [string]$line.Text
         if ($text.Length -gt $width) { $text = $text.Substring(0, $width) }
+        # Padding to the full width is what turns a background colour into a
+        # solid selection bar rather than a coloured word.
         $text = $text.PadRight($width)
 
-        if ($line.Color -and $Ctx.UseColor) { Write-Host $text -ForegroundColor $line.Color }
-        else { Write-Host $text }
+        if (-not $Ctx.UseColor) { Write-Host $text; continue }
+
+        $splat = @{ Object = $text }
+        if ($line.Color)      { $splat.ForegroundColor = $line.Color }
+        if ($line.Background) { $splat.BackgroundColor = $line.Background }
+        Write-Host @splat
     }
 
     # Erase whatever the previous, taller frame left behind.
@@ -58,8 +64,8 @@ function Write-Frame {
 }
 
 function New-FrameLine {
-    param([AllowEmptyString()][string]$Text = '', $Color = $null)
-    [pscustomobject]@{ Text = $Text; Color = $Color }
+    param([AllowEmptyString()][string]$Text = '', $Color = $null, $Background = $null)
+    [pscustomobject]@{ Text = $Text; Color = $Color; Background = $Background }
 }
 
 function Read-MenuKey {
@@ -204,60 +210,66 @@ function Show-Selector {
         $cursor = $view.Cursor
         $offset = $view.Offset
 
+        # Same width as Write-Rule, so the selector lines up with section rules.
+        $rule = (Get-Glyph 'HLine') * (Get-RuleWidth)
+
         $lines = [System.Collections.Generic.List[object]]::new()
         $lines.Add((New-FrameLine))
-        $lines.Add((New-FrameLine "  $Title" 'Cyan'))
-        if ($Subtitle) { $lines.Add((New-FrameLine "  $Subtitle" 'DarkGray')) }
-        $lines.Add((New-FrameLine))
+        $lines.Add((New-FrameLine ('  ' + $Title) (Get-Color 'Accent')))
+        if ($Subtitle) { $lines.Add((New-FrameLine ('  ' + $Subtitle) (Get-Color 'Muted'))) }
+        $lines.Add((New-FrameLine ('  ' + $rule) (Get-Color 'Muted')))
 
         if ($visible.Count -eq 0) {
-            $lines.Add((New-FrameLine "    no match for '$filter'" 'DarkYellow'))
+            $lines.Add((New-FrameLine "     no match for '$filter'" (Get-Color 'Warn')))
         }
 
         $last = [Math]::Min($offset + $viewport, $visible.Count)
         for ($row = $offset; $row -lt $last; $row++) {
             $index = $visible[$row]
             $isCursor = ($row -eq $cursor)
+            $isSelected = $selected.Contains($index)
 
-            $marker = if ($SingleSelect) { '  ' }
-                      elseif ($selected.Contains($index)) { '[x]' }
-                      else { '[ ]' }
+            $marker = if ($SingleSelect) { ' ' }
+                      elseif ($isSelected) { Get-Glyph 'Checked' }
+                      else { Get-Glyph 'Unchecked' }
 
-            $pointer = if ($isCursor) { '>' } else { ' ' }
-            $text = ' {0} {1} {2}' -f $pointer, $marker, (& $Label $Items[$index])
+            $pointer = if ($isCursor) { Get-Glyph 'Pointer' } else { ' ' }
+            $text = '  {0} {1} {2}' -f $pointer, $marker, (& $Label $Items[$index])
 
             if ($Sublabel) {
                 $extra = (& $Sublabel $Items[$index])
-                if ($extra) { $text = $text.PadRight(46) + $extra }
+                if ($extra) { $text = $text.PadRight(48) + $extra }
             }
 
-            $color = if ($isCursor) { 'Black' } elseif ($selected.Contains($index)) { 'Green' } else { 'Gray' }
-
-            if ($isCursor -and $Ctx.UseColor) {
-                # No background control in this frame model, so mark the cursor
-                # row with brightness instead of a highlight bar.
-                $lines.Add((New-FrameLine $text 'White'))
+            if ($isCursor) {
+                # A padded full-width line plus a background colour is a real
+                # selection bar - the whole row inverts, not just the text.
+                $lines.Add((New-FrameLine $text (Get-Color 'HighlightFg') (Get-Color 'HighlightBg')))
+            }
+            elseif ($isSelected) {
+                $lines.Add((New-FrameLine $text (Get-Color 'SelectedFg')))
             }
             else {
-                $lines.Add((New-FrameLine $text $color))
+                $lines.Add((New-FrameLine $text (Get-Color 'Text')))
             }
         }
 
-        $lines.Add((New-FrameLine))
+        $lines.Add((New-FrameLine ('  ' + $rule) (Get-Color 'Muted')))
 
+        $dot = Get-Glyph 'Sep'
         $position = if ($visible.Count -gt 0) { "$($cursor + 1)/$($visible.Count)" } else { '0/0' }
         $status = "  $position"
-        if (-not $SingleSelect) { $status += "   selected: $($selected.Count)" }
-        if ($filter) { $status += "   filter: $filter" }
-        $lines.Add((New-FrameLine $status 'DarkGray'))
+        if (-not $SingleSelect) { $status += "   $dot   $($selected.Count) selected" }
+        if ($filter) { $status += "   $dot   filter: $filter" }
+        $lines.Add((New-FrameLine $status (Get-Color 'Muted')))
 
         $keys = if ($SingleSelect) {
-            '  up/down move   enter choose   / filter   esc back'
+            "  up/down move   $dot   enter choose   $dot   / filter   $dot   esc back"
         }
         else {
-            '  up/down move   space toggle   a all   n none   i invert   / filter   enter confirm   esc back'
+            "  up/down move   $dot   space toggle   $dot   a all   $dot   n none   $dot   i invert   $dot   / filter   $dot   enter confirm   $dot   esc back"
         }
-        $lines.Add((New-FrameLine $keys 'DarkGray'))
+        $lines.Add((New-FrameLine $keys (Get-Color 'Muted')))
 
         Write-Frame -Lines $lines.ToArray() -PreviousHeight ([ref]$previousHeight)
 

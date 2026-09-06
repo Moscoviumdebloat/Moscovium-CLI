@@ -34,6 +34,7 @@ param(
     [switch]  $Yes,
     [switch]  $Elevate,
     [switch]  $NoColor,
+    [switch]  $Ascii,
     [switch]  $NoBanner,
     [switch]  $Version,
     [switch]  $Help,
@@ -96,17 +97,25 @@ param(
             [Parameter(Mandatory)][string]$SourceUrl,
             [switch]$DryRun,
             [switch]$AssumeYes,
-            [switch]$NoColor
+            [switch]$NoColor,
+            [switch]$Ascii
         )
 
         $stateDir = Join-Path $env:LOCALAPPDATA 'Moscovium'
+
+        $redirected = $true
+        try { $redirected = [Console]::IsOutputRedirected } catch { }
 
         [pscustomobject]@{
             Version    = $Version
             SourceUrl  = $SourceUrl
             DryRun     = [bool]$DryRun
             AssumeYes  = [bool]$AssumeYes
-            UseColor   = (-not $NoColor) -and (-not [Console]::IsOutputRedirected)
+            UseColor   = (-not $NoColor) -and (-not $redirected)
+            # Spinners and progress bars rewrite the current line, which only makes
+            # sense on a real console.
+            Animate    = (-not $redirected)
+            Theme      = (New-Theme -Ascii:$Ascii)
             IsAdmin    = Test-Administrator
             StateDir   = $stateDir
             BackupDir  = Join-Path $stateDir 'backups'
@@ -148,55 +157,69 @@ param(
         param(
             [Parameter(Position = 0)][AllowEmptyString()][string]$Text = '',
             [ConsoleColor]$Color,
+            [ConsoleColor]$Background,
             [switch]$NoNewline
         )
 
-        if ($PSBoundParameters.ContainsKey('Color') -and $Ctx.UseColor) {
-            Write-Host $Text -ForegroundColor $Color -NoNewline:$NoNewline
-        }
-        else {
+        if (-not $Ctx.UseColor) {
             Write-Host $Text -NoNewline:$NoNewline
+            return
         }
+
+        $splat = @{ Object = $Text; NoNewline = $NoNewline }
+        if ($PSBoundParameters.ContainsKey('Color'))      { $splat.ForegroundColor = $Color }
+        if ($PSBoundParameters.ContainsKey('Background')) { $splat.BackgroundColor = $Background }
+
+        Write-Host @splat
+    }
+
+    # Status lines share one shape: two spaces, a coloured glyph, the message. The
+    # glyph set swaps to ASCII on a console that cannot render the nicer one.
+    function Write-Status {
+        param(
+            [Parameter(Mandatory)][string]$Glyph,
+            [Parameter(Mandatory)][ConsoleColor]$Color,
+            [Parameter(Mandatory)][AllowEmptyString()][string]$Message,
+            [ConsoleColor]$MessageColor
+        )
+
+        Write-Line ('  ' + $Glyph + ' ') -Color $Color -NoNewline
+        if ($PSBoundParameters.ContainsKey('MessageColor')) { Write-Line $Message -Color $MessageColor }
+        else { Write-Line $Message }
     }
 
     function Write-Step {
         param([Parameter(Mandatory)][string]$Message)
-        Write-Line '  ~ ' -Color DarkCyan -NoNewline
-        Write-Line $Message
+        Write-Status -Glyph (Get-Glyph 'Step') -Color (Get-Color 'AccentDim') -Message $Message
         Write-Log $Message
     }
 
     function Write-Ok {
         param([Parameter(Mandatory)][string]$Message)
-        Write-Line '  + ' -Color Green -NoNewline
-        Write-Line $Message
+        Write-Status -Glyph (Get-Glyph 'Ok') -Color (Get-Color 'Ok') -Message $Message
         Write-Log $Message 'OK'
     }
 
     function Write-Warn {
         param([Parameter(Mandatory)][string]$Message)
-        Write-Line '  ! ' -Color Yellow -NoNewline
-        Write-Line $Message -Color Yellow
+        Write-Status -Glyph (Get-Glyph 'Warn') -Color (Get-Color 'Warn') -Message $Message -MessageColor (Get-Color 'Warn')
         Write-Log $Message 'WARN'
     }
 
     function Write-Err {
         param([Parameter(Mandatory)][string]$Message)
-        Write-Line '  x ' -Color Red -NoNewline
-        Write-Line $Message -Color Red
+        Write-Status -Glyph (Get-Glyph 'Err') -Color (Get-Color 'Err') -Message $Message -MessageColor (Get-Color 'Err')
         Write-Log $Message 'ERROR'
     }
 
     function Write-Info {
         param([AllowEmptyString()][string]$Message = '')
-        Write-Line "    $Message" -Color DarkGray
+        Write-Line "      $Message" -Color (Get-Color 'Muted')
     }
 
     function Write-SectionHeading {
-        param([Parameter(Mandatory)][string]$Title)
-        Write-Line ''
-        Write-Line "  $Title" -Color White
-        Write-Line ('  ' + ('-' * $Title.Length)) -Color DarkGray
+        param([Parameter(Mandatory)][string]$Title, [AllowEmptyString()][string]$Suffix = '')
+        Write-Rule -Title $Title -Suffix $Suffix -TitleColor (Get-Color 'Bright')
     }
 
     function Write-Banner {
@@ -213,14 +236,45 @@ param(
             '  |_|  |_| \___/ |___/ \___| \___/   \_/   |_| \__,_||_| |_| |_|'
         )
 
-        foreach ($line in $art) { Write-Line $line -Color Cyan }
+        # Top-down brightness gradient. Only 16 colours are in play, so the ramp is
+        # White -> Cyan -> DarkCyan rather than anything smoother, but it reads well
+        # and needs no ANSI support.
+        $ramp = @(
+            [ConsoleColor]::White
+            [ConsoleColor]::White
+            [ConsoleColor]::Cyan
+            [ConsoleColor]::Cyan
+            [ConsoleColor]::DarkCyan
+            [ConsoleColor]::DarkCyan
+        )
 
-        Write-Line ("  CLI v{0}   Windows debloat and setup toolbox" -f $Ctx.Version) -Color DarkGray
+        for ($i = 0; $i -lt $art.Count; $i++) {
+            Write-Line $art[$i] -Color $ramp[[Math]::Min($i, $ramp.Count - 1)]
+        }
 
-        $badges = @()
-        if ($Ctx.IsAdmin) { $badges += 'elevated' } else { $badges += 'NOT elevated' }
-        if ($Ctx.DryRun)  { $badges += 'dry run' }
-        Write-Line ('  ' + ($badges -join '  |  ')) -Color DarkGray
+        Write-Rule
+
+        $chips = @(New-Chip -Text "v$($Ctx.Version)" -Color (Get-Color 'Bright'))
+
+        # Counts are only meaningful once the catalog has loaded.
+        if ($Ctx.Tweaks.Count -gt 0) {
+            $chips += New-Chip -Text "$($Ctx.Tweaks.Count) tweaks" -Color (Get-Color 'Text')
+            $chips += New-Chip -Text "$($Ctx.Apps.Count) apps" -Color (Get-Color 'Text')
+        }
+
+        if ($Ctx.IsAdmin) {
+            $chips += New-Chip -Text 'elevated' -Color (Get-Color 'Ok') -Glyph (Get-Glyph 'Dot')
+        }
+        else {
+            $chips += New-Chip -Text 'not elevated' -Color (Get-Color 'Warn') -Glyph (Get-Glyph 'Dot')
+        }
+
+        if ($Ctx.DryRun) {
+            $chips += New-Chip -Text 'dry run' -Color (Get-Color 'Warn') -Glyph (Get-Glyph 'Dot')
+        }
+
+        Write-Chips -Chips $chips
+        Write-Rule -Tight
         Write-Line ''
     }
 
@@ -3100,6 +3154,298 @@ param(
         }
     }
 
+# ===== src/05-Theme.ps1 ================================================
+
+    # =============================================================================
+    # Theme: terminal capability detection, glyphs, palette, and the drawing
+    # primitives everything else renders through.
+    #
+    # Two hard constraints shape this file.
+    #
+    # 1. src/ must stay pure ASCII (build.ps1 enforces it, because the bundle ships
+    #    without a BOM and Windows PowerShell 5.1 would decode it as ANSI). So every
+    #    box-drawing character is built from its code point at runtime, never typed
+    #    as a literal.
+    #
+    # 2. No ANSI escape sequences. Legacy conhost on a fresh Windows install does not
+    #    process them by default, and a debloat tool is exactly the thing people run
+    #    on a fresh install. Everything here uses Write-Host's 16 colours, which
+    #    render identically in conhost and Windows Terminal, and a foreground and
+    #    background pair is enough for a real selection bar.
+    #
+    # Unicode still needs the console output encoding to be UTF-8, so that is set on
+    # startup and restored on exit - and only when we have decided to use it.
+    # =============================================================================
+
+    function ConvertTo-Char {
+        param([Parameter(Mandatory)][int]$CodePoint)
+        [string][char]$CodePoint
+    }
+
+    # Windows Terminal and PowerShell 7 handle UTF-8 output reliably. Legacy conhost
+    # on an OEM code page does not, and would render box drawing as question marks.
+    function Test-UnicodeCapable {
+        try {
+            if ([Console]::IsOutputRedirected) { return $false }
+            if ($env:WT_SESSION) { return $true }
+            if ($env:TERM_PROGRAM -eq 'vscode') { return $true }
+            if ($PSVersionTable.PSVersion.Major -ge 6) { return $true }
+            if ([Console]::OutputEncoding.CodePage -eq 65001) { return $true }
+        }
+        catch { }
+        return $false
+    }
+
+    function New-GlyphSet {
+        param([Parameter(Mandatory)][bool]$Unicode)
+
+        if (-not $Unicode) {
+            return @{
+                Ok = '+'; Err = 'x'; Warn = '!'; Info = '.'; Step = '>'; Bullet = '-'
+                Checked = '[x]'; Unchecked = '[ ]'; Partial = '[~]'; Action = '[>]'
+                Pointer = '>'; Sep = '|'
+                HLine = '-'; VLine = '|'
+                TopLeft = '+'; TopRight = '+'; BottomLeft = '+'; BottomRight = '+'
+                BarFull = '#'; BarEmpty = '.'
+                Dot = '*'; Arrow = '->'
+                Spinner = @('|', '/', '-', '\')
+            }
+        }
+
+        @{
+            Ok          = ConvertTo-Char 0x2713   # check mark
+            Err         = ConvertTo-Char 0x2717   # ballot x
+            Warn        = ConvertTo-Char 0x25B2   # black up-pointing triangle
+            Info        = ConvertTo-Char 0x00B7   # middle dot
+            Step        = ConvertTo-Char 0x203A   # single right angle quotation
+            Bullet      = ConvertTo-Char 0x2022   # bullet
+            Checked     = ConvertTo-Char 0x25C9   # fisheye
+            Unchecked   = ConvertTo-Char 0x25CB   # white circle
+            Partial     = ConvertTo-Char 0x25D0   # circle with left half black
+            Action      = ConvertTo-Char 0x25B8   # black right-pointing small triangle
+            Pointer     = ConvertTo-Char 0x276F   # heavy right angle quotation
+            Sep         = ConvertTo-Char 0x00B7
+            HLine       = ConvertTo-Char 0x2500
+            VLine       = ConvertTo-Char 0x2502
+            TopLeft     = ConvertTo-Char 0x256D
+            TopRight    = ConvertTo-Char 0x256E
+            BottomLeft  = ConvertTo-Char 0x2570
+            BottomRight = ConvertTo-Char 0x256F
+            BarFull     = ConvertTo-Char 0x2588   # full block
+            BarEmpty    = ConvertTo-Char 0x2591   # light shade
+            Dot         = ConvertTo-Char 0x25CF   # black circle
+            Arrow       = ConvertTo-Char 0x2192
+            # Braille spinner: eight dots cycling, reads as smooth rotation.
+            Spinner     = @(0x280B, 0x2819, 0x2839, 0x2838, 0x283C, 0x2834, 0x2826, 0x2827, 0x2807, 0x280F |
+                            ForEach-Object { ConvertTo-Char $_ })
+        }
+    }
+
+    function New-Palette {
+        @{
+            Accent      = [ConsoleColor]::Cyan
+            AccentDim   = [ConsoleColor]::DarkCyan
+            Ok          = [ConsoleColor]::Green
+            Warn        = [ConsoleColor]::Yellow
+            Err         = [ConsoleColor]::Red
+            Text        = [ConsoleColor]::Gray
+            Bright      = [ConsoleColor]::White
+            Muted       = [ConsoleColor]::DarkGray
+            HighlightFg = [ConsoleColor]::White
+            HighlightBg = [ConsoleColor]::DarkCyan
+            SelectedFg  = [ConsoleColor]::Green
+        }
+    }
+
+    function New-Theme {
+        param([switch]$Ascii)
+
+        $unicode = (-not $Ascii) -and (Test-UnicodeCapable)
+
+        [pscustomobject]@{
+            Unicode = $unicode
+            Glyph   = New-GlyphSet -Unicode $unicode
+            Color   = New-Palette
+        }
+    }
+
+    function Get-Glyph {
+        param([Parameter(Mandatory)][string]$Name)
+        $Ctx.Theme.Glyph[$Name]
+    }
+
+    function Get-Color {
+        param([Parameter(Mandatory)][string]$Name)
+        $Ctx.Theme.Color[$Name]
+    }
+
+    # Box drawing only renders if the console can encode it. Returns the previous
+    # encoding so the caller can put it back; native tools like winget are decoded
+    # through this same setting, so leaving it changed would be rude.
+    function Initialize-ConsoleEncoding {
+        if (-not $Ctx.Theme.Unicode) { return $null }
+
+        try {
+            $previous = [Console]::OutputEncoding
+            if ($previous.CodePage -ne 65001) {
+                [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false
+                return $previous
+            }
+        }
+        catch {
+            # A host that will not let us set it also will not render the glyphs.
+            $Ctx.Theme = New-Theme -Ascii
+        }
+
+        return $null
+    }
+
+    function Restore-ConsoleEncoding {
+        param($Previous)
+        if ($Previous) {
+            try { [Console]::OutputEncoding = $Previous } catch { }
+        }
+    }
+
+    # -----------------------------------------------------------------------------
+    # Drawing
+    # -----------------------------------------------------------------------------
+
+    function Get-RuleWidth {
+        $width = 78
+        try {
+            $available = $Host.UI.RawUI.WindowSize.Width - 4
+            if ($available -gt 20) { $width = [Math]::Min(78, $available) }
+        }
+        catch { }
+        return $width
+    }
+
+    # A titled horizontal rule:  --- Privacy & Telemetry ------------------ 7
+    function Write-Rule {
+        param(
+            [AllowEmptyString()][string]$Title = '',
+            [AllowEmptyString()][string]$Suffix = '',
+            [ConsoleColor]$TitleColor = [ConsoleColor]::White,
+            # Suppresses the leading blank line, for rules that close a block rather
+            # than open one.
+            [switch]$Tight
+        )
+
+        $line = Get-Glyph 'HLine'
+        $width = Get-RuleWidth
+
+        if (-not $Tight) { Write-Line '' }
+
+        if (-not $Title) {
+            Write-Line ('  ' + ($line * $width)) -Color (Get-Color 'Muted')
+            return
+        }
+
+        $lead = $line * 3
+        $used = 2 + $lead.Length + 1 + $Title.Length + 1
+        $suffixText = if ($Suffix) { ' ' + $Suffix } else { '' }
+        $fill = [Math]::Max(3, $width - ($used - 2) - $suffixText.Length)
+
+        Write-Line "  $lead " -Color (Get-Color 'Muted') -NoNewline
+        Write-Line $Title -Color $TitleColor -NoNewline
+        Write-Line (' ' + ($line * $fill)) -Color (Get-Color 'Muted') -NoNewline
+
+        if ($suffixText) { Write-Line $suffixText -Color (Get-Color 'Muted') -NoNewline }
+        Write-Line ''
+    }
+
+    # A row of "  a  .  b  .  c  " status chips.
+    function Write-Chips {
+        param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Chips)
+
+        if ($Chips.Count -eq 0) { return }
+
+        $separator = '   ' + (Get-Glyph 'Sep') + '   '
+
+        Write-Line '  ' -NoNewline
+        for ($i = 0; $i -lt $Chips.Count; $i++) {
+            if ($i -gt 0) { Write-Line $separator -Color (Get-Color 'Muted') -NoNewline }
+
+            $chip = $Chips[$i]
+            if ($chip.Glyph) {
+                Write-Line ($chip.Glyph + ' ') -Color $chip.Color -NoNewline
+            }
+            Write-Line $chip.Text -Color $(if ($chip.Dim) { Get-Color 'Muted' } else { $chip.Color }) -NoNewline
+        }
+        Write-Line ''
+    }
+
+    function New-Chip {
+        param(
+            [Parameter(Mandatory)][string]$Text,
+            [ConsoleColor]$Color = [ConsoleColor]::Gray,
+            [string]$Glyph = '',
+            [switch]$Dim
+        )
+        [pscustomobject]@{ Text = $Text; Color = $Color; Glyph = $Glyph; Dim = [bool]$Dim }
+    }
+
+    # -----------------------------------------------------------------------------
+    # Live progress
+    #
+    # Both of these rewrite the current line with a carriage return, so they are
+    # suppressed when output is redirected - a log file should not collect 400
+    # copies of a progress bar.
+    # -----------------------------------------------------------------------------
+
+    function Write-InlineLine {
+        param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+
+        if (-not $Ctx.Animate) { return }
+
+        $width = 100
+        try { $width = [Math]::Max(40, $Host.UI.RawUI.WindowSize.Width - 1) } catch { }
+
+        $text = if ($Text.Length -gt $width) { $Text.Substring(0, $width) } else { $Text.PadRight($width) }
+        Write-Host ("`r" + $text) -NoNewline
+    }
+
+    function Clear-InlineLine {
+        if (-not $Ctx.Animate) { return }
+
+        $width = 100
+        try { $width = [Math]::Max(40, $Host.UI.RawUI.WindowSize.Width - 1) } catch { }
+        Write-Host ("`r" + (' ' * $width) + "`r") -NoNewline
+    }
+
+    function Write-ProgressBar {
+        param(
+            [Parameter(Mandatory)][string]$Label,
+            [Parameter(Mandatory)][double]$Fraction,
+            [AllowEmptyString()][string]$Detail = '',
+            [int]$Width = 26
+        )
+
+        if (-not $Ctx.Animate) { return }
+
+        $Fraction = [Math]::Max(0.0, [Math]::Min(1.0, $Fraction))
+        $filled = [int][Math]::Round($Width * $Fraction)
+
+        $bar = ((Get-Glyph 'BarFull') * $filled) + ((Get-Glyph 'BarEmpty') * ($Width - $filled))
+        $percent = '{0,3:N0}%' -f ($Fraction * 100)
+
+        Write-InlineLine ("    {0}  {1}  {2}{3}" -f $Label, $bar, $percent, $(if ($Detail) { "   $Detail" } else { '' }))
+    }
+
+    function Write-Activity {
+        param(
+            [Parameter(Mandatory)][string]$Message,
+            [Parameter(Mandatory)][int]$Tick
+        )
+
+        if (-not $Ctx.Animate) { return }
+
+        $frames = @(Get-Glyph 'Spinner')
+        $frame = $frames[$Tick % $frames.Count]
+        Write-InlineLine "    $frame  $Message"
+    }
+
 # ===== src/10-Registry.ps1 =============================================
 
     # =============================================================================
@@ -3490,8 +3836,7 @@ param(
         # Dry run is checked before elevation so an unelevated preview still shows
         # the whole plan, including the parts that would need admin to carry out.
         if ($Ctx.DryRun) {
-            Write-Line '  . ' -Color DarkYellow -NoNewline
-            Write-Line "$($Tweak.name)" -Color DarkYellow
+            Write-Status -Glyph (Get-Glyph 'Info') -Color (Get-Color 'Warn') -Message $Tweak.name -MessageColor (Get-Color 'Warn')
 
             if ($needsAdmin -and -not $Ctx.IsAdmin) {
                 Write-Info 'needs administrator - would be skipped at this elevation'
@@ -3566,8 +3911,7 @@ param(
         $entry = $backup.Entry
 
         if ($Ctx.DryRun) {
-            Write-Line '  . ' -Color DarkYellow -NoNewline
-            Write-Line "$($Tweak.name)" -Color DarkYellow
+            Write-Status -Glyph (Get-Glyph 'Info') -Color (Get-Color 'Warn') -Message $Tweak.name -MessageColor (Get-Color 'Warn')
             Write-Info "would restore from $(Split-Path -Leaf $backup.File)"
             $Ctx.Skipped++
             return
@@ -3686,29 +4030,32 @@ param(
             $inCategory = @($Tweaks | Where-Object { $_.category -eq $category })
             if ($inCategory.Count -eq 0) { continue }
 
-            Write-SectionHeading $category
+            $applied = @($inCategory | Where-Object { (Get-TweakStatus -Tweak $_) -eq 'Applied' }).Count
+            Write-SectionHeading $category -Suffix "$applied/$($inCategory.Count)"
 
             foreach ($tweak in $inCategory) {
                 $status = Get-TweakStatus -Tweak $tweak
 
-                $glyph, $color = switch ($status) {
-                    'Applied'    { '[x]', 'Green' }
-                    'Partial'    { '[~]', 'Yellow' }
-                    'NotApplied' { '[ ]', 'DarkGray' }
-                    'Action'     { '[>]', 'DarkCyan' }
-                    default      { '[?]', 'DarkGray' }
+                $glyph, $color, $label = switch ($status) {
+                    'Applied'    { (Get-Glyph 'Checked'),   (Get-Color 'Ok'),     'applied' }
+                    'Partial'    { (Get-Glyph 'Partial'),   (Get-Color 'Warn'),   'partial' }
+                    'NotApplied' { (Get-Glyph 'Unchecked'), (Get-Color 'Muted'),  '' }
+                    'Action'     { (Get-Glyph 'Action'),    (Get-Color 'AccentDim'), 'action' }
+                    default      { (Get-Glyph 'Info'),      (Get-Color 'Muted'),  'unknown' }
                 }
 
                 # The longest catalog name is 43 characters; pad past it so the
                 # status column never runs into the name.
                 Write-Line "  $glyph " -Color $color -NoNewline
-                Write-Line $tweak.name.PadRight(46) -NoNewline
-                Write-Line $status -Color $color
+                Write-Line $tweak.name.PadRight(46) -Color $(if ($status -eq 'NotApplied') { Get-Color 'Muted' } else { Get-Color 'Text' }) -NoNewline
+                Write-Line $label -Color $color
             }
         }
 
         Write-Line ''
-        Write-Info 'Legend: [x] applied  [~] partially applied  [ ] not applied  [>] one-shot action'
+        $g = $Ctx.Theme.Glyph
+        Write-Info ("legend   {0} applied   {1} partial   {2} not applied   {3} one-shot action" -f `
+            $g.Checked, $g.Partial, $g.Unchecked, $g.Action)
     }
 
 # ===== src/30-Apps.ps1 =================================================
@@ -3755,17 +4102,34 @@ param(
     function Invoke-Winget {
         param(
             [Parameter(Mandatory)][string[]]$Arguments,
-            [switch]$Quiet
+            [switch]$Quiet,
+            [string]$Activity
         )
 
         Write-Log "winget $($Arguments -join ' ')"
 
-        if ($Quiet) {
+        if ($Quiet -and -not $Activity) {
             & winget.exe @Arguments 2>&1 | Out-Null
         }
+        elseif ($Activity) {
+            # winget is quiet for long stretches during a download. Advancing a
+            # spinner on each line it does emit keeps the run visibly alive without
+            # dumping its raw output over ours.
+            $tick = 0
+            & winget.exe @Arguments 2>&1 | ForEach-Object {
+                $tick++
+                $line = ([string]$_).Trim()
+                # Its progress bars come through as runs of block characters.
+                if ($line -and $line.Length -lt 60 -and $line -notmatch '^[\W_]+$') {
+                    Write-Activity -Message "$Activity   $line" -Tick $tick
+                }
+                else {
+                    Write-Activity -Message $Activity -Tick $tick
+                }
+            }
+            Clear-InlineLine
+        }
         else {
-            # Let winget render its own progress; it is better than anything we would
-            # print, and the exit code is still available afterwards.
             & winget.exe @Arguments 2>&1 | ForEach-Object { Write-Info $_ }
         }
 
@@ -3839,24 +4203,81 @@ param(
         Join-Path $dir $leaf
     }
 
-    function Save-RemoteFile {
-        param([Parameter(Mandatory)][string]$Url, [Parameter(Mandatory)][string]$Destination)
+    function Format-Bytes {
+        param([Parameter(Mandatory)][long]$Bytes)
 
-        # TLS 1.2 is not the default in Windows PowerShell 5.1 and several vendor
-        # CDNs refuse anything older.
+        if ($Bytes -ge 1GB) { return '{0:N1} GB' -f ($Bytes / 1GB) }
+        if ($Bytes -ge 1MB) { return '{0:N1} MB' -f ($Bytes / 1MB) }
+        if ($Bytes -ge 1KB) { return '{0:N0} KB' -f ($Bytes / 1KB) }
+        return "$Bytes B"
+    }
+
+    # Streams the response so a real progress bar can be drawn. Invoke-WebRequest
+    # gives no progress callback, and its own progress bar makes large downloads
+    # roughly an order of magnitude slower on Windows PowerShell 5.1.
+    function Save-RemoteFile {
+        param(
+            [Parameter(Mandatory)][string]$Url,
+            [Parameter(Mandatory)][string]$Destination,
+            [string]$Label = 'downloading'
+        )
+
+        # TLS 1.2 is not the default in 5.1 and several vendor CDNs refuse anything older.
         try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
 
-        $progress = $ProgressPreference
+        $request = [Net.HttpWebRequest]::Create($Url)
+        $request.UserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Moscovium-CLI'
+        $request.Timeout = 60000
+        $request.ReadWriteTimeout = 600000
+        $request.AllowAutoRedirect = $true
+
+        $response = $null
+        $stream = $null
+        $output = $null
+
         try {
-            # Invoke-WebRequest's progress bar makes large downloads roughly an order
-            # of magnitude slower in 5.1.
-            $ProgressPreference = 'SilentlyContinue'
-            Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing -TimeoutSec 600 -Headers @{
-                'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Moscovium-CLI'
+            $response = $request.GetResponse()
+            $total = $response.ContentLength          # -1 when the server omits it
+            $stream = $response.GetResponseStream()
+            $output = [IO.File]::Create($Destination)
+
+            $buffer = New-Object byte[] 131072
+            $read = 0
+            $done = [long]0
+            $started = [Diagnostics.Stopwatch]::StartNew()
+            $lastDraw = [long]0
+
+            while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                $output.Write($buffer, 0, $read)
+                $done += $read
+
+                # Redraw at most every 100ms; repainting per 128 KB chunk would spend
+                # more time on the console than on the download.
+                if ($started.ElapsedMilliseconds - $lastDraw -ge 100) {
+                    $lastDraw = $started.ElapsedMilliseconds
+                    $speed = if ($started.Elapsed.TotalSeconds -gt 0) { $done / $started.Elapsed.TotalSeconds } else { 0 }
+
+                    if ($total -gt 0) {
+                        Write-ProgressBar -Label $Label -Fraction ($done / $total) `
+                            -Detail ('{0} / {1}   {2}/s' -f (Format-Bytes $done), (Format-Bytes $total), (Format-Bytes ([long]$speed)))
+                    }
+                    else {
+                        Write-Activity -Message ('{0}   {1}   {2}/s' -f $Label, (Format-Bytes $done), (Format-Bytes ([long]$speed))) `
+                            -Tick ([int]($started.ElapsedMilliseconds / 100))
+                    }
+                }
             }
+
+            $output.Close(); $output = $null
+            Clear-InlineLine
+        }
+        catch {
+            throw "Download failed: $($_.Exception.Message)"
         }
         finally {
-            $ProgressPreference = $progress
+            if ($output) { $output.Dispose() }
+            if ($stream) { $stream.Dispose() }
+            if ($response) { $response.Dispose() }
         }
 
         if (-not (Test-Path -LiteralPath $Destination)) { throw "Download produced no file at '$Destination'." }
@@ -3880,8 +4301,8 @@ param(
         Write-Step "Downloading $($App.name)"
         Write-Info $url
 
-        $size = Save-RemoteFile -Url $url -Destination $destination
-        Write-Info ('{0:N1} MB -> {1}' -f ($size / 1MB), $destination)
+        $size = Save-RemoteFile -Url $url -Destination $destination -Label $App.name
+        Write-Info ('{0} -> {1}' -f (Format-Bytes $size), $destination)
 
         Write-Step "Running installer for $($App.name)"
         $process = Start-Process -FilePath $destination -Wait -PassThru -ErrorAction Stop
@@ -3903,7 +4324,7 @@ param(
             $zipPath = Join-Path $tempRoot 'package.zip'
             Write-Step "Downloading $($App.name)"
             Write-Info $App.zipUrl
-            Save-RemoteFile -Url $App.zipUrl -Destination $zipPath | Out-Null
+            Save-RemoteFile -Url $App.zipUrl -Destination $zipPath -Label $App.name | Out-Null
 
             $extractPath = Join-Path $tempRoot 'extracted'
             Expand-Archive -LiteralPath $zipPath -DestinationPath $extractPath -Force
@@ -3957,8 +4378,7 @@ param(
         param([Parameter(Mandatory)]$App)
 
         if ($Ctx.DryRun) {
-            Write-Line '  . ' -Color DarkYellow -NoNewline
-            Write-Line $App.name -Color DarkYellow
+            Write-Status -Glyph (Get-Glyph 'Info') -Color (Get-Color 'Warn') -Message $App.name -MessageColor (Get-Color 'Warn')
 
             $how = if ($App.scriptUrl)        { "run script $($App.scriptUrl)" }
                    elseif ($App.zipUrl)       { "download and extract $($App.zipUrl)" }
@@ -3989,7 +4409,7 @@ param(
             )
             if ($App.source) { $arguments += @('--source', $App.source) }
 
-            $result = Invoke-Winget -Arguments $arguments -Quiet
+            $result = Invoke-Winget -Arguments $arguments -Activity "installing $($App.name)"
 
             if ($result.Benign) {
                 Write-Ok "$($App.name) - already installed"
@@ -4395,8 +4815,7 @@ param(
         }
 
         if ($Ctx.DryRun) {
-            Write-Line '  . ' -Color DarkYellow -NoNewline
-            Write-Line "$($action.Name)" -Color DarkYellow
+            Write-Status -Glyph (Get-Glyph 'Info') -Color (Get-Color 'Warn') -Message $action.Name -MessageColor (Get-Color 'Warn')
             Write-Info "would run toolbox action '$($action.Id)'"
             return
         }
@@ -4773,10 +5192,16 @@ param(
         foreach ($line in $Lines) {
             $text = [string]$line.Text
             if ($text.Length -gt $width) { $text = $text.Substring(0, $width) }
+            # Padding to the full width is what turns a background colour into a
+            # solid selection bar rather than a coloured word.
             $text = $text.PadRight($width)
 
-            if ($line.Color -and $Ctx.UseColor) { Write-Host $text -ForegroundColor $line.Color }
-            else { Write-Host $text }
+            if (-not $Ctx.UseColor) { Write-Host $text; continue }
+
+            $splat = @{ Object = $text }
+            if ($line.Color)      { $splat.ForegroundColor = $line.Color }
+            if ($line.Background) { $splat.BackgroundColor = $line.Background }
+            Write-Host @splat
         }
 
         # Erase whatever the previous, taller frame left behind.
@@ -4789,8 +5214,8 @@ param(
     }
 
     function New-FrameLine {
-        param([AllowEmptyString()][string]$Text = '', $Color = $null)
-        [pscustomobject]@{ Text = $Text; Color = $Color }
+        param([AllowEmptyString()][string]$Text = '', $Color = $null, $Background = $null)
+        [pscustomobject]@{ Text = $Text; Color = $Color; Background = $Background }
     }
 
     function Read-MenuKey {
@@ -4935,60 +5360,66 @@ param(
             $cursor = $view.Cursor
             $offset = $view.Offset
 
+            # Same width as Write-Rule, so the selector lines up with section rules.
+            $rule = (Get-Glyph 'HLine') * (Get-RuleWidth)
+
             $lines = [System.Collections.Generic.List[object]]::new()
             $lines.Add((New-FrameLine))
-            $lines.Add((New-FrameLine "  $Title" 'Cyan'))
-            if ($Subtitle) { $lines.Add((New-FrameLine "  $Subtitle" 'DarkGray')) }
-            $lines.Add((New-FrameLine))
+            $lines.Add((New-FrameLine ('  ' + $Title) (Get-Color 'Accent')))
+            if ($Subtitle) { $lines.Add((New-FrameLine ('  ' + $Subtitle) (Get-Color 'Muted'))) }
+            $lines.Add((New-FrameLine ('  ' + $rule) (Get-Color 'Muted')))
 
             if ($visible.Count -eq 0) {
-                $lines.Add((New-FrameLine "    no match for '$filter'" 'DarkYellow'))
+                $lines.Add((New-FrameLine "     no match for '$filter'" (Get-Color 'Warn')))
             }
 
             $last = [Math]::Min($offset + $viewport, $visible.Count)
             for ($row = $offset; $row -lt $last; $row++) {
                 $index = $visible[$row]
                 $isCursor = ($row -eq $cursor)
+                $isSelected = $selected.Contains($index)
 
-                $marker = if ($SingleSelect) { '  ' }
-                          elseif ($selected.Contains($index)) { '[x]' }
-                          else { '[ ]' }
+                $marker = if ($SingleSelect) { ' ' }
+                          elseif ($isSelected) { Get-Glyph 'Checked' }
+                          else { Get-Glyph 'Unchecked' }
 
-                $pointer = if ($isCursor) { '>' } else { ' ' }
-                $text = ' {0} {1} {2}' -f $pointer, $marker, (& $Label $Items[$index])
+                $pointer = if ($isCursor) { Get-Glyph 'Pointer' } else { ' ' }
+                $text = '  {0} {1} {2}' -f $pointer, $marker, (& $Label $Items[$index])
 
                 if ($Sublabel) {
                     $extra = (& $Sublabel $Items[$index])
-                    if ($extra) { $text = $text.PadRight(46) + $extra }
+                    if ($extra) { $text = $text.PadRight(48) + $extra }
                 }
 
-                $color = if ($isCursor) { 'Black' } elseif ($selected.Contains($index)) { 'Green' } else { 'Gray' }
-
-                if ($isCursor -and $Ctx.UseColor) {
-                    # No background control in this frame model, so mark the cursor
-                    # row with brightness instead of a highlight bar.
-                    $lines.Add((New-FrameLine $text 'White'))
+                if ($isCursor) {
+                    # A padded full-width line plus a background colour is a real
+                    # selection bar - the whole row inverts, not just the text.
+                    $lines.Add((New-FrameLine $text (Get-Color 'HighlightFg') (Get-Color 'HighlightBg')))
+                }
+                elseif ($isSelected) {
+                    $lines.Add((New-FrameLine $text (Get-Color 'SelectedFg')))
                 }
                 else {
-                    $lines.Add((New-FrameLine $text $color))
+                    $lines.Add((New-FrameLine $text (Get-Color 'Text')))
                 }
             }
 
-            $lines.Add((New-FrameLine))
+            $lines.Add((New-FrameLine ('  ' + $rule) (Get-Color 'Muted')))
 
+            $dot = Get-Glyph 'Sep'
             $position = if ($visible.Count -gt 0) { "$($cursor + 1)/$($visible.Count)" } else { '0/0' }
             $status = "  $position"
-            if (-not $SingleSelect) { $status += "   selected: $($selected.Count)" }
-            if ($filter) { $status += "   filter: $filter" }
-            $lines.Add((New-FrameLine $status 'DarkGray'))
+            if (-not $SingleSelect) { $status += "   $dot   $($selected.Count) selected" }
+            if ($filter) { $status += "   $dot   filter: $filter" }
+            $lines.Add((New-FrameLine $status (Get-Color 'Muted')))
 
             $keys = if ($SingleSelect) {
-                '  up/down move   enter choose   / filter   esc back'
+                "  up/down move   $dot   enter choose   $dot   / filter   $dot   esc back"
             }
             else {
-                '  up/down move   space toggle   a all   n none   i invert   / filter   enter confirm   esc back'
+                "  up/down move   $dot   space toggle   $dot   a all   $dot   n none   $dot   i invert   $dot   / filter   $dot   enter confirm   $dot   esc back"
             }
-            $lines.Add((New-FrameLine $keys 'DarkGray'))
+            $lines.Add((New-FrameLine $keys (Get-Color 'Muted')))
 
             Write-Frame -Lines $lines.ToArray() -PreviousHeight ([ref]$previousHeight)
 
@@ -5318,6 +5749,7 @@ param(
         Write-Line '    -Yes               skip confirmation prompts' -Color Gray
         Write-Line '    -Elevate           relaunch elevated straight away' -Color Gray
         Write-Line '    -NoColor           plain output' -Color Gray
+        Write-Line '    -Ascii             ASCII glyphs instead of box drawing' -Color Gray
         Write-Line '    -NoBanner          skip the banner' -Color Gray
         Write-Line '    -Help              this text' -Color Gray
         Write-Line ''
@@ -5472,6 +5904,9 @@ param(
 
         Initialize-Catalog
 
+        # After the catalog, so the banner can show what is in it.
+        if (-not $Bound.ContainsKey('NoBanner')) { Write-Banner }
+
         # Actions that change the machine; anything else can run unelevated.
         $mutating = @('Apply', 'Revert', 'Install', 'Toolbox', 'Profile', 'UpgradeAll', 'WindowsUpdate', 'VCRuntimes')
         $wantsChange = @($mutating | Where-Object { $Bound.ContainsKey($_) }).Count -gt 0
@@ -5565,13 +6000,14 @@ param(
     $Ctx = New-MoscoviumContext -Version $BuildVersion -SourceUrl $Source `
         -DryRun:(Test-Flag 'DryRun') `
         -AssumeYes:(Test-Flag 'Yes') `
-        -NoColor:(Test-Flag 'NoColor')
+        -NoColor:(Test-Flag 'NoColor') `
+        -Ascii:(Test-Flag 'Ascii')
 
     Initialize-State
 
-    if (-not (Test-Flag 'NoBanner') -and -not (Test-Flag 'Version') -and -not (Test-Flag 'Help')) {
-        Write-Banner
-    }
+    # Box drawing needs a UTF-8 console. Native tools are decoded through the
+    # same setting, so it is put back before we return.
+    $previousEncoding = Initialize-ConsoleEncoding
 
     try {
         $exitCode = Invoke-Main -Bound $BoundParameters
@@ -5582,6 +6018,9 @@ param(
         Write-Host "  Moscovium stopped: $($_.Exception.Message)" -ForegroundColor Red
         try { Write-Log "FATAL: $($_ | Out-String)" 'ERROR' } catch { }
         $global:LASTEXITCODE = 1
+    }
+    finally {
+        Restore-ConsoleEncoding -Previous $previousEncoding
     }
 
 } $PSBoundParameters '1.0.0' $SourceUrl

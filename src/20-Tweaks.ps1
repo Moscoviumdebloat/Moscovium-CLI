@@ -118,8 +118,7 @@ function Invoke-TweakApply {
     # Dry run is checked before elevation so an unelevated preview still shows
     # the whole plan, including the parts that would need admin to carry out.
     if ($Ctx.DryRun) {
-        Write-Line '  . ' -Color DarkYellow -NoNewline
-        Write-Line "$($Tweak.name)" -Color DarkYellow
+        Write-Status -Glyph (Get-Glyph 'Info') -Color (Get-Color 'Warn') -Message $Tweak.name -MessageColor (Get-Color 'Warn')
 
         if ($needsAdmin -and -not $Ctx.IsAdmin) {
             Write-Info 'needs administrator - would be skipped at this elevation'
@@ -194,8 +193,7 @@ function Invoke-TweakRevert {
     $entry = $backup.Entry
 
     if ($Ctx.DryRun) {
-        Write-Line '  . ' -Color DarkYellow -NoNewline
-        Write-Line "$($Tweak.name)" -Color DarkYellow
+        Write-Status -Glyph (Get-Glyph 'Info') -Color (Get-Color 'Warn') -Message $Tweak.name -MessageColor (Get-Color 'Warn')
         Write-Info "would restore from $(Split-Path -Leaf $backup.File)"
         $Ctx.Skipped++
         return
@@ -314,27 +312,30 @@ function Show-TweakStatus {
         $inCategory = @($Tweaks | Where-Object { $_.category -eq $category })
         if ($inCategory.Count -eq 0) { continue }
 
-        Write-SectionHeading $category
+        $applied = @($inCategory | Where-Object { (Get-TweakStatus -Tweak $_) -eq 'Applied' }).Count
+        Write-SectionHeading $category -Suffix "$applied/$($inCategory.Count)"
 
         foreach ($tweak in $inCategory) {
             $status = Get-TweakStatus -Tweak $tweak
 
-            $glyph, $color = switch ($status) {
-                'Applied'    { '[x]', 'Green' }
-                'Partial'    { '[~]', 'Yellow' }
-                'NotApplied' { '[ ]', 'DarkGray' }
-                'Action'     { '[>]', 'DarkCyan' }
-                default      { '[?]', 'DarkGray' }
+            $glyph, $color, $label = switch ($status) {
+                'Applied'    { (Get-Glyph 'Checked'),   (Get-Color 'Ok'),     'applied' }
+                'Partial'    { (Get-Glyph 'Partial'),   (Get-Color 'Warn'),   'partial' }
+                'NotApplied' { (Get-Glyph 'Unchecked'), (Get-Color 'Muted'),  '' }
+                'Action'     { (Get-Glyph 'Action'),    (Get-Color 'AccentDim'), 'action' }
+                default      { (Get-Glyph 'Info'),      (Get-Color 'Muted'),  'unknown' }
             }
 
             # The longest catalog name is 43 characters; pad past it so the
             # status column never runs into the name.
             Write-Line "  $glyph " -Color $color -NoNewline
-            Write-Line $tweak.name.PadRight(46) -NoNewline
-            Write-Line $status -Color $color
+            Write-Line $tweak.name.PadRight(46) -Color $(if ($status -eq 'NotApplied') { Get-Color 'Muted' } else { Get-Color 'Text' }) -NoNewline
+            Write-Line $label -Color $color
         }
     }
 
     Write-Line ''
-    Write-Info 'Legend: [x] applied  [~] partially applied  [ ] not applied  [>] one-shot action'
+    $g = $Ctx.Theme.Glyph
+    Write-Info ("legend   {0} applied   {1} partial   {2} not applied   {3} one-shot action" -f `
+        $g.Checked, $g.Partial, $g.Unchecked, $g.Action)
 }

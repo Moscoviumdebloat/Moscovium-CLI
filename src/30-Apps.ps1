@@ -40,17 +40,34 @@ function Assert-Winget {
 function Invoke-Winget {
     param(
         [Parameter(Mandatory)][string[]]$Arguments,
-        [switch]$Quiet
+        [switch]$Quiet,
+        [string]$Activity
     )
 
     Write-Log "winget $($Arguments -join ' ')"
 
-    if ($Quiet) {
+    if ($Quiet -and -not $Activity) {
         & winget.exe @Arguments 2>&1 | Out-Null
     }
+    elseif ($Activity) {
+        # winget is quiet for long stretches during a download. Advancing a
+        # spinner on each line it does emit keeps the run visibly alive without
+        # dumping its raw output over ours.
+        $tick = 0
+        & winget.exe @Arguments 2>&1 | ForEach-Object {
+            $tick++
+            $line = ([string]$_).Trim()
+            # Its progress bars come through as runs of block characters.
+            if ($line -and $line.Length -lt 60 -and $line -notmatch '^[\W_]+$') {
+                Write-Activity -Message "$Activity   $line" -Tick $tick
+            }
+            else {
+                Write-Activity -Message $Activity -Tick $tick
+            }
+        }
+        Clear-InlineLine
+    }
     else {
-        # Let winget render its own progress; it is better than anything we would
-        # print, and the exit code is still available afterwards.
         & winget.exe @Arguments 2>&1 | ForEach-Object { Write-Info $_ }
     }
 
@@ -124,24 +141,81 @@ function Get-DownloadPath {
     Join-Path $dir $leaf
 }
 
-function Save-RemoteFile {
-    param([Parameter(Mandatory)][string]$Url, [Parameter(Mandatory)][string]$Destination)
+function Format-Bytes {
+    param([Parameter(Mandatory)][long]$Bytes)
 
-    # TLS 1.2 is not the default in Windows PowerShell 5.1 and several vendor
-    # CDNs refuse anything older.
+    if ($Bytes -ge 1GB) { return '{0:N1} GB' -f ($Bytes / 1GB) }
+    if ($Bytes -ge 1MB) { return '{0:N1} MB' -f ($Bytes / 1MB) }
+    if ($Bytes -ge 1KB) { return '{0:N0} KB' -f ($Bytes / 1KB) }
+    return "$Bytes B"
+}
+
+# Streams the response so a real progress bar can be drawn. Invoke-WebRequest
+# gives no progress callback, and its own progress bar makes large downloads
+# roughly an order of magnitude slower on Windows PowerShell 5.1.
+function Save-RemoteFile {
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [Parameter(Mandatory)][string]$Destination,
+        [string]$Label = 'downloading'
+    )
+
+    # TLS 1.2 is not the default in 5.1 and several vendor CDNs refuse anything older.
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
 
-    $progress = $ProgressPreference
+    $request = [Net.HttpWebRequest]::Create($Url)
+    $request.UserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Moscovium-CLI'
+    $request.Timeout = 60000
+    $request.ReadWriteTimeout = 600000
+    $request.AllowAutoRedirect = $true
+
+    $response = $null
+    $stream = $null
+    $output = $null
+
     try {
-        # Invoke-WebRequest's progress bar makes large downloads roughly an order
-        # of magnitude slower in 5.1.
-        $ProgressPreference = 'SilentlyContinue'
-        Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing -TimeoutSec 600 -Headers @{
-            'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Moscovium-CLI'
+        $response = $request.GetResponse()
+        $total = $response.ContentLength          # -1 when the server omits it
+        $stream = $response.GetResponseStream()
+        $output = [IO.File]::Create($Destination)
+
+        $buffer = New-Object byte[] 131072
+        $read = 0
+        $done = [long]0
+        $started = [Diagnostics.Stopwatch]::StartNew()
+        $lastDraw = [long]0
+
+        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $output.Write($buffer, 0, $read)
+            $done += $read
+
+            # Redraw at most every 100ms; repainting per 128 KB chunk would spend
+            # more time on the console than on the download.
+            if ($started.ElapsedMilliseconds - $lastDraw -ge 100) {
+                $lastDraw = $started.ElapsedMilliseconds
+                $speed = if ($started.Elapsed.TotalSeconds -gt 0) { $done / $started.Elapsed.TotalSeconds } else { 0 }
+
+                if ($total -gt 0) {
+                    Write-ProgressBar -Label $Label -Fraction ($done / $total) `
+                        -Detail ('{0} / {1}   {2}/s' -f (Format-Bytes $done), (Format-Bytes $total), (Format-Bytes ([long]$speed)))
+                }
+                else {
+                    Write-Activity -Message ('{0}   {1}   {2}/s' -f $Label, (Format-Bytes $done), (Format-Bytes ([long]$speed))) `
+                        -Tick ([int]($started.ElapsedMilliseconds / 100))
+                }
+            }
         }
+
+        $output.Close(); $output = $null
+        Clear-InlineLine
+    }
+    catch {
+        throw "Download failed: $($_.Exception.Message)"
     }
     finally {
-        $ProgressPreference = $progress
+        if ($output) { $output.Dispose() }
+        if ($stream) { $stream.Dispose() }
+        if ($response) { $response.Dispose() }
     }
 
     if (-not (Test-Path -LiteralPath $Destination)) { throw "Download produced no file at '$Destination'." }
@@ -165,8 +239,8 @@ function Install-FromDownload {
     Write-Step "Downloading $($App.name)"
     Write-Info $url
 
-    $size = Save-RemoteFile -Url $url -Destination $destination
-    Write-Info ('{0:N1} MB -> {1}' -f ($size / 1MB), $destination)
+    $size = Save-RemoteFile -Url $url -Destination $destination -Label $App.name
+    Write-Info ('{0} -> {1}' -f (Format-Bytes $size), $destination)
 
     Write-Step "Running installer for $($App.name)"
     $process = Start-Process -FilePath $destination -Wait -PassThru -ErrorAction Stop
@@ -188,7 +262,7 @@ function Install-FromZip {
         $zipPath = Join-Path $tempRoot 'package.zip'
         Write-Step "Downloading $($App.name)"
         Write-Info $App.zipUrl
-        Save-RemoteFile -Url $App.zipUrl -Destination $zipPath | Out-Null
+        Save-RemoteFile -Url $App.zipUrl -Destination $zipPath -Label $App.name | Out-Null
 
         $extractPath = Join-Path $tempRoot 'extracted'
         Expand-Archive -LiteralPath $zipPath -DestinationPath $extractPath -Force
@@ -242,8 +316,7 @@ function Install-App {
     param([Parameter(Mandatory)]$App)
 
     if ($Ctx.DryRun) {
-        Write-Line '  . ' -Color DarkYellow -NoNewline
-        Write-Line $App.name -Color DarkYellow
+        Write-Status -Glyph (Get-Glyph 'Info') -Color (Get-Color 'Warn') -Message $App.name -MessageColor (Get-Color 'Warn')
 
         $how = if ($App.scriptUrl)        { "run script $($App.scriptUrl)" }
                elseif ($App.zipUrl)       { "download and extract $($App.zipUrl)" }
@@ -274,7 +347,7 @@ function Install-App {
         )
         if ($App.source) { $arguments += @('--source', $App.source) }
 
-        $result = Invoke-Winget -Arguments $arguments -Quiet
+        $result = Invoke-Winget -Arguments $arguments -Activity "installing $($App.name)"
 
         if ($result.Benign) {
             Write-Ok "$($App.name) - already installed"

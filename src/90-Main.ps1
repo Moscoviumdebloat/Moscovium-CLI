@@ -39,6 +39,7 @@ function Show-Help {
     Write-Line '    -Yes               skip confirmation prompts' -Color Gray
     Write-Line '    -Elevate           relaunch elevated straight away' -Color Gray
     Write-Line '    -NoColor           plain output' -Color Gray
+    Write-Line '    -Ascii             ASCII glyphs instead of box drawing' -Color Gray
     Write-Line '    -NoBanner          skip the banner' -Color Gray
     Write-Line '    -Help              this text' -Color Gray
     Write-Line ''
@@ -192,6 +193,9 @@ function Invoke-Main {
     }
 
     Initialize-Catalog
+
+    # After the catalog, so the banner can show what is in it.
+    if (-not $Bound.ContainsKey('NoBanner')) { Write-Banner }
 
     # Actions that change the machine; anything else can run unelevated.
     $mutating = @('Apply', 'Revert', 'Install', 'Toolbox', 'Profile', 'UpgradeAll', 'WindowsUpdate', 'VCRuntimes')
