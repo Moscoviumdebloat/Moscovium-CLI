@@ -22,7 +22,8 @@ function New-MoscoviumContext {
         [switch]$DryRun,
         [switch]$AssumeYes,
         [switch]$NoColor,
-        [switch]$Ascii
+        [switch]$Ascii,
+        [string]$BuildStamp = ''
     )
 
     $stateDir = Join-Path $env:LOCALAPPDATA 'Moscovium'
@@ -32,6 +33,9 @@ function New-MoscoviumContext {
 
     [pscustomobject]@{
         Version    = $Version
+        # Identifies exactly which build this is, so `irm ... | iex` users can tell
+        # whether they picked up a cached copy.
+        BuildStamp = $BuildStamp
         SourceUrl  = $SourceUrl
         DryRun     = [bool]$DryRun
         AssumeYes  = [bool]$AssumeYes
@@ -203,7 +207,8 @@ function Write-Banner {
 
     Write-Rule
 
-    $chips = @(New-Chip -Text "v$($Ctx.Version)" -Color (Get-Color 'Bright'))
+    $label = if ($Ctx.BuildStamp) { "v$($Ctx.Version) $(($Ctx.BuildStamp -split ' ')[0])" } else { "v$($Ctx.Version)" }
+    $chips = @(New-Chip -Text $label -Color (Get-Color 'Bright'))
 
     # Counts are only meaningful once the catalog has loaded.
     if ($Ctx.Tweaks.Count -gt 0) {

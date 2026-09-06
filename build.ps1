@@ -35,6 +35,34 @@ $SrcDir  = Join-Path $PSScriptRoot 'src'
 $DataDir = Join-Path $PSScriptRoot 'data'
 $Version = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'VERSION') -Raw).Trim()
 
+# A short digest of everything that goes into the bundle.
+#
+# The point is being able to answer "is the copy I just piped into iex the one
+# with the fix?" without diffing 300 KB. It is derived from the sources rather
+# than from git, so it is deterministic - the same src/ and data/ always produce
+# the same id, whether or not anything has been committed or pushed.
+function Get-SourceBuildId {
+    $inputs = @(Get-ChildItem -LiteralPath $SrcDir -Filter '*.ps1' -File) +
+              @(Get-ChildItem -LiteralPath $DataDir -File)
+
+    $parts = foreach ($file in ($inputs | Sort-Object -Property Name)) {
+        $content = [string](Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8)
+        # Normalise endings so the id does not depend on how the tree was checked out.
+        $file.Name + "`n" + ($content -replace "`r`n", "`n")
+    }
+
+    $material = ($parts -join "`n") + "`n" + $Version
+
+    $hash = [Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = $hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($material))
+        return (($bytes[0..4] | ForEach-Object { $_.ToString('x2') }) -join '')
+    }
+    finally { $hash.Dispose() }
+}
+
+$BuildId = Get-SourceBuildId
+
 # Default URL the bundle re-fetches from when it needs to relaunch elevated.
 $DefaultSourceUrl = 'https://raw.githubusercontent.com/Moscoviumdebloat/Moscovium-CLI/main/moscovium.ps1'
 
@@ -111,6 +139,9 @@ $header = @"
 
         irm https://moscovium.win | iex
 
+    Build $BuildId  (a digest of src/ and data/ - same sources, same id).
+    Check with:  .\moscovium.ps1 -Version
+
     GENERATED FILE - do not edit.
     Built from src/ and data/ by build.ps1. Edit those and rebuild.
 #>
@@ -157,7 +188,7 @@ param(
 # an empty dictionary, and PowerShell treats an empty collection as a missing
 # mandatory argument and would prompt for it.
 & {
-    param(`$Bound, [string]`$BuildVersion, [string]`$Source)
+    param(`$Bound, [string]`$BuildVersion, [string]`$Source, [string]`$BuildStamp)
 
     Set-StrictMode -Version Latest
     `$ErrorActionPreference = 'Stop'
@@ -183,7 +214,7 @@ param(
 
 $footer = @"
 
-    `$Ctx = New-MoscoviumContext -Version `$BuildVersion -SourceUrl `$Source ``
+    `$Ctx = New-MoscoviumContext -Version `$BuildVersion -SourceUrl `$Source -BuildStamp `$BuildStamp ``
         -DryRun:(Test-Flag 'DryRun') ``
         -AssumeYes:(Test-Flag 'Yes') ``
         -NoColor:(Test-Flag 'NoColor') ``
@@ -209,7 +240,7 @@ $footer = @"
         Restore-ConsoleEncoding -Previous `$previousEncoding
     }
 
-} `$PSBoundParameters '$Version' `$SourceUrl
+} `$PSBoundParameters '$Version' `$SourceUrl '$BuildId'
 "@
 
 # -----------------------------------------------------------------------------

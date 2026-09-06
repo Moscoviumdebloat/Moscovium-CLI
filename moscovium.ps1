@@ -5,6 +5,9 @@
 
         irm https://moscovium.win | iex
 
+    Build 5097141eff  (a digest of src/ and data/ - same sources, same id).
+    Check with:  .\moscovium.ps1 -Version
+
     GENERATED FILE - do not edit.
     Built from src/ and data/ by build.ps1. Edit those and rebuild.
 #>
@@ -51,7 +54,7 @@ param(
 # an empty dictionary, and PowerShell treats an empty collection as a missing
 # mandatory argument and would prompt for it.
 & {
-    param($Bound, [string]$BuildVersion, [string]$Source)
+    param($Bound, [string]$BuildVersion, [string]$Source, [string]$BuildStamp)
 
     Set-StrictMode -Version Latest
     $ErrorActionPreference = 'Stop'
@@ -99,7 +102,8 @@ param(
             [switch]$DryRun,
             [switch]$AssumeYes,
             [switch]$NoColor,
-            [switch]$Ascii
+            [switch]$Ascii,
+            [string]$BuildStamp = ''
         )
 
         $stateDir = Join-Path $env:LOCALAPPDATA 'Moscovium'
@@ -109,6 +113,9 @@ param(
 
         [pscustomobject]@{
             Version    = $Version
+            # Identifies exactly which build this is, so `irm ... | iex` users can tell
+            # whether they picked up a cached copy.
+            BuildStamp = $BuildStamp
             SourceUrl  = $SourceUrl
             DryRun     = [bool]$DryRun
             AssumeYes  = [bool]$AssumeYes
@@ -280,7 +287,8 @@ param(
 
         Write-Rule
 
-        $chips = @(New-Chip -Text "v$($Ctx.Version)" -Color (Get-Color 'Bright'))
+        $label = if ($Ctx.BuildStamp) { "v$($Ctx.Version) $(($Ctx.BuildStamp -split ' ')[0])" } else { "v$($Ctx.Version)" }
+        $chips = @(New-Chip -Text $label -Color (Get-Color 'Bright'))
 
         # Counts are only meaningful once the catalog has loaded.
         if ($Ctx.Tweaks.Count -gt 0) {
@@ -7001,7 +7009,10 @@ param(
         if (& $has 'Help') { Show-Help; return 0 }
 
         if (& $has 'Version') {
-            Write-Line $Ctx.Version
+            # The build id answers "am I running the copy with the fix, or a cached
+            # one?" - the question a single-file irm tool provokes constantly.
+            if ($Ctx.BuildStamp) { Write-Line "$($Ctx.Version)  build $($Ctx.BuildStamp)" }
+            else { Write-Line $Ctx.Version }
             return 0
         }
 
@@ -7102,7 +7113,7 @@ param(
         return 0
     }
 
-    $Ctx = New-MoscoviumContext -Version $BuildVersion -SourceUrl $Source `
+    $Ctx = New-MoscoviumContext -Version $BuildVersion -SourceUrl $Source -BuildStamp $BuildStamp `
         -DryRun:(Test-Flag 'DryRun') `
         -AssumeYes:(Test-Flag 'Yes') `
         -NoColor:(Test-Flag 'NoColor') `
@@ -7128,4 +7139,4 @@ param(
         Restore-ConsoleEncoding -Previous $previousEncoding
     }
 
-} $PSBoundParameters '1.0.0' $SourceUrl
+} $PSBoundParameters '1.0.0' $SourceUrl '5097141eff'

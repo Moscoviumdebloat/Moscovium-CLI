@@ -189,7 +189,10 @@ function Invoke-Main {
     if (& $has 'Help') { Show-Help; return 0 }
 
     if (& $has 'Version') {
-        Write-Line $Ctx.Version
+        # The build id answers "am I running the copy with the fix, or a cached
+        # one?" - the question a single-file irm tool provokes constantly.
+        if ($Ctx.BuildStamp) { Write-Line "$($Ctx.Version)  build $($Ctx.BuildStamp)" }
+        else { Write-Line $Ctx.Version }
         return 0
     }
 
