@@ -238,8 +238,10 @@ function Save-Catalog {
         [Parameter(Mandatory)][string]$Label
     )
 
-    $json = ConvertTo-ReadableJson -InputObject $Catalog
-    # UTF-8 without BOM: the build script embeds these verbatim.
+    # UTF-8 without BOM and LF-only: the build script embeds these verbatim, and
+    # ConvertTo-Json emits CRLF, which would otherwise leave the file with mixed
+    # endings and make every regeneration a noisy diff.
+    $json = (ConvertTo-ReadableJson -InputObject $Catalog) -replace "`r`n", "`n"
     [IO.File]::WriteAllText($Path, $json + "`n", (New-Object Text.UTF8Encoding $false))
     Write-Host ("  {0,-14} {1}" -f $Label, $Path) -ForegroundColor DarkGray
 }
