@@ -5,7 +5,7 @@
 
         irm https://moscovium.win | iex
 
-    Build 5cc52380ba  (a digest of src/ and data/ - same sources, same id).
+    Build 36c13be1a4  (a digest of src/ and data/ - same sources, same id).
     Check with:  .\moscovium.ps1 -Version
 
     GENERATED FILE - do not edit.
@@ -27,6 +27,7 @@ param(
 
     # Other actions
     [switch]  $Gui,
+    [switch]  $Tasks,
     [string[]]$Guide,
     [string[]]$SetSetting,
     [string]  $Toolbox,
@@ -3227,6 +3228,9 @@ param(
                 BarFull = '#'; BarEmpty = '.'
                 Dot = '*'; Arrow = '->'
                 Spinner = @('|', '/', '-', '\')
+                # Sparkline ramp, lowest to highest. Eight levels either way, so a
+                # graph has the same resolution on both consoles.
+                Spark = @('_', '.', ',', '-', '=', '+', '*', '#')
             }
         }
 
@@ -3255,6 +3259,11 @@ param(
             Arrow       = ConvertTo-Char 0x2192
             # Braille spinner: eight dots cycling, reads as smooth rotation.
             Spinner     = @(0x280B, 0x2819, 0x2839, 0x2838, 0x283C, 0x2834, 0x2826, 0x2827, 0x2807, 0x280F |
+                            ForEach-Object { ConvertTo-Char $_ })
+            # Lower blocks, one eighth to full - the sparkline ramp the history
+            # graphs draw with. U+2581 rather than U+2580 as the floor: a graph of
+            # zeroes should still show a baseline.
+            Spark       = @(0x2581, 0x2582, 0x2583, 0x2584, 0x2585, 0x2586, 0x2587, 0x2588 |
                             ForEach-Object { ConvertTo-Char $_ })
         }
     }
@@ -6346,6 +6355,598 @@ param(
         Write-Ok 'Profile complete.'
     }
 
+# ===== src/52-Tasks.ps1 ================================================
+
+    # =============================================================================
+    # Task manager engine: the sampling both front-ends draw from.
+    #
+    # btop-shaped - gauges and sparklines for CPU, memory, disk and network above a
+    # sortable process table - but the numbers all come from raw performance
+    # counters read through CIM.
+    #
+    # Why raw counters and not the formatted ones
+    # -----------------------------------------------------------------------------
+    # Win32_PerfFormattedData_* does its own two-sample wait inside the provider, so
+    # a single query costs about 270ms. The Win32_PerfRawData_* equivalent is 9ms
+    # and hands over the cumulative counters, leaving the delta arithmetic to us -
+    # which we want anyway, because we are already keeping the previous sample for
+    # the history graphs. Measured on this project's dev box:
+    #
+    #   Win32_PerfFormattedData_PerfOS_Processor   266 ms
+    #   Win32_PerfRawData_PerfOS_Processor           9 ms
+    #
+    # The whole refresh - CPU, memory, disks, network, processes - lands around
+    # 76ms, which is what makes a one-second interval comfortable in the window as
+    # well as the console.
+    #
+    # Nothing here uses System.Diagnostics.PerformanceCounter: its category and
+    # counter names are localised, so '\Processor(_Total)\% Processor Time' does not
+    # exist on a German or Turkish install. CIM class and property names are not
+    # localised.
+    # =============================================================================
+
+    $TaskCpuQuery = 'SELECT Name,PercentIdleTime,Timestamp_Sys100NS FROM Win32_PerfRawData_PerfOS_Processor'
+    $TaskNetQuery = 'SELECT Name,BytesReceivedPersec,BytesSentPersec,Timestamp_Sys100NS,Frequency_Sys100NS FROM Win32_PerfRawData_Tcpip_NetworkInterface'
+    # LastBootUpTime rides along on the memory query rather than costing a second
+    # one: it is the same single-instance class, and the header wants an uptime.
+    $TaskMemQuery = 'SELECT TotalVisibleMemorySize,FreePhysicalMemory,TotalVirtualMemorySize,FreeVirtualMemory,LastBootUpTime FROM Win32_OperatingSystem'
+    $TaskDiskQuery = 'SELECT DeviceID,VolumeName,Size,FreeSpace FROM Win32_LogicalDisk WHERE DriveType=3'
+
+    # -----------------------------------------------------------------------------
+    # Formatting
+    # -----------------------------------------------------------------------------
+
+    # Short enough for a table column: 4 significant characters plus a unit letter.
+    function Format-Bytes {
+        param([AllowNull()]$Bytes)
+
+        $value = 0.0
+        if ($null -ne $Bytes) { $value = [double]$Bytes }
+        if ($value -lt 0) { $value = 0.0 }
+
+        $units = @('B', 'K', 'M', 'G', 'T', 'P')
+        $index = 0
+        while ($value -ge 1024 -and $index -lt ($units.Count - 1)) {
+            $value = $value / 1024
+            $index++
+        }
+
+        # Whole numbers below 10 units read better with a decimal; above 100 the
+        # decimal is noise and costs a column.
+        if ($index -eq 0 -or $value -ge 100) { return ('{0:N0}{1}' -f $value, $units[$index]) }
+        return ('{0:N1}{1}' -f $value, $units[$index])
+    }
+
+    function Format-Rate {
+        param([AllowNull()]$BytesPerSecond)
+        return ((Format-Bytes $BytesPerSecond) + '/s')
+    }
+
+    # Seconds of CPU time as h:mm:ss, the way a process list shows it.
+    function Format-CpuTime {
+        param([AllowNull()]$Seconds)
+
+        if ($null -eq $Seconds) { return '-' }
+        $span = [TimeSpan]::FromSeconds([double]$Seconds)
+        return ('{0}:{1:00}:{2:00}' -f [int]$span.TotalHours, $span.Minutes, $span.Seconds)
+    }
+
+    # The load bands the gauges and the process table colour by. Same thresholds in
+    # both front-ends, so a red bar means the same thing in the window as it does in
+    # the console.
+    function Get-LoadBand {
+        param([double]$Percent)
+
+        if ($Percent -ge 85) { return 'high' }
+        if ($Percent -ge 60) { return 'medium' }
+        return 'low'
+    }
+
+    function Get-LoadColor {
+        param([double]$Percent)
+
+        switch (Get-LoadBand -Percent $Percent) {
+            'high'   { return (Get-Color 'Err') }
+            'medium' { return (Get-Color 'Warn') }
+            default  { return (Get-Color 'Ok') }
+        }
+    }
+
+    # -----------------------------------------------------------------------------
+    # Drawing primitives
+    # -----------------------------------------------------------------------------
+
+    # A filled bar of $Width cells. Separate from Write-ProgressBar, which writes
+    # straight to the host; this returns a string a frame line can hold.
+    function New-MeterBar {
+        param([double]$Percent, [int]$Width = 20)
+
+        if ($Width -lt 1) { return '' }
+        $clamped = [Math]::Max(0.0, [Math]::Min(100.0, $Percent))
+
+        $filled = [int][Math]::Round(($clamped / 100.0) * $Width)
+        if ($filled -gt $Width) { $filled = $Width }
+
+        return ((Get-Glyph 'BarFull') * $filled) + ((Get-Glyph 'BarEmpty') * ($Width - $filled))
+    }
+
+    # A history graph one line tall, oldest sample on the left. Scaled against
+    # $Maximum rather than the data's own peak, so the shape means the same thing
+    # from one frame to the next.
+    function New-Sparkline {
+        param(
+            [AllowEmptyCollection()][double[]]$Values = @(),
+            [int]$Width = 40,
+            [double]$Maximum = 100
+        )
+
+        if ($Width -lt 1) { return '' }
+
+        $ramp = @(Get-Glyph 'Spark')
+        if ($ramp.Count -eq 0) { return '' }
+        if ($Maximum -le 0) { $Maximum = 1 }
+
+        # Right-aligned: the newest sample sits against the right edge and older
+        # ones scroll off the left, so a partly filled history pads rather than
+        # stretching a handful of samples across the whole width.
+        $recent = @($Values)
+        if ($recent.Count -gt $Width) { $recent = @($recent[($recent.Count - $Width)..($recent.Count - 1)]) }
+
+        $cells = New-Object Text.StringBuilder
+        [void]$cells.Append(' ' * [Math]::Max(0, $Width - $recent.Count))
+
+        foreach ($value in $recent) {
+            $fraction = [Math]::Max(0.0, [Math]::Min(1.0, $value / $Maximum))
+            $level = [int][Math]::Round($fraction * ($ramp.Count - 1))
+            if ($level -lt 0) { $level = 0 }
+            if ($level -gt ($ramp.Count - 1)) { $level = $ramp.Count - 1 }
+            [void]$cells.Append($ramp[$level])
+        }
+
+        return $cells.ToString()
+    }
+
+    # -----------------------------------------------------------------------------
+    # Sampling
+    # -----------------------------------------------------------------------------
+
+    function Get-CpuRawSample {
+        $sample = @{}
+        foreach ($row in @(Get-CimInstance -Query $TaskCpuQuery -ErrorAction Stop)) {
+            $sample[[string]$row.Name] = [pscustomobject]@{
+                Idle  = [double]$row.PercentIdleTime
+                Stamp = [double]$row.Timestamp_Sys100NS
+            }
+        }
+        return $sample
+    }
+
+    # PercentIdleTime is a PERF_100NSEC_TIMER_INV counter: cumulative idle time in
+    # 100ns ticks. Busy is its complement over the same span.
+    #
+    # The _Total instance is the *average* across cores, not the sum - so every
+    # instance divides by the same timestamp delta. Verified against the formatted
+    # counter: with this divisor _Total matches the mean of the per-core values to
+    # the digit, and with a cores multiplier it does not.
+    function Get-CpuLoad {
+        param([Parameter(Mandatory)][AllowNull()]$Previous, [Parameter(Mandatory)]$Current)
+
+        $total = 0.0
+        $cores = [System.Collections.Generic.List[double]]::new()
+
+        if ($null -eq $Previous) {
+            return [pscustomobject]@{ Total = 0.0; Cores = @(); Ready = $false }
+        }
+
+        # '_Total' sorts before the digits, so pull the core names out and sort them
+        # numerically - otherwise core 10 lands between core 1 and core 2.
+        $coreNames = @($Current.Keys | Where-Object { $_ -ne '_Total' } | Sort-Object { [int]$_ })
+
+        foreach ($name in (@('_Total') + $coreNames)) {
+            if (-not $Current.ContainsKey($name) -or -not $Previous.ContainsKey($name)) { continue }
+
+            $timeDelta = $Current[$name].Stamp - $Previous[$name].Stamp
+            if ($timeDelta -le 0) { continue }
+
+            $idleDelta = $Current[$name].Idle - $Previous[$name].Idle
+            $busy = 100.0 - (100.0 * $idleDelta / $timeDelta)
+            $busy = [Math]::Max(0.0, [Math]::Min(100.0, $busy))
+
+            if ($name -eq '_Total') { $total = $busy } else { $cores.Add($busy) }
+        }
+
+        return [pscustomobject]@{ Total = $total; Cores = @($cores); Ready = $true }
+    }
+
+    function Get-MemorySample {
+        $os = Get-CimInstance -Query $TaskMemQuery -ErrorAction Stop
+
+        # Both are reported in kilobytes.
+        $total = [double]$os.TotalVisibleMemorySize * 1024
+        $free  = [double]$os.FreePhysicalMemory * 1024
+        $used  = [Math]::Max(0.0, $total - $free)
+
+        # Virtual here is physical plus the page file, so used virtual is the commit
+        # charge. Windows has no swap partition to report, and commit is the number
+        # that actually tells you whether the machine is in trouble.
+        $commitTotal = [double]$os.TotalVirtualMemorySize * 1024
+        $commitFree  = [double]$os.FreeVirtualMemory * 1024
+        $commitUsed  = [Math]::Max(0.0, $commitTotal - $commitFree)
+
+        $boot = $null
+        try { $boot = [DateTime]$os.LastBootUpTime } catch { }
+
+        [pscustomobject]@{
+            Total          = $total
+            Used           = $used
+            Free           = $free
+            Percent        = if ($total -gt 0) { 100.0 * $used / $total } else { 0.0 }
+            CommitTotal    = $commitTotal
+            CommitUsed     = $commitUsed
+            CommitPercent  = if ($commitTotal -gt 0) { 100.0 * $commitUsed / $commitTotal } else { 0.0 }
+            BootTime       = $boot
+        }
+    }
+
+    function Format-Uptime {
+        param([AllowNull()]$BootTime)
+
+        if ($null -eq $BootTime) { return 'unknown' }
+
+        $span = [DateTime]::Now - [DateTime]$BootTime
+        if ($span.TotalSeconds -lt 0) { return 'unknown' }
+
+        if ($span.Days -gt 0) { return ('{0}d {1}h' -f $span.Days, $span.Hours) }
+        if ($span.Hours -gt 0) { return ('{0}h {1}m' -f $span.Hours, $span.Minutes) }
+        return ('{0}m' -f $span.Minutes)
+    }
+
+    function Get-DiskSample {
+        $disks = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($row in @(Get-CimInstance -Query $TaskDiskQuery -ErrorAction Stop)) {
+            $size = [double]$row.Size
+            if ($size -le 0) { continue }
+
+            $free = [double]$row.FreeSpace
+            $used = [Math]::Max(0.0, $size - $free)
+
+            $disks.Add([pscustomobject]@{
+                Name    = [string]$row.DeviceID
+                Label   = [string]$row.VolumeName
+                Total   = $size
+                Used    = $used
+                Free    = $free
+                Percent = 100.0 * $used / $size
+            })
+        }
+
+        return @($disks)
+    }
+
+    function Get-NetRawSample {
+        $sample = @{}
+        foreach ($row in @(Get-CimInstance -Query $TaskNetQuery -ErrorAction Stop)) {
+            $sample[[string]$row.Name] = [pscustomobject]@{
+                Received = [double]$row.BytesReceivedPersec
+                Sent     = [double]$row.BytesSentPersec
+                Stamp    = [double]$row.Timestamp_Sys100NS
+                Frequency = [double]$row.Frequency_Sys100NS
+            }
+        }
+        return $sample
+    }
+
+    # Despite the property names, the raw class reports cumulative byte totals, not
+    # rates - so the per-second figure is ours to work out. Summed across every
+    # interface, because a machine with Wi-Fi, Ethernet and a VPN adapter has three
+    # and the interesting number is the total.
+    function Get-NetworkLoad {
+        param([Parameter(Mandatory)][AllowNull()]$Previous, [Parameter(Mandatory)]$Current)
+
+        if ($null -eq $Previous) {
+            return [pscustomobject]@{ Received = 0.0; Sent = 0.0; Ready = $false }
+        }
+
+        $received = 0.0
+        $sent = 0.0
+
+        foreach ($name in $Current.Keys) {
+            if (-not $Previous.ContainsKey($name)) { continue }
+
+            $frequency = $Current[$name].Frequency
+            if ($frequency -le 0) { continue }
+
+            $seconds = ($Current[$name].Stamp - $Previous[$name].Stamp) / $frequency
+            if ($seconds -le 0) { continue }
+
+            # A counter that went backwards means the adapter was reset; skip it
+            # rather than reporting a negative rate.
+            $deltaIn  = $Current[$name].Received - $Previous[$name].Received
+            $deltaOut = $Current[$name].Sent - $Previous[$name].Sent
+            if ($deltaIn -ge 0)  { $received += $deltaIn / $seconds }
+            if ($deltaOut -ge 0) { $sent += $deltaOut / $seconds }
+        }
+
+        return [pscustomobject]@{ Received = $received; Sent = $sent; Ready = $true }
+    }
+
+    # Get-Process rather than Win32_PerfRawData_PerfProc_Process: it is cheaper
+    # (29ms against 31ms), and its names are the real ones. The perf class
+    # disambiguates same-named processes with a '#1' suffix and reports the _Total
+    # pseudo-instance under pid 0, both of which would have to be undone.
+    function Get-ProcessRawSample {
+        $sample = @{}
+
+        foreach ($proc in @(Get-Process -ErrorAction SilentlyContinue)) {
+            # Reading these can throw on a process this session cannot open, which
+            # happens for protected processes when we are not elevated. A null CPU
+            # time shows as '-' rather than a wrong number.
+            $cpuSeconds = $null
+            try { $cpuSeconds = [double]$proc.TotalProcessorTime.TotalSeconds } catch { }
+
+            $threads = 0
+            try { $threads = @($proc.Threads).Count } catch { }
+
+            $sample[[int]$proc.Id] = [pscustomobject]@{
+                Id         = [int]$proc.Id
+                Name       = [string]$proc.ProcessName
+                WorkingSet = [double]$proc.WorkingSet64
+                Threads    = $threads
+                CpuSeconds = $cpuSeconds
+            }
+        }
+
+        return $sample
+    }
+
+    # CPU share of one process over the elapsed window: its own CPU seconds divided
+    # by the wall seconds available across every core. A process pegging two cores
+    # of an eight-core machine reads 25%, which is what Task Manager shows.
+    function Get-ProcessLoad {
+        param(
+            [Parameter(Mandatory)][AllowNull()]$Previous,
+            [Parameter(Mandatory)]$Current,
+            [Parameter(Mandatory)][double]$ElapsedSeconds,
+            [Parameter(Mandatory)][int]$Cores
+        )
+
+        $available = $ElapsedSeconds * [Math]::Max(1, $Cores)
+        $rows = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($id in $Current.Keys) {
+            $entry = $Current[$id]
+
+            $percent = 0.0
+            $known = $false
+
+            if ($null -ne $Previous -and $Previous.ContainsKey($id) -and
+                $null -ne $entry.CpuSeconds -and $null -ne $Previous[$id].CpuSeconds -and $available -gt 0) {
+
+                $delta = $entry.CpuSeconds - $Previous[$id].CpuSeconds
+                if ($delta -ge 0) {
+                    $percent = [Math]::Max(0.0, [Math]::Min(100.0, 100.0 * $delta / $available))
+                    $known = $true
+                }
+            }
+
+            $rows.Add([pscustomobject]@{
+                Id         = $entry.Id
+                Name       = $entry.Name
+                Cpu        = $percent
+                CpuKnown   = $known
+                WorkingSet = $entry.WorkingSet
+                Threads    = $entry.Threads
+                CpuSeconds = $entry.CpuSeconds
+            })
+        }
+
+        return @($rows)
+    }
+
+    function Sort-TaskProcess {
+        param(
+            [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Processes,
+            [string]$Key = 'cpu'
+        )
+
+        switch ($Key) {
+            'mem'  { return @($Processes | Sort-Object -Property WorkingSet -Descending) }
+            'pid'  { return @($Processes | Sort-Object -Property Id) }
+            'name' { return @($Processes | Sort-Object -Property Name, Id) }
+            # Working set breaks CPU ties, so the list does not reshuffle every
+            # frame while everything sits at 0%.
+            default { return @($Processes | Sort-Object -Property Cpu, WorkingSet -Descending) }
+        }
+    }
+
+    function Select-TaskProcess {
+        param(
+            [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Processes,
+            [AllowEmptyString()][string]$Filter = ''
+        )
+
+        if ([string]::IsNullOrWhiteSpace($Filter)) { return @($Processes) }
+
+        $needle = $Filter.Trim()
+        return @($Processes | Where-Object {
+            $_.Name -like "*$needle*" -or [string]$_.Id -like "*$needle*"
+        })
+    }
+
+    # -----------------------------------------------------------------------------
+    # The monitor: one object holding the previous sample and the history rings
+    # -----------------------------------------------------------------------------
+
+    function New-TaskMonitor {
+        param([int]$HistoryLength = 120)
+
+        [pscustomobject]@{
+            Cores         = [Math]::Max(1, [Environment]::ProcessorCount)
+            HistoryLength = $HistoryLength
+
+            # Previous raw samples, kept so the next refresh has a delta to work on.
+            PreviousCpu   = $null
+            PreviousNet   = $null
+            PreviousProc  = $null
+            PreviousStamp = $null
+
+            Cpu           = [pscustomobject]@{ Total = 0.0; Cores = @(); Ready = $false }
+            Memory        = $null
+            Disks         = @()
+            Network       = [pscustomobject]@{ Received = 0.0; Sent = 0.0; Ready = $false }
+            Processes     = @()
+
+            CpuHistory    = [System.Collections.Generic.List[double]]::new()
+            MemHistory    = [System.Collections.Generic.List[double]]::new()
+            RxHistory     = [System.Collections.Generic.List[double]]::new()
+            TxHistory     = [System.Collections.Generic.List[double]]::new()
+
+            SortKey       = 'cpu'
+            Filter        = ''
+
+            # Set once the second sample lands: until then there is no delta, so
+            # every rate is 0 and saying so beats drawing a flat line as fact.
+            Ready         = $false
+            Errors        = @()
+        }
+    }
+
+    function Add-TaskHistory {
+        param([Parameter(Mandatory)]$History, [double]$Value, [int]$Limit)
+
+        $History.Add($Value)
+        while ($History.Count -gt $Limit) { $History.RemoveAt(0) }
+    }
+
+    # One refresh, in place. Each source is guarded on its own: a machine where the
+    # network counters are missing still gets CPU, memory, disks and processes,
+    # with the failure named in $Monitor.Errors rather than thrown.
+    function Update-TaskMonitor {
+        param([Parameter(Mandatory)]$Monitor)
+
+        $now = [DateTime]::UtcNow
+        $elapsed = 0.0
+        if ($null -ne $Monitor.PreviousStamp) { $elapsed = ($now - $Monitor.PreviousStamp).TotalSeconds }
+
+        $errors = [System.Collections.Generic.List[string]]::new()
+
+        # ---- CPU ---------------------------------------------------------------
+        try {
+            $cpuRaw = Get-CpuRawSample
+            $Monitor.Cpu = Get-CpuLoad -Previous $Monitor.PreviousCpu -Current $cpuRaw
+            $Monitor.PreviousCpu = $cpuRaw
+
+            if ($Monitor.Cpu.Ready) {
+                Add-TaskHistory -History $Monitor.CpuHistory -Value $Monitor.Cpu.Total -Limit $Monitor.HistoryLength
+            }
+        }
+        catch { $errors.Add("CPU counters unavailable: $($_.Exception.Message)") }
+
+        # ---- memory ------------------------------------------------------------
+        try {
+            $Monitor.Memory = Get-MemorySample
+            Add-TaskHistory -History $Monitor.MemHistory -Value $Monitor.Memory.Percent -Limit $Monitor.HistoryLength
+        }
+        catch { $errors.Add("Memory counters unavailable: $($_.Exception.Message)") }
+
+        # ---- disks -------------------------------------------------------------
+        try { $Monitor.Disks = @(Get-DiskSample) }
+        catch { $errors.Add("Disk list unavailable: $($_.Exception.Message)") }
+
+        # ---- network -----------------------------------------------------------
+        try {
+            $netRaw = Get-NetRawSample
+            $Monitor.Network = Get-NetworkLoad -Previous $Monitor.PreviousNet -Current $netRaw
+            $Monitor.PreviousNet = $netRaw
+
+            if ($Monitor.Network.Ready) {
+                Add-TaskHistory -History $Monitor.RxHistory -Value $Monitor.Network.Received -Limit $Monitor.HistoryLength
+                Add-TaskHistory -History $Monitor.TxHistory -Value $Monitor.Network.Sent -Limit $Monitor.HistoryLength
+            }
+        }
+        catch { $errors.Add("Network counters unavailable: $($_.Exception.Message)") }
+
+        # ---- processes ---------------------------------------------------------
+        try {
+            $procRaw = Get-ProcessRawSample
+            $rows = @(Get-ProcessLoad -Previous $Monitor.PreviousProc -Current $procRaw `
+                -ElapsedSeconds $elapsed -Cores $Monitor.Cores)
+            $Monitor.PreviousProc = $procRaw
+            $Monitor.Processes = @(Sort-TaskProcess -Processes $rows -Key $Monitor.SortKey)
+        }
+        catch { $errors.Add("Process list unavailable: $($_.Exception.Message)") }
+
+        $Monitor.Errors = @($errors)
+        $Monitor.PreviousStamp = $now
+        if ($elapsed -gt 0) { $Monitor.Ready = $true }
+
+        return $Monitor
+    }
+
+    # The peak of a history ring, for scaling a graph that has no natural ceiling.
+    # Network has no equivalent of "100%", so the graph scales to the busiest
+    # moment still on screen, with a floor so an idle link is not all spikes.
+    function Get-HistoryScale {
+        param([Parameter(Mandatory)]$History, [double]$Minimum = 1)
+
+        $peak = $Minimum
+        foreach ($value in $History) { if ($value -gt $peak) { $peak = $value } }
+        return $peak
+    }
+
+    # -----------------------------------------------------------------------------
+    # Killing
+    # -----------------------------------------------------------------------------
+
+    # Windows marks a handful of processes critical: ending one bugchecks the
+    # machine with CRITICAL_PROCESS_DIED rather than closing a program. The monitor
+    # refuses those outright instead of asking, because there is no answer to that
+    # prompt that leaves the machine running.
+    function Test-CriticalProcess {
+        param([Parameter(Mandatory)][AllowEmptyString()][string]$Name)
+
+        $critical = @(
+            'system', 'idle', 'registry', 'memory compression', 'secure system',
+            'csrss', 'smss', 'wininit', 'winlogon', 'services', 'lsass'
+        )
+        return ($critical -contains $Name.ToLowerInvariant())
+    }
+
+    function Stop-TaskProcess {
+        param(
+            [Parameter(Mandatory)][int]$Id,
+            [Parameter(Mandatory)][AllowEmptyString()][string]$Name
+        )
+
+        if (Test-CriticalProcess -Name $Name) {
+            Write-Err "$Name is a critical Windows process - ending it bugchecks the machine. Refusing."
+            return $false
+        }
+
+        if ($Ctx.DryRun) {
+            Write-Info "would kill $Name (pid $Id)"
+            return $false
+        }
+
+        # No -DefaultYes: an accidental Enter should not end a process.
+        if (-not (Confirm-Action "Kill $Name (pid $Id)? Unsaved work in it is lost.")) {
+            Write-Warn "$Name (pid $Id) - left running."
+            return $false
+        }
+
+        try {
+            Stop-Process -Id $Id -Force -ErrorAction Stop
+            Write-Ok "$Name (pid $Id) ended."
+            Write-Log "killed process $Name ($Id)"
+            return $true
+        }
+        catch {
+            Write-Err "Could not end $Name (pid $Id): $($_.Exception.Message)"
+            return $false
+        }
+    }
+
 # ===== src/60-Menu.ps1 =================================================
 
     # =============================================================================
@@ -6900,6 +7501,7 @@ param(
             [pscustomobject]@{ Name = 'Apps';     Hint = "$($Ctx.Apps.Count) curated packages";                    Action = 'apps' }
             [pscustomobject]@{ Name = 'Toolbox';  Hint = 'Debloat scripts, network, boot, control panels';         Action = 'toolbox' }
             [pscustomobject]@{ Name = 'Profiles'; Hint = 'Save or run a setup checklist';                          Action = 'profiles' }
+            [pscustomobject]@{ Name = 'Tasks';    Hint = 'Live CPU, memory, disk, network and processes';          Action = 'tasks' }
             [pscustomobject]@{ Name = 'Status';   Hint = 'What is currently applied on this machine';              Action = 'status' }
             [pscustomobject]@{ Name = 'GUI';      Hint = 'Open the same thing as a window';                       Action = 'gui' }
             [pscustomobject]@{ Name = 'Quit';     Hint = '';                                                       Action = 'quit' }
@@ -6923,11 +7525,449 @@ param(
                 'apps'     { Show-AppMenu }
                 'toolbox'  { Show-ToolboxMenu }
                 'profiles' { Show-ProfileMenu }
+                'tasks'    { Show-TaskManager }
                 'status'   { Write-Banner; Show-TweakStatus; Wait-ForKey }
                 'gui'      { Clear-Host; Show-Gui | Out-Null; Clear-Host }
                 'quit'     { return }
             }
         }
+    }
+
+# ===== src/65-TaskView.ps1 =============================================
+
+    # =============================================================================
+    # Task manager, console front-end.
+    #
+    # Draws through the same Write-Frame the selector uses - home the cursor, print
+    # a frame sized to fit the window, blank whatever a taller previous frame left
+    # behind. No ANSI, no alternate screen buffer: it repaints in place on a legacy
+    # conhost exactly as it does in Windows Terminal.
+    #
+    # The layout is measured, not guessed. The gauges take whatever they need, the
+    # keys and status line are reserved, and the process table gets the rest - so
+    # the frame never grows past the window and starts scrolling, which would break
+    # the home-the-cursor repaint for good.
+    # =============================================================================
+
+    # Rows the frame spends on things that are not process-table body: the blank
+    # line, the title, two rules, the column header, the status line and the keys
+    # make seven, plus one spare row.
+    #
+    # The spare row matters. Write-Frame prints one line per frame line, and a frame
+    # exactly as tall as the window scrolls it by one on the final newline - which
+    # moves the top of the buffer off-screen and breaks the home-the-cursor repaint
+    # for the rest of the session.
+    $TaskChromeRows = 8
+
+    # The key hint, on one line that has to fit an 80-column window.
+    #
+    # Write-Frame truncates at the window width, so anything longer loses its own
+    # tail - and the tail here is 'esc back', the one key someone stuck in the
+    # monitor needs. Hence single-space separators rather than the selector's
+    # roomier three: this view has more keys to name than any other.
+    function Get-TaskKeyHint {
+        $dot = Get-Glyph 'Sep'
+        $parts = @('up/down move', 'c/m/p/n sort', 'k kill', '/ filter', 'space pause', 'esc back')
+        return ('  ' + ($parts -join " $dot "))
+    }
+
+    function Get-TaskSortLabel {
+        param([Parameter(Mandatory)][string]$Key)
+
+        switch ($Key) {
+            'mem'  { return 'memory' }
+            'pid'  { return 'pid' }
+            'name' { return 'name' }
+            default { return 'cpu' }
+        }
+    }
+
+    # One gauge: label, percentage, bar, then whatever trailing text fits.
+    function New-TaskGaugeLine {
+        param(
+            [Parameter(Mandatory)][string]$Label,
+            [double]$Percent,
+            [int]$BarWidth = 20,
+            [string]$Trailing = ''
+        )
+
+        $bar = New-MeterBar -Percent $Percent -Width $BarWidth
+        $text = '  {0,-5} {1,3:N0}%  {2}' -f $Label, $Percent, $bar
+        if ($Trailing) { $text += '  ' + $Trailing }
+
+        return (New-FrameLine $text (Get-LoadColor -Percent $Percent))
+    }
+
+    # Per-core load. Up to twelve cores get a labelled cell each, wrapped to the
+    # window; past that the cells would take more rows than the process table, so
+    # it collapses to one character per core off the sparkline ramp - dense, but it
+    # still shows which cores are pinned.
+    function New-TaskCoreLines {
+        param([Parameter(Mandatory)][AllowEmptyCollection()][double[]]$Cores, [int]$Width = 78)
+
+        $lines = [System.Collections.Generic.List[object]]::new()
+        if ($Cores.Count -eq 0) { return @($lines) }
+
+        if ($Cores.Count -gt 12) {
+            $ramp = @(Get-Glyph 'Spark')
+            $strip = New-Object Text.StringBuilder
+            foreach ($core in $Cores) {
+                $level = [int][Math]::Round(([Math]::Max(0.0, [Math]::Min(100.0, $core)) / 100.0) * ($ramp.Count - 1))
+                [void]$strip.Append($ramp[$level])
+            }
+            $lines.Add((New-FrameLine ("        cores {0}  {1}" -f $Cores.Count, $strip.ToString()) (Get-Color 'AccentDim')))
+            return @($lines)
+        }
+
+        # '  0 12% [##..]  ' - eight cells fit an 80-column window.
+        $cells = [System.Collections.Generic.List[string]]::new()
+        for ($i = 0; $i -lt $Cores.Count; $i++) {
+            $cells.Add(('{0,2} {1,3:N0}% {2}' -f $i, $Cores[$i], (New-MeterBar -Percent $Cores[$i] -Width 6)))
+        }
+
+        $perLine = [Math]::Max(1, [int](($Width - 8) / 15))
+        for ($start = 0; $start -lt $cells.Count; $start += $perLine) {
+            $end = [Math]::Min($start + $perLine, $cells.Count) - 1
+            $lines.Add((New-FrameLine ('        ' + (@($cells[$start..$end]) -join '  ')) (Get-Color 'AccentDim')))
+        }
+
+        return @($lines)
+    }
+
+    # Everything above the process table.
+    function New-TaskHeaderLines {
+        param([Parameter(Mandatory)]$Monitor, [int]$Width = 78)
+
+        $lines = [System.Collections.Generic.List[object]]::new()
+
+        # Bar and graph split the width left after the label and percentage.
+        $barWidth = 20
+        $graphWidth = [Math]::Max(8, [Math]::Min(40, $Width - 58))
+
+        # ---- CPU ---------------------------------------------------------------
+        $cpuGraph = New-Sparkline -Values @($Monitor.CpuHistory) -Width $graphWidth -Maximum 100
+        $lines.Add((New-TaskGaugeLine -Label 'CPU' -Percent $Monitor.Cpu.Total -BarWidth $barWidth -Trailing $cpuGraph))
+        foreach ($line in @(New-TaskCoreLines -Cores @($Monitor.Cpu.Cores) -Width $Width)) { $lines.Add($line) }
+
+        # ---- memory ------------------------------------------------------------
+        if ($Monitor.Memory) {
+            $memText = '{0} / {1}   commit {2} / {3}' -f `
+                (Format-Bytes $Monitor.Memory.Used), (Format-Bytes $Monitor.Memory.Total),
+                (Format-Bytes $Monitor.Memory.CommitUsed), (Format-Bytes $Monitor.Memory.CommitTotal)
+            $lines.Add((New-TaskGaugeLine -Label 'MEM' -Percent $Monitor.Memory.Percent -BarWidth $barWidth -Trailing $memText))
+        }
+
+        # ---- disks -------------------------------------------------------------
+        # Capped at three: a machine with eight volumes should not lose the process
+        # table to a list of drives.
+        $shown = 0
+        foreach ($disk in @($Monitor.Disks)) {
+            if ($shown -ge 3) { break }
+            $label = if ($disk.Label) { " $($disk.Label)" } else { '' }
+            $diskText = '{0}{1}   {2} free of {3}' -f $disk.Name, $label, (Format-Bytes $disk.Free), (Format-Bytes $disk.Total)
+            $lines.Add((New-TaskGaugeLine -Label 'DISK' -Percent $disk.Percent -BarWidth $barWidth -Trailing $diskText))
+            $shown++
+        }
+
+        # ---- network -----------------------------------------------------------
+        # No natural ceiling, so both graphs scale to the busiest sample still on
+        # screen. The floor keeps an idle link from drawing background noise as
+        # spikes.
+        $scale = Get-HistoryScale -History $Monitor.RxHistory -Minimum (Get-HistoryScale -History $Monitor.TxHistory -Minimum 65536)
+        $netText = 'down {0}   up {1}' -f (Format-Rate $Monitor.Network.Received), (Format-Rate $Monitor.Network.Sent)
+        $netGraph = New-Sparkline -Values @($Monitor.RxHistory) -Width $graphWidth -Maximum $scale
+        $lines.Add((New-FrameLine ('  NET        ' + $netText.PadRight(30) + '  ' + $netGraph) (Get-Color 'Accent')))
+
+        foreach ($problem in @($Monitor.Errors)) {
+            $lines.Add((New-FrameLine ('  ' + $problem) (Get-Color 'Warn')))
+        }
+
+        return @($lines)
+    }
+
+    # One table row, header included - the header is the same shape with words in
+    # place of numbers, which is the cheapest way to keep them aligned.
+    function New-TaskTableRow {
+        param(
+            [Parameter(Mandatory)][AllowEmptyString()][string]$Pointer,
+            [Parameter(Mandatory)][AllowEmptyString()][string]$Id,
+            [Parameter(Mandatory)][AllowEmptyString()][string]$Name,
+            [Parameter(Mandatory)][AllowEmptyString()][string]$Cpu,
+            [Parameter(Mandatory)][AllowEmptyString()][string]$Memory,
+            [Parameter(Mandatory)][AllowEmptyString()][string]$Threads,
+            [Parameter(Mandatory)][AllowEmptyString()][string]$Time,
+            [Parameter(Mandatory)][int]$NameWidth,
+            [switch]$Wide
+        )
+
+        $shown = $Name
+        if ($shown.Length -gt $NameWidth) { $shown = $shown.Substring(0, $NameWidth - 1) + '.' }
+
+        $text = '  ' + $Pointer + ' ' + $Id.PadRight(7) + ' ' + $shown.PadRight($NameWidth) +
+                ' ' + $Cpu.PadLeft(7) + ' ' + $Memory.PadLeft(9)
+
+        if ($Wide) { $text += ' ' + $Threads.PadLeft(5) + ' ' + $Time.PadLeft(10) }
+
+        return $text
+    }
+
+    # The table header and body. Columns drop right-to-left on a narrow window
+    # rather than wrapping, because a wrapped row would break the row-per-process
+    # arithmetic the cursor relies on.
+    function New-TaskTableLines {
+        param(
+            [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Rows,
+            [Parameter(Mandatory)][int]$Cursor,
+            [Parameter(Mandatory)][int]$Offset,
+            [Parameter(Mandatory)][int]$Viewport,
+            [int]$Width = 78
+        )
+
+        $lines = [System.Collections.Generic.List[object]]::new()
+        $wide = $Width -ge 74
+
+        # Columns are padded by hand rather than through a composite format string
+        # with a computed width - the name column is the only elastic one, and
+        # building '{1,-24}' at runtime is a lot of quoting for one number.
+        $fixed = 32
+        if ($wide) { $fixed = 46 }
+        $nameWidth = [Math]::Max(12, [Math]::Min(28, $Width - $fixed))
+
+        $lines.Add((New-FrameLine (
+            New-TaskTableRow -Pointer ' ' -Id 'PID' -Name 'NAME' -Cpu 'CPU%' -Memory 'MEMORY' `
+                -Threads 'THR' -Time 'CPU TIME' -NameWidth $nameWidth -Wide:$wide
+        ) (Get-Color 'Muted')))
+
+        if ($Rows.Count -eq 0) {
+            $lines.Add((New-FrameLine '      no matching process' (Get-Color 'Warn')))
+            return @($lines)
+        }
+
+        $last = [Math]::Min($Offset + $Viewport, $Rows.Count)
+        for ($row = $Offset; $row -lt $last; $row++) {
+            $proc = $Rows[$row]
+
+            # A process whose CPU we have only sampled once has no delta yet, and a
+            # dash is honest where 0.0 would not be.
+            $cpu = '-'
+            if ($proc.CpuKnown) { $cpu = '{0:N1}' -f $proc.Cpu }
+
+            $pointer = ' '
+            if ($row -eq $Cursor) { $pointer = Get-Glyph 'Pointer' }
+
+            $rendered = New-TaskTableRow -Pointer $pointer -Id ([string]$proc.Id) -Name $proc.Name `
+                -Cpu $cpu -Memory (Format-Bytes $proc.WorkingSet) -Threads ([string]$proc.Threads) `
+                -Time (Format-CpuTime $proc.CpuSeconds) -NameWidth $nameWidth -Wide:$wide
+
+            if ($row -eq $Cursor) {
+                $lines.Add((New-FrameLine $rendered (Get-Color 'HighlightFg') (Get-Color 'HighlightBg')))
+            }
+            else {
+                # Busy processes colour like the gauges do, so the eye lands on them
+                # without having to read the numbers.
+                $color = if ($proc.CpuKnown -and $proc.Cpu -ge 5) { Get-LoadColor -Percent $proc.Cpu } else { Get-Color 'Text' }
+                $lines.Add((New-FrameLine $rendered $color))
+            }
+        }
+
+        return @($lines)
+    }
+
+    # Waits up to $TimeoutMs for a keypress, polling rather than blocking, so the
+    # view refreshes on its own while nobody is typing.
+    function Wait-TaskKey {
+        param([int]$TimeoutMs = 1000)
+
+        $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+        while ([DateTime]::UtcNow -lt $deadline) {
+            try { if ($Host.UI.RawUI.KeyAvailable) { return (Read-MenuKey) } }
+            catch { return $null }
+            Start-Sleep -Milliseconds 40
+        }
+        return $null
+    }
+
+    function Show-TaskManager {
+        param([int]$IntervalMs = 1000)
+
+        if (-not (Test-Interactive)) {
+            Show-TaskSnapshot
+            return
+        }
+
+        $monitor = New-TaskMonitor
+        $cursor = 0
+        $offset = 0
+        $previousHeight = 0
+        $paused = $false
+
+        # Same reason as the selector: Write-Frame homes to the top of the buffer,
+        # which in a scrolled window is off-screen. Clearing makes (0,0) the top of
+        # what you can see, and a frame that always fits keeps it that way.
+        Clear-Host
+
+        # First sample has no previous to difference against, so every rate reads
+        # zero. Take it immediately and let the loop draw the second one.
+        Update-TaskMonitor -Monitor $monitor | Out-Null
+
+        while ($true) {
+            if (-not $paused) { Update-TaskMonitor -Monitor $monitor | Out-Null }
+
+            $width = (Get-ConsoleWidth) - 2
+            $rows = @(Select-TaskProcess -Processes @($monitor.Processes) -Filter $monitor.Filter)
+
+            $header = @(New-TaskHeaderLines -Monitor $monitor -Width $width)
+            $viewport = [Math]::Max(3, (Get-ConsoleHeight) - $TaskChromeRows - $header.Count)
+
+            $view = Get-ScrollWindow -Cursor $cursor -Offset $offset -Count $rows.Count -Viewport $viewport
+            $cursor = $view.Cursor
+            $offset = $view.Offset
+
+            $rule = (Get-Glyph 'HLine') * (Get-RuleWidth)
+            $dot = Get-Glyph 'Sep'
+
+            $lines = [System.Collections.Generic.List[object]]::new()
+            $lines.Add((New-FrameLine))
+
+            $title = '  Tasks'
+            if ($monitor.Memory) { $title += '   up ' + (Format-Uptime $monitor.Memory.BootTime) }
+            $title += "   {0} cores   {1} processes" -f $monitor.Cores, @($monitor.Processes).Count
+            if ($paused) { $title += '   PAUSED' }
+            $lines.Add((New-FrameLine $title (Get-Color 'Accent')))
+
+            foreach ($line in $header) { $lines.Add($line) }
+            $lines.Add((New-FrameLine ('  ' + $rule) (Get-Color 'Muted')))
+
+            foreach ($line in @(New-TaskTableLines -Rows $rows -Cursor $cursor -Offset $offset -Viewport $viewport -Width $width)) {
+                $lines.Add($line)
+            }
+
+            $lines.Add((New-FrameLine ('  ' + $rule) (Get-Color 'Muted')))
+
+            $position = if ($rows.Count -gt 0) { "$($cursor + 1)/$($rows.Count)" } else { '0/0' }
+            $status = "  $position   $dot   sort: $(Get-TaskSortLabel -Key $monitor.SortKey)"
+            if ($monitor.Filter) { $status += "   $dot   filter: $($monitor.Filter)" }
+            if (-not $monitor.Ready) { $status += "   $dot   sampling" }
+            $lines.Add((New-FrameLine $status (Get-Color 'Muted')))
+
+            $lines.Add((New-FrameLine (Get-TaskKeyHint) (Get-Color 'Muted')))
+
+            Write-Frame -Lines $lines.ToArray() -PreviousHeight ([ref]$previousHeight)
+
+            $key = Wait-TaskKey -TimeoutMs $IntervalMs
+            if ($null -eq $key) { continue }
+
+            switch ($key.Code) {
+                38 { if ($rows.Count) { $cursor = [Math]::Max(0, $cursor - 1) }; continue }                   # up
+                40 { if ($rows.Count) { $cursor = [Math]::Min($rows.Count - 1, $cursor + 1) }; continue }     # down
+                33 { $cursor = [Math]::Max(0, $cursor - $viewport); continue }                                # page up
+                34 { $cursor = [Math]::Min([Math]::Max(0, $rows.Count - 1), $cursor + $viewport); continue }  # page down
+                36 { $cursor = 0; continue }                                                                  # home
+                35 { $cursor = [Math]::Max(0, $rows.Count - 1); continue }                                    # end
+
+                27 { Clear-Host; return }                                                                     # escape
+
+                8 {
+                    if ($monitor.Filter.Length -gt 0) {
+                        $monitor.Filter = $monitor.Filter.Substring(0, $monitor.Filter.Length - 1)
+                        $cursor = 0; $offset = 0
+                    }
+                    continue
+                }
+            }
+
+            switch -Regex ([string]$key.Char) {
+                '^[cC]$' { $monitor.SortKey = 'cpu';  $cursor = 0; $offset = 0; continue }
+                '^[mM]$' { $monitor.SortKey = 'mem';  $cursor = 0; $offset = 0; continue }
+                '^[pP]$' { $monitor.SortKey = 'pid';  $cursor = 0; $offset = 0; continue }
+                '^[nN]$' { $monitor.SortKey = 'name'; $cursor = 0; $offset = 0; continue }
+                '^[qQ]$' { Clear-Host; return }
+
+                '^[kK]$' {
+                    if ($rows.Count -eq 0) { continue }
+                    $target = $rows[$cursor]
+
+                    # Drop out of the frame to ask: the confirm prompt reads from
+                    # the host, and a Read-Host inside a repainting frame would be
+                    # overwritten before it could be answered.
+                    Clear-Host
+                    Write-Line ''
+                    Stop-TaskProcess -Id $target.Id -Name $target.Name | Out-Null
+                    Write-Line ''
+                    Write-Info 'Press a key to go back to the monitor.'
+                    [void](Wait-TaskKey -TimeoutMs 10000)
+
+                    Clear-Host
+                    $previousHeight = 0
+                    # The killed process leaves a hole in the list; resample so the
+                    # cursor is not pointing at a row that no longer exists.
+                    $monitor.PreviousStamp = $null
+                    Update-TaskMonitor -Monitor $monitor | Out-Null
+                    continue
+                }
+
+                '^/$' {
+                    Write-Line ''
+                    Write-Line '  filter: ' -Color Yellow -NoNewline
+                    $monitor.Filter = [string](Read-Host)
+                    $cursor = 0; $offset = 0
+                    $previousHeight = 0
+                    Clear-Host
+                    continue
+                }
+
+                '^ $' { $paused = -not $paused; continue }
+            }
+        }
+    }
+
+    # What -Tasks prints when there is no console to drive: one sample, no loop.
+    # Also what a redirected run gets, so `-Tasks > tasks.txt` is useful instead of
+    # spinning forever repainting a frame nobody can see.
+    function Show-TaskSnapshot {
+        param([int]$Top = 20)
+
+        $monitor = New-TaskMonitor
+
+        # Two samples a second apart: the first has nothing to difference against,
+        # so without the second every CPU figure would be zero.
+        Update-TaskMonitor -Monitor $monitor | Out-Null
+        Start-Sleep -Milliseconds 1000
+        Update-TaskMonitor -Monitor $monitor | Out-Null
+
+        Write-SectionHeading 'Tasks'
+
+        Write-Line ('  CPU    {0,5:N1}%   {1} cores' -f $monitor.Cpu.Total, $monitor.Cores) -Color (Get-LoadColor -Percent $monitor.Cpu.Total)
+
+        if ($monitor.Memory) {
+            Write-Line ('  MEM    {0,5:N1}%   {1} of {2}   commit {3} of {4}' -f `
+                $monitor.Memory.Percent, (Format-Bytes $monitor.Memory.Used), (Format-Bytes $monitor.Memory.Total),
+                (Format-Bytes $monitor.Memory.CommitUsed), (Format-Bytes $monitor.Memory.CommitTotal)) `
+                -Color (Get-LoadColor -Percent $monitor.Memory.Percent)
+        }
+
+        foreach ($disk in @($monitor.Disks)) {
+            Write-Line ('  DISK   {0,5:N1}%   {1} {2} free of {3}' -f `
+                $disk.Percent, $disk.Name, (Format-Bytes $disk.Free), (Format-Bytes $disk.Total)) `
+                -Color (Get-LoadColor -Percent $disk.Percent)
+        }
+
+        Write-Line ('  NET            down {0}   up {1}' -f `
+            (Format-Rate $monitor.Network.Received), (Format-Rate $monitor.Network.Sent)) -Color (Get-Color 'Accent')
+
+        foreach ($problem in @($monitor.Errors)) { Write-Warn $problem }
+
+        Write-Line ''
+        Write-Line ('  {0,-7} {1,-28} {2,7} {3,9} {4,5}' -f 'PID', 'NAME', 'CPU%', 'MEMORY', 'THR') -Color (Get-Color 'Muted')
+
+        foreach ($proc in @(@($monitor.Processes) | Select-Object -First $Top)) {
+            $cpu = if ($proc.CpuKnown) { '{0,7:N1}' -f $proc.Cpu } else { '      -' }
+            Write-Line ('  {0,-7} {1,-28} {2} {3,9} {4,5}' -f `
+                $proc.Id, $proc.Name, $cpu, (Format-Bytes $proc.WorkingSet), $proc.Threads)
+        }
+
+        Write-Line ''
+        Write-Info "Showing the top $Top of $(@($monitor.Processes).Count) processes by CPU."
     }
 
 # ===== src/70-Gui.ps1 ==================================================
@@ -7300,6 +8340,58 @@ param(
       <Setter Property="FontFamily" Value="Segoe UI"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
     </Style>
+
+    <!-- The process table. WPF's stock ListView chrome is light grey with a
+         blue selection, which on this palette reads as a control from another
+         application, so the item and the column header are both retemplated. -->
+    <Style TargetType="ListView">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="FontFamily" Value="Consolas"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+
+    <Style TargetType="ListViewItem">
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="Padding" Value="0,3"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListViewItem">
+            <Border x:Name="Chrome" Background="Transparent" CornerRadius="4" Padding="{TemplateBinding Padding}">
+              <GridViewRowPresenter Columns="{TemplateBinding GridView.ColumnCollection}"
+                                    Content="{TemplateBinding Content}"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="#FF130E1F"/>
+              </Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="#FF2A1B4D"/>
+                <Setter Property="Foreground" Value="{StaticResource Text}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style TargetType="GridViewColumnHeader">
+      <Setter Property="Foreground" Value="{StaticResource Faint}"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="FontSize" Value="10.5"/>
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="GridViewColumnHeader">
+            <Border Background="Transparent" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1"
+                    Padding="6,5">
+              <ContentPresenter HorizontalAlignment="Left"/>
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
   </Window.Resources>
 
   <Grid>
@@ -7343,6 +8435,7 @@ param(
         <ListBox x:Name="NavList" Background="Transparent" BorderThickness="0" Margin="0,12,0,0"
                  ItemContainerStyle="{StaticResource NavItem}">
           <ListBoxItem Content="One click" IsSelected="True"/>
+          <ListBoxItem Content="Tasks"/>
           <ListBoxItem Content="Tweaks"/>
           <ListBoxItem Content="Apps"/>
           <ListBoxItem Content="Store"/>
@@ -7429,6 +8522,147 @@ param(
                 </Grid>
               </Border>
             </ScrollViewer>
+          </Grid>
+
+          <!-- Task manager. The meters and the per-core strip are drawn in code
+               from the same sampler the console monitor uses; only the frame
+               lives here. -->
+          <Grid x:Name="TasksPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Tasks" Style="{StaticResource PageTitle}"/>
+              <TextBlock x:Name="TaskSummary" FontSize="11" Foreground="{StaticResource Faint}"
+                         VerticalAlignment="Center" Margin="12,3,0,0"/>
+            </StackPanel>
+
+            <!-- Four meters across the top: CPU, memory, disk, network. -->
+            <Grid Grid.Row="1" Margin="0,0,0,10">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+
+              <Border Grid.Column="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                      BorderThickness="1" CornerRadius="8" Padding="12,8" Margin="0,0,5,0">
+                <StackPanel>
+                  <TextBlock Text="CPU" FontSize="10.5" Foreground="{StaticResource Faint}"/>
+                  <TextBlock x:Name="CpuValue" Text="--" FontSize="20" Foreground="{StaticResource Text}" Margin="0,1,0,0"/>
+                  <ProgressBar x:Name="CpuBar" Height="4" Minimum="0" Maximum="100" Margin="0,6,0,0"/>
+                  <TextBlock x:Name="CpuDetail" Text="" FontSize="10.5" Foreground="{StaticResource Muted}"
+                             Margin="0,6,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+              </Border>
+
+              <Border Grid.Column="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                      BorderThickness="1" CornerRadius="8" Padding="12,8" Margin="5,0,5,0">
+                <StackPanel>
+                  <TextBlock Text="MEMORY" FontSize="10.5" Foreground="{StaticResource Faint}"/>
+                  <TextBlock x:Name="MemValue" Text="--" FontSize="20" Foreground="{StaticResource Text}" Margin="0,1,0,0"/>
+                  <ProgressBar x:Name="MemBar" Height="4" Minimum="0" Maximum="100" Margin="0,6,0,0"/>
+                  <TextBlock x:Name="MemDetail" Text="" FontSize="10.5" Foreground="{StaticResource Muted}"
+                             Margin="0,6,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+              </Border>
+
+              <Border Grid.Column="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                      BorderThickness="1" CornerRadius="8" Padding="12,8" Margin="5,0,5,0">
+                <StackPanel>
+                  <TextBlock Text="DISK" FontSize="10.5" Foreground="{StaticResource Faint}"/>
+                  <TextBlock x:Name="DiskValue" Text="--" FontSize="20" Foreground="{StaticResource Text}" Margin="0,1,0,0"/>
+                  <ProgressBar x:Name="DiskBar" Height="4" Minimum="0" Maximum="100" Margin="0,6,0,0"/>
+                  <TextBlock x:Name="DiskDetail" Text="" FontSize="10.5" Foreground="{StaticResource Muted}"
+                             Margin="0,6,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+              </Border>
+
+              <Border Grid.Column="3" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                      BorderThickness="1" CornerRadius="8" Padding="12,8" Margin="5,0,0,0">
+                <StackPanel>
+                  <TextBlock Text="NETWORK" FontSize="10.5" Foreground="{StaticResource Faint}"/>
+                  <TextBlock x:Name="NetValue" Text="--" FontSize="20" Foreground="{StaticResource Text}" Margin="0,1,0,0"/>
+                  <!-- The history graph goes here, drawn as a polyline. -->
+                  <Border Height="4" Margin="0,6,0,0"/>
+                  <TextBlock x:Name="NetDetail" Text="" FontSize="10.5" Foreground="{StaticResource Muted}"
+                             Margin="0,6,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+              </Border>
+            </Grid>
+
+            <!-- CPU history and the per-core strip. -->
+            <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="8" Padding="12,8" Margin="0,0,0,10">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Canvas x:Name="CpuGraph" Grid.Column="0" Height="46" ClipToBounds="True"
+                        HorizontalAlignment="Stretch" Background="Transparent"/>
+                <StackPanel x:Name="CoreStrip" Grid.Column="1" Orientation="Horizontal" Margin="14,0,0,0"
+                            VerticalAlignment="Bottom"/>
+              </Grid>
+            </Border>
+
+            <!-- Process table. -->
+            <Grid Grid.Row="3">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+
+              <DockPanel Grid.Row="0" Margin="0,0,0,10" LastChildFill="False">
+                <Grid Width="200" DockPanel.Dock="Left" Margin="0,0,8,0">
+                  <TextBox x:Name="TaskSearch" ToolTip="Filter by process name or pid"/>
+                  <TextBlock Text="Filter processes">
+                    <TextBlock.Style>
+                      <Style TargetType="TextBlock" BasedOn="{StaticResource Watermark}">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding Text, ElementName=TaskSearch}" Value="">
+                            <Setter Property="Visibility" Value="Visible"/>
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </TextBlock.Style>
+                  </TextBlock>
+                </Grid>
+                <ComboBox x:Name="TaskSort" Width="150" DockPanel.Dock="Left" Margin="0,0,8,0"
+                          ToolTip="Sort the process list"/>
+                <Button x:Name="BtnTaskPause" Content="Pause" DockPanel.Dock="Left"
+                        ToolTip="Stop refreshing so the list holds still"/>
+                <Button x:Name="BtnTaskKill" Content="End process" DockPanel.Dock="Right" Margin="8,0,0,0"
+                        ToolTip="End the selected process"/>
+              </DockPanel>
+
+              <Border Grid.Row="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                      BorderThickness="1" CornerRadius="8">
+                <!-- A ListView rather than hand-built rows: the process list is
+                     replaced wholesale every second, and virtualisation is what
+                     keeps that cheap with 150-plus processes. -->
+                <ListView x:Name="TaskRows" Background="Transparent" BorderThickness="0" Margin="4"
+                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                  <ListView.View>
+                    <GridView AllowsColumnReorder="False">
+                      <GridViewColumn Header="PID" Width="70" DisplayMemberBinding="{Binding Id}"/>
+                      <GridViewColumn Header="Name" Width="240" DisplayMemberBinding="{Binding Name}"/>
+                      <GridViewColumn Header="CPU %" Width="80" DisplayMemberBinding="{Binding CpuText}"/>
+                      <GridViewColumn Header="Memory" Width="100" DisplayMemberBinding="{Binding MemoryText}"/>
+                      <GridViewColumn Header="Threads" Width="80" DisplayMemberBinding="{Binding Threads}"/>
+                      <GridViewColumn Header="CPU time" Width="100" DisplayMemberBinding="{Binding TimeText}"/>
+                    </GridView>
+                  </ListView.View>
+                </ListView>
+              </Border>
+            </Grid>
           </Grid>
 
           <Grid x:Name="TweaksPanel" Visibility="Collapsed">
@@ -8279,6 +9513,225 @@ param(
         }
     }
 
+    # -----------------------------------------------------------------------------
+    # Task manager page
+    #
+    # The sampling is 52-Tasks.ps1's, unchanged - this only draws it. A
+    # DispatcherTimer does the refreshing, which works because Show-Gui runs a real
+    # message loop through ShowDialog; the cooperative Invoke-UiEvents pumping is
+    # only for long synchronous work.
+    # -----------------------------------------------------------------------------
+
+    function Set-GuiTaskTimer {
+        param([bool]$Running)
+
+        if (-not $Ctx.Gui) { return }
+        if (-not $Ctx.Gui.TaskTimer) { return }
+
+        if (-not $Running) {
+            $Ctx.Gui.TaskTimer.Stop()
+            return
+        }
+
+        # A stale previous sample would difference this second's counters against
+        # one from whenever the page was last open, which reads as a huge spike.
+        $Ctx.Gui.Monitor.PreviousStamp = $null
+        Update-GuiTaskSample
+        $Ctx.Gui.TaskTimer.Start()
+    }
+
+    # Percent to brush, matching the console's load bands so a red bar means the
+    # same thing in both front-ends.
+    function Get-GuiLoadBrush {
+        param([double]$Percent)
+
+        switch (Get-LoadBand -Percent $Percent) {
+            'high'   { return (New-HexBrush '#FFFF7B94') }
+            'medium' { return (New-HexBrush '#FFFFCB7A') }
+            default  { return (New-HexBrush '#FFB388FF') }
+        }
+    }
+
+    # The CPU history, as a filled polygon on a Canvas. Redrawn from scratch each
+    # tick: 120 points is nothing, and holding a Polyline's PointCollection across
+    # ticks would mean tracking it as extra window state for no gain.
+    function Update-GuiCpuGraph {
+        param([Parameter(Mandatory)][AllowEmptyCollection()][double[]]$History)
+
+        if (-not $Ctx.Gui) { return }
+        $canvas = $Ctx.Gui.Ui.CpuGraph
+
+        $canvas.Children.Clear()
+
+        $width = [double]$canvas.ActualWidth
+        $height = [double]$canvas.ActualHeight
+        if ($width -le 1 -or $height -le 1) { return }
+        if ($History.Count -lt 2) { return }
+
+        # Scaled to the samples in hand rather than to a fixed time axis, so the
+        # graph fills the panel from the first few ticks instead of drawing a stub
+        # against the right edge for the first two minutes. The console sparkline
+        # pads instead - it is one character per sample there, with nothing to
+        # stretch. Oldest on the left either way.
+        $step = $width / ($History.Count - 1)
+
+        $points = New-Object Windows.Media.PointCollection
+        $points.Add((New-Object Windows.Point (0, $height)))
+        for ($i = 0; $i -lt $History.Count; $i++) {
+            $x = $i * $step
+            $y = $height - (([Math]::Max(0.0, [Math]::Min(100.0, $History[$i])) / 100.0) * $height)
+            $points.Add((New-Object Windows.Point ($x, $y)))
+        }
+        $points.Add((New-Object Windows.Point ($width, $height)))
+
+        $fill = New-Object Windows.Media.LinearGradientBrush
+        $fill.StartPoint = New-Object Windows.Point (0, 0)
+        $fill.EndPoint = New-Object Windows.Point (0, 1)
+        $fill.GradientStops.Add((New-Object Windows.Media.GradientStop ([Windows.Media.ColorConverter]::ConvertFromString('#66B388FF'), 0)))
+        $fill.GradientStops.Add((New-Object Windows.Media.GradientStop ([Windows.Media.ColorConverter]::ConvertFromString('#08B388FF'), 1)))
+
+        $area = New-Object Windows.Shapes.Polygon
+        $area.Points = $points
+        $area.Fill = $fill
+        $canvas.Children.Add($area) | Out-Null
+
+        # The line on top, without the two baseline points the fill needed.
+        $edge = New-Object Windows.Shapes.Polyline
+        $edgePoints = New-Object Windows.Media.PointCollection
+        for ($i = 1; $i -lt ($points.Count - 1); $i++) { $edgePoints.Add($points[$i]) }
+        $edge.Points = $edgePoints
+        $edge.Stroke = New-HexBrush '#FFB388FF'
+        $edge.StrokeThickness = 1.4
+        $canvas.Children.Add($edge) | Out-Null
+    }
+
+    # One narrow vertical bar per core, tallest to the bottom - btop's core strip.
+    function Update-GuiCoreStrip {
+        param([Parameter(Mandatory)][AllowEmptyCollection()][double[]]$Cores)
+
+        if (-not $Ctx.Gui) { return }
+        $strip = $Ctx.Gui.Ui.CoreStrip
+
+        $strip.Children.Clear()
+        if ($Cores.Count -eq 0) { return }
+
+        # Wide bars for a couple of cores, hairlines for a threadripper.
+        $barWidth = 10
+        if ($Cores.Count -gt 8)  { $barWidth = 6 }
+        if ($Cores.Count -gt 24) { $barWidth = 3 }
+
+        foreach ($core in $Cores) {
+            $column = New-Object Windows.Controls.Grid
+            $column.Width = $barWidth
+            $column.Height = 54
+            $column.Margin = New-Object Windows.Thickness 0, 0, 2, 0
+
+            $track = New-Object Windows.Controls.Border
+            $track.Background = New-HexBrush '#FF130E1F'
+            $track.CornerRadius = New-Object Windows.CornerRadius 2
+            $column.Children.Add($track) | Out-Null
+
+            $level = New-Object Windows.Controls.Border
+            $level.VerticalAlignment = 'Bottom'
+            $level.CornerRadius = New-Object Windows.CornerRadius 2
+            $level.Background = Get-GuiLoadBrush -Percent $core
+            # A floor of one pixel, so an idle core is still a mark rather than a gap.
+            $level.Height = [Math]::Max(1.0, 54.0 * [Math]::Max(0.0, [Math]::Min(100.0, $core)) / 100.0)
+            $column.Children.Add($level) | Out-Null
+
+            $strip.Children.Add($column) | Out-Null
+        }
+    }
+
+    # One refresh of the whole page.
+    function Update-GuiTaskSample {
+        if (-not $Ctx.Gui) { return }
+
+        $ui = $Ctx.Gui.Ui
+        $monitor = $Ctx.Gui.Monitor
+
+        Update-TaskMonitor -Monitor $monitor | Out-Null
+
+        # ---- meters ------------------------------------------------------------
+        $ui.CpuValue.Text = '{0:N0}%' -f $monitor.Cpu.Total
+        $ui.CpuValue.Foreground = Get-GuiLoadBrush -Percent $monitor.Cpu.Total
+        $ui.CpuBar.Value = [Math]::Max(0.0, [Math]::Min(100.0, $monitor.Cpu.Total))
+        $ui.CpuBar.Foreground = Get-GuiLoadBrush -Percent $monitor.Cpu.Total
+        $ui.CpuDetail.Text = '{0} cores' -f $monitor.Cores
+
+        if ($monitor.Memory) {
+            $ui.MemValue.Text = '{0:N0}%' -f $monitor.Memory.Percent
+            $ui.MemValue.Foreground = Get-GuiLoadBrush -Percent $monitor.Memory.Percent
+            $ui.MemBar.Value = [Math]::Max(0.0, [Math]::Min(100.0, $monitor.Memory.Percent))
+            $ui.MemBar.Foreground = Get-GuiLoadBrush -Percent $monitor.Memory.Percent
+            $ui.MemDetail.Text = '{0} of {1}   commit {2}' -f `
+                (Format-Bytes $monitor.Memory.Used), (Format-Bytes $monitor.Memory.Total),
+                (Format-Bytes $monitor.Memory.CommitUsed)
+        }
+
+        # The fullest volume, because that is the one about to cause a problem.
+        $disks = @($monitor.Disks)
+        if ($disks.Count -gt 0) {
+            $worst = @($disks | Sort-Object -Property Percent -Descending)[0]
+            $ui.DiskValue.Text = '{0:N0}%' -f $worst.Percent
+            $ui.DiskValue.Foreground = Get-GuiLoadBrush -Percent $worst.Percent
+            $ui.DiskBar.Value = [Math]::Max(0.0, [Math]::Min(100.0, $worst.Percent))
+            $ui.DiskBar.Foreground = Get-GuiLoadBrush -Percent $worst.Percent
+
+            $extra = ''
+            if ($disks.Count -gt 1) { $extra = '   +{0} more' -f ($disks.Count - 1) }
+            $ui.DiskDetail.Text = '{0} {1} free{2}' -f $worst.Name, (Format-Bytes $worst.Free), $extra
+        }
+
+        # Headline is the combined rate; the split goes underneath, where the other
+        # three cards put their detail.
+        $ui.NetValue.Text = Format-Rate ($monitor.Network.Received + $monitor.Network.Sent)
+        $ui.NetDetail.Text = 'down {0}   up {1}' -f `
+            (Format-Bytes $monitor.Network.Received), (Format-Bytes $monitor.Network.Sent)
+
+        Update-GuiCpuGraph -History @($monitor.CpuHistory)
+        Update-GuiCoreStrip -Cores @($monitor.Cpu.Cores)
+
+        # ---- process table -----------------------------------------------------
+        $rows = @(Select-TaskProcess -Processes @($monitor.Processes) -Filter $monitor.Filter)
+
+        # Keep whatever was selected selected across the refresh: the whole
+        # ItemsSource is replaced every tick, and without this the row under the
+        # cursor would deselect itself once a second.
+        $selectedId = $null
+        if ($ui.TaskRows.SelectedItem) { $selectedId = $ui.TaskRows.SelectedItem.Id }
+
+        $view = [System.Collections.Generic.List[object]]::new()
+        foreach ($proc in $rows) {
+            $cpuText = '-'
+            if ($proc.CpuKnown) { $cpuText = '{0:N1}' -f $proc.Cpu }
+
+            $view.Add([pscustomobject]@{
+                Id         = $proc.Id
+                Name       = $proc.Name
+                CpuText    = $cpuText
+                MemoryText = Format-Bytes $proc.WorkingSet
+                Threads    = $proc.Threads
+                TimeText   = Format-CpuTime $proc.CpuSeconds
+            })
+        }
+
+        $ui.TaskRows.ItemsSource = @($view)
+
+        if ($null -ne $selectedId) {
+            foreach ($item in $view) {
+                if ($item.Id -eq $selectedId) { $ui.TaskRows.SelectedItem = $item; break }
+            }
+        }
+
+        $summary = '{0} processes' -f @($monitor.Processes).Count
+        if ($monitor.Memory) { $summary += '   up ' + (Format-Uptime $monitor.Memory.BootTime) }
+        if (-not $monitor.Ready) { $summary += '   sampling' }
+        if ($Ctx.Gui.TaskPaused) { $summary += '   PAUSED' }
+        foreach ($problem in @($monitor.Errors)) { $summary += '   ' + $problem }
+        $ui.TaskSummary.Text = $summary
+    }
+
     # Nav rows carry a count on the right, so the sidebar says how much is behind
     # each page without opening it.
     function Set-GuiNavContent {
@@ -8498,9 +9951,12 @@ param(
         $ui = @{}
         foreach ($name in @(
             'VersionText', 'CatalogChip', 'DryRunBadge',
-            'NavList', 'OneClickPanel', 'TweaksPanel', 'AppsPanel', 'ToolboxPanel', 'ProfilesPanel',
+            'NavList', 'OneClickPanel', 'TasksPanel', 'TweaksPanel', 'AppsPanel', 'ToolboxPanel', 'ProfilesPanel',
             'StorePanel', 'GuidesPanel', 'PersonalizePanel', 'SettingsPanel',
             'OneClickSteps', 'OneClickBlurb', 'BtnOneClick', 'BtnOneClickToolbox',
+            'TaskSummary', 'CpuValue', 'CpuBar', 'CpuDetail', 'MemValue', 'MemBar', 'MemDetail',
+            'DiskValue', 'DiskBar', 'DiskDetail', 'NetValue', 'NetDetail',
+            'CpuGraph', 'CoreStrip', 'TaskRows', 'TaskSearch', 'TaskSort', 'BtnTaskPause', 'BtnTaskKill',
             'StoreRows', 'BtnStoreRefresh', 'BtnStoreInstall', 'GuideRows',
             'BtnCursorInstall', 'BtnCursorRestore', 'WallpaperStyle', 'BtnWallpaper',
             'CsFolderText', 'BtnCsDefault', 'BtnCsFile', 'BtnCsLaunch',
@@ -8535,6 +9991,13 @@ param(
             # Filled in below. Lets a handler say which page it wants by name
             # instead of hard-coding an index into the sidebar.
             NavNames  = @()
+
+            # Task manager state. It lives here rather than in the handlers for the
+            # reason at the top of this file: a handler runs long after the function
+            # that registered it returned, so it can only reach $Ctx.
+            Monitor    = New-TaskMonitor
+            TaskTimer  = $null
+            TaskPaused = $false
             Bound     = $BoundParameters
             Glyphs    = $Ctx.Theme.Glyph
         }
@@ -8602,8 +10065,8 @@ param(
 
         # Order has to match the ListBoxItems in the XAML and the $panels array in
         # the SelectionChanged handler. -1 means "no count worth showing".
-        $navNames  = @('One click', 'Tweaks', 'Apps', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Profiles', 'Settings')
-        $navCounts = @(-1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1)
+        $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Profiles', 'Settings')
+        $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1)
 
         # The item Content becomes a DockPanel below, so the labels are no longer
         # readable off the ListBox. Keep them where a handler can still find them.
@@ -8654,12 +10117,18 @@ param(
             param($sender, $e)
             if (-not $Ctx.Gui) { return }
 
-            $panels = @($Ctx.Gui.Ui.OneClickPanel, $Ctx.Gui.Ui.TweaksPanel, $Ctx.Gui.Ui.AppsPanel,
-                        $Ctx.Gui.Ui.StorePanel, $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.GuidesPanel,
-                        $Ctx.Gui.Ui.PersonalizePanel, $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
+            $panels = @($Ctx.Gui.Ui.OneClickPanel, $Ctx.Gui.Ui.TasksPanel, $Ctx.Gui.Ui.TweaksPanel,
+                        $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.StorePanel, $Ctx.Gui.Ui.ToolboxPanel,
+                        $Ctx.Gui.Ui.GuidesPanel, $Ctx.Gui.Ui.PersonalizePanel, $Ctx.Gui.Ui.ProfilesPanel,
+                        $Ctx.Gui.Ui.SettingsPanel)
             for ($i = 0; $i -lt $panels.Count; $i++) {
                 $panels[$i].Visibility = if ($i -eq $sender.SelectedIndex) { 'Visible' } else { 'Collapsed' }
             }
+
+            # Sampling costs a CIM round trip a second, so it only runs while the
+            # page is on screen. Leaving the page stops the clock; coming back takes
+            # a fresh baseline rather than differencing against a minutes-old one.
+            Set-GuiTaskTimer -Running ($Ctx.Gui.Ui.TasksPanel.Visibility -eq 'Visible')
         })
 
         # ---- filters -----------------------------------------------------------
@@ -8679,6 +10148,77 @@ param(
         $ui.BtnTweakAll.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Tweaks) { $r.CheckBox.IsChecked = $true } })
         $ui.BtnTweakNone.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Tweaks) { $r.CheckBox.IsChecked = $false } })
         $ui.BtnAppNone.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Apps) { $r.CheckBox.IsChecked = $false } })
+
+        # ---- task manager ------------------------------------------------------
+        foreach ($label in @('CPU', 'Memory', 'PID', 'Name')) { $ui.TaskSort.Items.Add($label) | Out-Null }
+        $ui.TaskSort.SelectedIndex = 0
+
+        $ui.TaskSort.Add_SelectionChanged({
+            param($sender, $e)
+            if (-not $Ctx.Gui) { return }
+
+            $Ctx.Gui.Monitor.SortKey = switch ([string]$sender.SelectedItem) {
+                'Memory' { 'mem' }
+                'PID'    { 'pid' }
+                'Name'   { 'name' }
+                default  { 'cpu' }
+            }
+            # Re-sort what we already have rather than waiting a whole tick.
+            $Ctx.Gui.Monitor.Processes = @(Sort-TaskProcess -Processes @($Ctx.Gui.Monitor.Processes) -Key $Ctx.Gui.Monitor.SortKey)
+            Update-GuiTaskSample
+        })
+
+        $ui.TaskSearch.Add_TextChanged({
+            param($sender, $e)
+            if (-not $Ctx.Gui) { return }
+            $Ctx.Gui.Monitor.Filter = [string]$sender.Text
+            Update-GuiTaskSample
+        })
+
+        $ui.BtnTaskPause.Add_Click({
+            param($sender, $e)
+            if (-not $Ctx.Gui) { return }
+
+            $Ctx.Gui.TaskPaused = -not $Ctx.Gui.TaskPaused
+            if ($Ctx.Gui.TaskPaused) {
+                $Ctx.Gui.TaskTimer.Stop()
+                $sender.Content = 'Resume'
+            }
+            else {
+                $sender.Content = 'Pause'
+                # Fresh baseline, same reason as Set-GuiTaskTimer.
+                $Ctx.Gui.Monitor.PreviousStamp = $null
+                Update-GuiTaskSample
+                $Ctx.Gui.TaskTimer.Start()
+            }
+        })
+
+        $ui.BtnTaskKill.Add_Click({
+            param($sender, $e)
+            if (-not $Ctx.Gui) { return }
+
+            $selected = $Ctx.Gui.Ui.TaskRows.SelectedItem
+            if (-not $selected) { $Ctx.Gui.Ui.StatusText.Text = 'Select a process first.'; return }
+
+            # Hold the clock while the confirm dialog is up: a tick landing mid-modal
+            # would replace the ItemsSource under the row being asked about.
+            $wasRunning = $Ctx.Gui.TaskTimer.IsEnabled
+            $Ctx.Gui.TaskTimer.Stop()
+
+            try {
+                Stop-TaskProcess -Id ([int]$selected.Id) -Name ([string]$selected.Name) | Out-Null
+                $Ctx.Gui.Monitor.PreviousStamp = $null
+                Update-GuiTaskSample
+            }
+            finally {
+                if ($wasRunning -and -not $Ctx.Gui.TaskPaused) { $Ctx.Gui.TaskTimer.Start() }
+            }
+        })
+
+        $timer = New-Object Windows.Threading.DispatcherTimer
+        $timer.Interval = [TimeSpan]::FromSeconds(1)
+        $timer.Add_Tick({ Update-GuiTaskSample })
+        $Ctx.Gui.TaskTimer = $timer
 
         # ---- actions -----------------------------------------------------------
         $ui.BtnOneClick.Add_Click({
@@ -8848,6 +10388,9 @@ param(
         # Put the console back the way we found it.
         $window.Add_Closed({
             param($sender, $e)
+            # The timer holds a reference to the dispatcher, so a running one keeps
+            # the sampling going after the window is gone.
+            if ($Ctx.Gui -and $Ctx.Gui.TaskTimer) { $Ctx.Gui.TaskTimer.Stop() }
             if ($Ctx.Gui) { $Ctx.Theme.Glyph = $Ctx.Gui.Glyphs }
             $Ctx.Gui = $null
             $Ctx.Sink = $null
@@ -8959,6 +10502,7 @@ param(
         Write-Line ''
         Write-Line '  OTHER' -Color White
         Write-Line '    -Gui               open the graphical interface' -Color Gray
+        Write-Line '    -Tasks             live task manager: CPU, memory, disk, network, processes' -Color Gray
         Write-Line '    -Toolbox <id>      run a toolbox action (see -List toolbox)' -Color Gray
         Write-Line '    -Profile <path>    run a saved setup profile' -Color Gray
         Write-Line '    -SaveProfile <path>  write the current -Apply/-Install selection as a profile' -Color Gray
@@ -9148,6 +10692,11 @@ param(
 
         if (& $has 'Gui') { return (Show-Gui -BoundParameters $Bound) }
 
+        # Its own screen, like the GUI: it takes over the console until you leave it,
+        # so it does not combine with the one-shot actions below. With output
+        # redirected it prints a single snapshot instead.
+        if (& $has 'Tasks') { Show-TaskManager; return 0 }
+
         $didSomething = $false
 
         if (& $has 'List')   { Invoke-List -What $Bound['List']; $didSomething = $true }
@@ -9267,4 +10816,4 @@ param(
         Restore-ConsoleEncoding -Previous $previousEncoding
     }
 
-} $PSBoundParameters '1.2.0' $SourceUrl '5cc52380ba'
+} $PSBoundParameters '1.2.0' $SourceUrl '36c13be1a4'

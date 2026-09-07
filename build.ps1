@@ -104,6 +104,19 @@ function Read-DataFile {
             }
         }
 
+        # A StaticResource naming a key that does not exist is the same kind of
+        # bug as the malformed colour: nothing notices until the window opens,
+        # and by then the message is a long way from the typo. {x:Type ...}
+        # forms are skipped - those resolve against a type, not a key.
+        $defined = @([regex]::Matches($text, 'x:Key="([^"]+)"') | ForEach-Object { $_.Groups[1].Value })
+        foreach ($match in [regex]::Matches($text, '\{StaticResource\s+([^}]+)\}')) {
+            $key = $match.Groups[1].Value.Trim()
+            if ($key -like '{x:Type*') { continue }
+            if ($defined -notcontains $key) {
+                throw "$Name references StaticResource '$key', which no x:Key defines."
+            }
+        }
+
         return $text
     }
 
@@ -173,6 +186,7 @@ param(
 
     # Other actions
     [switch]  `$Gui,
+    [switch]  `$Tasks,
     [string[]]`$Guide,
     [string[]]`$SetSetting,
     [string]  `$Toolbox,

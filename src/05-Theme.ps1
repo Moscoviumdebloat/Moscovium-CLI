@@ -51,6 +51,9 @@ function New-GlyphSet {
             BarFull = '#'; BarEmpty = '.'
             Dot = '*'; Arrow = '->'
             Spinner = @('|', '/', '-', '\')
+            # Sparkline ramp, lowest to highest. Eight levels either way, so a
+            # graph has the same resolution on both consoles.
+            Spark = @('_', '.', ',', '-', '=', '+', '*', '#')
         }
     }
 
@@ -79,6 +82,11 @@ function New-GlyphSet {
         Arrow       = ConvertTo-Char 0x2192
         # Braille spinner: eight dots cycling, reads as smooth rotation.
         Spinner     = @(0x280B, 0x2819, 0x2839, 0x2838, 0x283C, 0x2834, 0x2826, 0x2827, 0x2807, 0x280F |
+                        ForEach-Object { ConvertTo-Char $_ })
+        # Lower blocks, one eighth to full - the sparkline ramp the history
+        # graphs draw with. U+2581 rather than U+2580 as the floor: a graph of
+        # zeroes should still show a baseline.
+        Spark       = @(0x2581, 0x2582, 0x2583, 0x2584, 0x2585, 0x2586, 0x2587, 0x2588 |
                         ForEach-Object { ConvertTo-Char $_ })
     }
 }

@@ -602,6 +602,225 @@ function Update-GuiOneClickSteps {
     }
 }
 
+# -----------------------------------------------------------------------------
+# Task manager page
+#
+# The sampling is 52-Tasks.ps1's, unchanged - this only draws it. A
+# DispatcherTimer does the refreshing, which works because Show-Gui runs a real
+# message loop through ShowDialog; the cooperative Invoke-UiEvents pumping is
+# only for long synchronous work.
+# -----------------------------------------------------------------------------
+
+function Set-GuiTaskTimer {
+    param([bool]$Running)
+
+    if (-not $Ctx.Gui) { return }
+    if (-not $Ctx.Gui.TaskTimer) { return }
+
+    if (-not $Running) {
+        $Ctx.Gui.TaskTimer.Stop()
+        return
+    }
+
+    # A stale previous sample would difference this second's counters against
+    # one from whenever the page was last open, which reads as a huge spike.
+    $Ctx.Gui.Monitor.PreviousStamp = $null
+    Update-GuiTaskSample
+    $Ctx.Gui.TaskTimer.Start()
+}
+
+# Percent to brush, matching the console's load bands so a red bar means the
+# same thing in both front-ends.
+function Get-GuiLoadBrush {
+    param([double]$Percent)
+
+    switch (Get-LoadBand -Percent $Percent) {
+        'high'   { return (New-HexBrush '#FFFF7B94') }
+        'medium' { return (New-HexBrush '#FFFFCB7A') }
+        default  { return (New-HexBrush '#FFB388FF') }
+    }
+}
+
+# The CPU history, as a filled polygon on a Canvas. Redrawn from scratch each
+# tick: 120 points is nothing, and holding a Polyline's PointCollection across
+# ticks would mean tracking it as extra window state for no gain.
+function Update-GuiCpuGraph {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][double[]]$History)
+
+    if (-not $Ctx.Gui) { return }
+    $canvas = $Ctx.Gui.Ui.CpuGraph
+
+    $canvas.Children.Clear()
+
+    $width = [double]$canvas.ActualWidth
+    $height = [double]$canvas.ActualHeight
+    if ($width -le 1 -or $height -le 1) { return }
+    if ($History.Count -lt 2) { return }
+
+    # Scaled to the samples in hand rather than to a fixed time axis, so the
+    # graph fills the panel from the first few ticks instead of drawing a stub
+    # against the right edge for the first two minutes. The console sparkline
+    # pads instead - it is one character per sample there, with nothing to
+    # stretch. Oldest on the left either way.
+    $step = $width / ($History.Count - 1)
+
+    $points = New-Object Windows.Media.PointCollection
+    $points.Add((New-Object Windows.Point (0, $height)))
+    for ($i = 0; $i -lt $History.Count; $i++) {
+        $x = $i * $step
+        $y = $height - (([Math]::Max(0.0, [Math]::Min(100.0, $History[$i])) / 100.0) * $height)
+        $points.Add((New-Object Windows.Point ($x, $y)))
+    }
+    $points.Add((New-Object Windows.Point ($width, $height)))
+
+    $fill = New-Object Windows.Media.LinearGradientBrush
+    $fill.StartPoint = New-Object Windows.Point (0, 0)
+    $fill.EndPoint = New-Object Windows.Point (0, 1)
+    $fill.GradientStops.Add((New-Object Windows.Media.GradientStop ([Windows.Media.ColorConverter]::ConvertFromString('#66B388FF'), 0)))
+    $fill.GradientStops.Add((New-Object Windows.Media.GradientStop ([Windows.Media.ColorConverter]::ConvertFromString('#08B388FF'), 1)))
+
+    $area = New-Object Windows.Shapes.Polygon
+    $area.Points = $points
+    $area.Fill = $fill
+    $canvas.Children.Add($area) | Out-Null
+
+    # The line on top, without the two baseline points the fill needed.
+    $edge = New-Object Windows.Shapes.Polyline
+    $edgePoints = New-Object Windows.Media.PointCollection
+    for ($i = 1; $i -lt ($points.Count - 1); $i++) { $edgePoints.Add($points[$i]) }
+    $edge.Points = $edgePoints
+    $edge.Stroke = New-HexBrush '#FFB388FF'
+    $edge.StrokeThickness = 1.4
+    $canvas.Children.Add($edge) | Out-Null
+}
+
+# One narrow vertical bar per core, tallest to the bottom - btop's core strip.
+function Update-GuiCoreStrip {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][double[]]$Cores)
+
+    if (-not $Ctx.Gui) { return }
+    $strip = $Ctx.Gui.Ui.CoreStrip
+
+    $strip.Children.Clear()
+    if ($Cores.Count -eq 0) { return }
+
+    # Wide bars for a couple of cores, hairlines for a threadripper.
+    $barWidth = 10
+    if ($Cores.Count -gt 8)  { $barWidth = 6 }
+    if ($Cores.Count -gt 24) { $barWidth = 3 }
+
+    foreach ($core in $Cores) {
+        $column = New-Object Windows.Controls.Grid
+        $column.Width = $barWidth
+        $column.Height = 54
+        $column.Margin = New-Object Windows.Thickness 0, 0, 2, 0
+
+        $track = New-Object Windows.Controls.Border
+        $track.Background = New-HexBrush '#FF130E1F'
+        $track.CornerRadius = New-Object Windows.CornerRadius 2
+        $column.Children.Add($track) | Out-Null
+
+        $level = New-Object Windows.Controls.Border
+        $level.VerticalAlignment = 'Bottom'
+        $level.CornerRadius = New-Object Windows.CornerRadius 2
+        $level.Background = Get-GuiLoadBrush -Percent $core
+        # A floor of one pixel, so an idle core is still a mark rather than a gap.
+        $level.Height = [Math]::Max(1.0, 54.0 * [Math]::Max(0.0, [Math]::Min(100.0, $core)) / 100.0)
+        $column.Children.Add($level) | Out-Null
+
+        $strip.Children.Add($column) | Out-Null
+    }
+}
+
+# One refresh of the whole page.
+function Update-GuiTaskSample {
+    if (-not $Ctx.Gui) { return }
+
+    $ui = $Ctx.Gui.Ui
+    $monitor = $Ctx.Gui.Monitor
+
+    Update-TaskMonitor -Monitor $monitor | Out-Null
+
+    # ---- meters ------------------------------------------------------------
+    $ui.CpuValue.Text = '{0:N0}%' -f $monitor.Cpu.Total
+    $ui.CpuValue.Foreground = Get-GuiLoadBrush -Percent $monitor.Cpu.Total
+    $ui.CpuBar.Value = [Math]::Max(0.0, [Math]::Min(100.0, $monitor.Cpu.Total))
+    $ui.CpuBar.Foreground = Get-GuiLoadBrush -Percent $monitor.Cpu.Total
+    $ui.CpuDetail.Text = '{0} cores' -f $monitor.Cores
+
+    if ($monitor.Memory) {
+        $ui.MemValue.Text = '{0:N0}%' -f $monitor.Memory.Percent
+        $ui.MemValue.Foreground = Get-GuiLoadBrush -Percent $monitor.Memory.Percent
+        $ui.MemBar.Value = [Math]::Max(0.0, [Math]::Min(100.0, $monitor.Memory.Percent))
+        $ui.MemBar.Foreground = Get-GuiLoadBrush -Percent $monitor.Memory.Percent
+        $ui.MemDetail.Text = '{0} of {1}   commit {2}' -f `
+            (Format-Bytes $monitor.Memory.Used), (Format-Bytes $monitor.Memory.Total),
+            (Format-Bytes $monitor.Memory.CommitUsed)
+    }
+
+    # The fullest volume, because that is the one about to cause a problem.
+    $disks = @($monitor.Disks)
+    if ($disks.Count -gt 0) {
+        $worst = @($disks | Sort-Object -Property Percent -Descending)[0]
+        $ui.DiskValue.Text = '{0:N0}%' -f $worst.Percent
+        $ui.DiskValue.Foreground = Get-GuiLoadBrush -Percent $worst.Percent
+        $ui.DiskBar.Value = [Math]::Max(0.0, [Math]::Min(100.0, $worst.Percent))
+        $ui.DiskBar.Foreground = Get-GuiLoadBrush -Percent $worst.Percent
+
+        $extra = ''
+        if ($disks.Count -gt 1) { $extra = '   +{0} more' -f ($disks.Count - 1) }
+        $ui.DiskDetail.Text = '{0} {1} free{2}' -f $worst.Name, (Format-Bytes $worst.Free), $extra
+    }
+
+    # Headline is the combined rate; the split goes underneath, where the other
+    # three cards put their detail.
+    $ui.NetValue.Text = Format-Rate ($monitor.Network.Received + $monitor.Network.Sent)
+    $ui.NetDetail.Text = 'down {0}   up {1}' -f `
+        (Format-Bytes $monitor.Network.Received), (Format-Bytes $monitor.Network.Sent)
+
+    Update-GuiCpuGraph -History @($monitor.CpuHistory)
+    Update-GuiCoreStrip -Cores @($monitor.Cpu.Cores)
+
+    # ---- process table -----------------------------------------------------
+    $rows = @(Select-TaskProcess -Processes @($monitor.Processes) -Filter $monitor.Filter)
+
+    # Keep whatever was selected selected across the refresh: the whole
+    # ItemsSource is replaced every tick, and without this the row under the
+    # cursor would deselect itself once a second.
+    $selectedId = $null
+    if ($ui.TaskRows.SelectedItem) { $selectedId = $ui.TaskRows.SelectedItem.Id }
+
+    $view = [System.Collections.Generic.List[object]]::new()
+    foreach ($proc in $rows) {
+        $cpuText = '-'
+        if ($proc.CpuKnown) { $cpuText = '{0:N1}' -f $proc.Cpu }
+
+        $view.Add([pscustomobject]@{
+            Id         = $proc.Id
+            Name       = $proc.Name
+            CpuText    = $cpuText
+            MemoryText = Format-Bytes $proc.WorkingSet
+            Threads    = $proc.Threads
+            TimeText   = Format-CpuTime $proc.CpuSeconds
+        })
+    }
+
+    $ui.TaskRows.ItemsSource = @($view)
+
+    if ($null -ne $selectedId) {
+        foreach ($item in $view) {
+            if ($item.Id -eq $selectedId) { $ui.TaskRows.SelectedItem = $item; break }
+        }
+    }
+
+    $summary = '{0} processes' -f @($monitor.Processes).Count
+    if ($monitor.Memory) { $summary += '   up ' + (Format-Uptime $monitor.Memory.BootTime) }
+    if (-not $monitor.Ready) { $summary += '   sampling' }
+    if ($Ctx.Gui.TaskPaused) { $summary += '   PAUSED' }
+    foreach ($problem in @($monitor.Errors)) { $summary += '   ' + $problem }
+    $ui.TaskSummary.Text = $summary
+}
+
 # Nav rows carry a count on the right, so the sidebar says how much is behind
 # each page without opening it.
 function Set-GuiNavContent {
@@ -821,9 +1040,12 @@ function New-GuiWindow {
     $ui = @{}
     foreach ($name in @(
         'VersionText', 'CatalogChip', 'DryRunBadge',
-        'NavList', 'OneClickPanel', 'TweaksPanel', 'AppsPanel', 'ToolboxPanel', 'ProfilesPanel',
+        'NavList', 'OneClickPanel', 'TasksPanel', 'TweaksPanel', 'AppsPanel', 'ToolboxPanel', 'ProfilesPanel',
         'StorePanel', 'GuidesPanel', 'PersonalizePanel', 'SettingsPanel',
         'OneClickSteps', 'OneClickBlurb', 'BtnOneClick', 'BtnOneClickToolbox',
+        'TaskSummary', 'CpuValue', 'CpuBar', 'CpuDetail', 'MemValue', 'MemBar', 'MemDetail',
+        'DiskValue', 'DiskBar', 'DiskDetail', 'NetValue', 'NetDetail',
+        'CpuGraph', 'CoreStrip', 'TaskRows', 'TaskSearch', 'TaskSort', 'BtnTaskPause', 'BtnTaskKill',
         'StoreRows', 'BtnStoreRefresh', 'BtnStoreInstall', 'GuideRows',
         'BtnCursorInstall', 'BtnCursorRestore', 'WallpaperStyle', 'BtnWallpaper',
         'CsFolderText', 'BtnCsDefault', 'BtnCsFile', 'BtnCsLaunch',
@@ -858,6 +1080,13 @@ function New-GuiWindow {
         # Filled in below. Lets a handler say which page it wants by name
         # instead of hard-coding an index into the sidebar.
         NavNames  = @()
+
+        # Task manager state. It lives here rather than in the handlers for the
+        # reason at the top of this file: a handler runs long after the function
+        # that registered it returned, so it can only reach $Ctx.
+        Monitor    = New-TaskMonitor
+        TaskTimer  = $null
+        TaskPaused = $false
         Bound     = $BoundParameters
         Glyphs    = $Ctx.Theme.Glyph
     }
@@ -925,8 +1154,8 @@ function New-GuiWindow {
 
     # Order has to match the ListBoxItems in the XAML and the $panels array in
     # the SelectionChanged handler. -1 means "no count worth showing".
-    $navNames  = @('One click', 'Tweaks', 'Apps', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Profiles', 'Settings')
-    $navCounts = @(-1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1)
+    $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Profiles', 'Settings')
+    $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1)
 
     # The item Content becomes a DockPanel below, so the labels are no longer
     # readable off the ListBox. Keep them where a handler can still find them.
@@ -977,12 +1206,18 @@ function New-GuiWindow {
         param($sender, $e)
         if (-not $Ctx.Gui) { return }
 
-        $panels = @($Ctx.Gui.Ui.OneClickPanel, $Ctx.Gui.Ui.TweaksPanel, $Ctx.Gui.Ui.AppsPanel,
-                    $Ctx.Gui.Ui.StorePanel, $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.GuidesPanel,
-                    $Ctx.Gui.Ui.PersonalizePanel, $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
+        $panels = @($Ctx.Gui.Ui.OneClickPanel, $Ctx.Gui.Ui.TasksPanel, $Ctx.Gui.Ui.TweaksPanel,
+                    $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.StorePanel, $Ctx.Gui.Ui.ToolboxPanel,
+                    $Ctx.Gui.Ui.GuidesPanel, $Ctx.Gui.Ui.PersonalizePanel, $Ctx.Gui.Ui.ProfilesPanel,
+                    $Ctx.Gui.Ui.SettingsPanel)
         for ($i = 0; $i -lt $panels.Count; $i++) {
             $panels[$i].Visibility = if ($i -eq $sender.SelectedIndex) { 'Visible' } else { 'Collapsed' }
         }
+
+        # Sampling costs a CIM round trip a second, so it only runs while the
+        # page is on screen. Leaving the page stops the clock; coming back takes
+        # a fresh baseline rather than differencing against a minutes-old one.
+        Set-GuiTaskTimer -Running ($Ctx.Gui.Ui.TasksPanel.Visibility -eq 'Visible')
     })
 
     # ---- filters -----------------------------------------------------------
@@ -1002,6 +1237,77 @@ function New-GuiWindow {
     $ui.BtnTweakAll.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Tweaks) { $r.CheckBox.IsChecked = $true } })
     $ui.BtnTweakNone.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Tweaks) { $r.CheckBox.IsChecked = $false } })
     $ui.BtnAppNone.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Apps) { $r.CheckBox.IsChecked = $false } })
+
+    # ---- task manager ------------------------------------------------------
+    foreach ($label in @('CPU', 'Memory', 'PID', 'Name')) { $ui.TaskSort.Items.Add($label) | Out-Null }
+    $ui.TaskSort.SelectedIndex = 0
+
+    $ui.TaskSort.Add_SelectionChanged({
+        param($sender, $e)
+        if (-not $Ctx.Gui) { return }
+
+        $Ctx.Gui.Monitor.SortKey = switch ([string]$sender.SelectedItem) {
+            'Memory' { 'mem' }
+            'PID'    { 'pid' }
+            'Name'   { 'name' }
+            default  { 'cpu' }
+        }
+        # Re-sort what we already have rather than waiting a whole tick.
+        $Ctx.Gui.Monitor.Processes = @(Sort-TaskProcess -Processes @($Ctx.Gui.Monitor.Processes) -Key $Ctx.Gui.Monitor.SortKey)
+        Update-GuiTaskSample
+    })
+
+    $ui.TaskSearch.Add_TextChanged({
+        param($sender, $e)
+        if (-not $Ctx.Gui) { return }
+        $Ctx.Gui.Monitor.Filter = [string]$sender.Text
+        Update-GuiTaskSample
+    })
+
+    $ui.BtnTaskPause.Add_Click({
+        param($sender, $e)
+        if (-not $Ctx.Gui) { return }
+
+        $Ctx.Gui.TaskPaused = -not $Ctx.Gui.TaskPaused
+        if ($Ctx.Gui.TaskPaused) {
+            $Ctx.Gui.TaskTimer.Stop()
+            $sender.Content = 'Resume'
+        }
+        else {
+            $sender.Content = 'Pause'
+            # Fresh baseline, same reason as Set-GuiTaskTimer.
+            $Ctx.Gui.Monitor.PreviousStamp = $null
+            Update-GuiTaskSample
+            $Ctx.Gui.TaskTimer.Start()
+        }
+    })
+
+    $ui.BtnTaskKill.Add_Click({
+        param($sender, $e)
+        if (-not $Ctx.Gui) { return }
+
+        $selected = $Ctx.Gui.Ui.TaskRows.SelectedItem
+        if (-not $selected) { $Ctx.Gui.Ui.StatusText.Text = 'Select a process first.'; return }
+
+        # Hold the clock while the confirm dialog is up: a tick landing mid-modal
+        # would replace the ItemsSource under the row being asked about.
+        $wasRunning = $Ctx.Gui.TaskTimer.IsEnabled
+        $Ctx.Gui.TaskTimer.Stop()
+
+        try {
+            Stop-TaskProcess -Id ([int]$selected.Id) -Name ([string]$selected.Name) | Out-Null
+            $Ctx.Gui.Monitor.PreviousStamp = $null
+            Update-GuiTaskSample
+        }
+        finally {
+            if ($wasRunning -and -not $Ctx.Gui.TaskPaused) { $Ctx.Gui.TaskTimer.Start() }
+        }
+    })
+
+    $timer = New-Object Windows.Threading.DispatcherTimer
+    $timer.Interval = [TimeSpan]::FromSeconds(1)
+    $timer.Add_Tick({ Update-GuiTaskSample })
+    $Ctx.Gui.TaskTimer = $timer
 
     # ---- actions -----------------------------------------------------------
     $ui.BtnOneClick.Add_Click({
@@ -1171,6 +1477,9 @@ function New-GuiWindow {
     # Put the console back the way we found it.
     $window.Add_Closed({
         param($sender, $e)
+        # The timer holds a reference to the dispatcher, so a running one keeps
+        # the sampling going after the window is gone.
+        if ($Ctx.Gui -and $Ctx.Gui.TaskTimer) { $Ctx.Gui.TaskTimer.Stop() }
         if ($Ctx.Gui) { $Ctx.Theme.Glyph = $Ctx.Gui.Glyphs }
         $Ctx.Gui = $null
         $Ctx.Sink = $null

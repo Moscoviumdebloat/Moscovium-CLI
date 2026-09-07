@@ -20,6 +20,7 @@ which ships with Windows, is enough.
 | | |
 |---|---|
 | **One-click debloat box** | The landing page in the window and the first entry in the menu. Six steps behind one prompt: WinUtil preset, Win11Debloat preset, security-only Windows Update, TCP autotuning, CPU priority, dynamic tick. |
+| **Task manager** | btop-shaped: CPU with per-core bars and history, memory, disk, network, and a sortable process list you can end a process from. |
 | **40 tweaks** | Privacy & telemetry, Explorer & taskbar, gaming & performance, hardware, advanced. Applied, reverted, or reported on. |
 | **127 apps** | The full curated winget catalog, plus direct-download and archive installers, across 8 categories. |
 | **16 toolbox actions** | WinUtil, Win11Debloat, Windows Update policy, TCP autotuning, dynamic tick, CPU priority, and the classic control panels - each on its own, when you do not want the whole box. |
@@ -165,6 +166,20 @@ Or open the window and press the button - it is the page you land on:
 .\moscovium.ps1 -Gui
 ```
 
+### Tasks
+
+```powershell
+.\moscovium.ps1 -Tasks
+```
+
+CPU with per-core bars and a history graph, memory, disks, network, and the
+process list underneath. `c` `m` `p` `n` sort it, `/` filters, `space` freezes
+it, `k` ends the process under the cursor. In the window it is the second page
+in the sidebar.
+
+With output redirected it prints one snapshot instead of repainting a frame
+nobody can see, so `-Tasks > tasks.txt` is useful rather than a hang.
+
 ### Toolbox
 
 The individual actions, for when you want fewer than all six.
@@ -262,7 +277,9 @@ src/              function libraries, concatenated in name order
   30-Apps         winget, download, zip and script installs
   40-Toolbox      one-shot actions
   50-Profile      setup profiles
+  52-Tasks        task manager sampling
   60-Menu         interactive selectors and screens
+  65-TaskView     task manager, console front-end
   70-Gui          the WPF window
   90-Main         argument dispatch
 
@@ -423,6 +440,39 @@ older `winutil-debloat.json` object form still imports, but through WinUtil's
 (`Version` / `Apps` / `Tweaks` / `Deployment`), validated in the test suite
 against the same rules `Test-ConfigConsistency` and `Import-ConfigToParams`
 apply. Both presets ask their script to take a restore point first.
+
+### The task manager's numbers
+
+Everything comes from raw performance counters read through CIM, and two
+choices there are worth knowing because both were measured rather than assumed.
+
+**Raw counters, not formatted ones.** `Win32_PerfFormattedData_*` does its own
+two-sample wait inside the provider, so one query costs about 270ms — too much
+to spend every second, and it would stutter the window. The
+`Win32_PerfRawData_*` equivalent is 9ms and hands over the cumulative counters,
+leaving the delta arithmetic to us, which we want anyway because the history
+graphs already keep the previous sample. The whole refresh — CPU, memory,
+disks, network, processes — lands around 76ms.
+
+**`_Total` is an average, not a sum.** `PercentIdleTime` on the `_Total`
+instance is already divided by the core count, so every instance uses the same
+timestamp delta as its divisor. With that divisor `_Total` matches the mean of
+the per-core values to the digit; with a core-count multiplier it does not.
+There is a test pinning that invariant.
+
+Nothing uses `System.Diagnostics.PerformanceCounter`: its category and counter
+names are localised, so `'\Processor(_Total)\% Processor Time'` does not exist
+on a German or Turkish install. CIM class and property names are not localised.
+
+A process whose CPU time cannot be read — a protected process, when the tool is
+not elevated — shows a dash rather than `0.0`, because zero would be a claim
+the sampler cannot make.
+
+**Ending a process** asks first, and defaults to no. The handful Windows marks
+critical (`csrss`, `smss`, `wininit`, `winlogon`, `services`, `lsass`, `System`,
+`Idle`) are refused outright instead: ending one is a `CRITICAL_PROCESS_DIED`
+stop, not a closed program, and there is no answer to that prompt that leaves
+the machine running.
 
 ## Requirements
 

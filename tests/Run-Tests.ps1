@@ -989,6 +989,358 @@ Test-Case 'presets are written without a BOM' {
 }
 
 # -----------------------------------------------------------------------------
+Write-Section 'Task manager'
+
+Test-Case 'byte and time formatting stays inside a table column' {
+    Assert-Equal '0B'    (Format-Bytes 0)
+    Assert-Equal '512B'  (Format-Bytes 512)
+    Assert-Equal '1.0K'  (Format-Bytes 1024)
+    Assert-Equal '1.5K'  (Format-Bytes 1536)
+    Assert-Equal '1.0M'  (Format-Bytes 1048576)
+    Assert-Equal '1.0G'  (Format-Bytes 1073741824)
+
+    # Above 100 the decimal is noise and costs a character.
+    Assert-Equal '500G'  (Format-Bytes (500 * 1GB))
+
+    # Negatives and nulls come from counters that reset; neither should throw.
+    Assert-Equal '0B' (Format-Bytes -5)
+    Assert-Equal '0B' (Format-Bytes $null)
+
+    Assert-Equal '1.0K/s' (Format-Rate 1024)
+
+    Assert-Equal '0:00:00' (Format-CpuTime 0)
+    Assert-Equal '0:01:05' (Format-CpuTime 65)
+    Assert-Equal '2:00:00' (Format-CpuTime 7200)
+    Assert-Equal '-'       (Format-CpuTime $null)
+
+    Assert-Equal 'unknown' (Format-Uptime $null)
+    Assert-True ((Format-Uptime ([DateTime]::Now.AddDays(-3))) -match '^3d') 'three days did not format as days'
+    Assert-True ((Format-Uptime ([DateTime]::Now.AddMinutes(-90))) -match '^1h') 'ninety minutes did not format as hours'
+}
+
+Test-Case 'load bands are the same in both front-ends' {
+    Assert-Equal 'low'    (Get-LoadBand -Percent 0)
+    Assert-Equal 'low'    (Get-LoadBand -Percent 59.9)
+    Assert-Equal 'medium' (Get-LoadBand -Percent 60)
+    Assert-Equal 'medium' (Get-LoadBand -Percent 84.9)
+    Assert-Equal 'high'   (Get-LoadBand -Percent 85)
+    Assert-Equal 'high'   (Get-LoadBand -Percent 100)
+}
+
+Test-Case 'a meter bar is exactly as wide as asked and clamps out-of-range' {
+    foreach ($percent in @(0, 25, 50, 100)) {
+        Assert-Equal 20 (New-MeterBar -Percent $percent -Width 20).Length
+    }
+
+    # A counter glitch must not produce a bar longer than its own column.
+    Assert-Equal 20 (New-MeterBar -Percent 150 -Width 20).Length
+    Assert-Equal 20 (New-MeterBar -Percent -10 -Width 20).Length
+
+    $full = Get-Glyph 'BarFull'
+    $empty = Get-Glyph 'BarEmpty'
+    Assert-Equal ($full * 20) (New-MeterBar -Percent 100 -Width 20)
+    Assert-Equal ($empty * 20) (New-MeterBar -Percent 0 -Width 20)
+}
+
+Test-Case 'a sparkline is fixed width with the newest sample on the right' {
+    $ramp = @(Get-Glyph 'Spark')
+
+    # Wider than the data: pads on the left so the newest sample keeps its
+    # position from frame to frame.
+    $line = New-Sparkline -Values @(0, 100) -Width 10 -Maximum 100
+    Assert-Equal 10 $line.Length
+    Assert-Equal '        ' $line.Substring(0, 8)
+    Assert-Equal $ramp[0] $line.Substring(8, 1)
+    Assert-Equal $ramp[$ramp.Count - 1] $line.Substring(9, 1)
+
+    # Longer than the width: keeps the newest, drops the oldest.
+    $long = New-Sparkline -Values @(1..50) -Width 10 -Maximum 50
+    Assert-Equal 10 $long.Length
+    Assert-Equal $ramp[$ramp.Count - 1] $long.Substring(9, 1)
+
+    Assert-Equal 10 (New-Sparkline -Values @(500) -Width 10 -Maximum 100).Length
+    Assert-Equal '' (New-Sparkline -Values @(1, 2) -Width 0)
+    Assert-Equal 6 (New-Sparkline -Values @() -Width 6).Length
+}
+
+Test-Case 'both glyph sets carry a sparkline ramp of the same depth' {
+    $unicode = New-GlyphSet -Unicode $true
+    $ascii   = New-GlyphSet -Unicode $false
+
+    Assert-Equal @($ascii.Spark).Count @($unicode.Spark).Count
+    Assert-True (@($unicode.Spark).Count -ge 4) 'the ramp is too shallow to show a shape'
+}
+
+Test-Case 'CPU load is the complement of idle, with _Total already averaged' {
+    # One second of 100ns ticks.
+    $tick = 10000000
+
+    $previous = @{
+        '_Total' = [pscustomobject]@{ Idle = 0.0;      Stamp = 0.0 }
+        '0'      = [pscustomobject]@{ Idle = 0.0;      Stamp = 0.0 }
+        '1'      = [pscustomobject]@{ Idle = 0.0;      Stamp = 0.0 }
+    }
+    # Core 0 was 25% idle, core 1 was 75% idle. _Total carries the mean, 50%.
+    $current = @{
+        '_Total' = [pscustomobject]@{ Idle = ($tick * 0.50); Stamp = $tick }
+        '0'      = [pscustomobject]@{ Idle = ($tick * 0.25); Stamp = $tick }
+        '1'      = [pscustomobject]@{ Idle = ($tick * 0.75); Stamp = $tick }
+    }
+
+    $load = Get-CpuLoad -Previous $previous -Current $current
+    Assert-True $load.Ready 'a load with both samples reported itself unready'
+    Assert-Equal 50 ([int][Math]::Round($load.Total))
+    Assert-Equal 2 @($load.Cores).Count
+    Assert-Equal 75 ([int][Math]::Round($load.Cores[0]))
+    Assert-Equal 25 ([int][Math]::Round($load.Cores[1]))
+
+    # The invariant the divisor was chosen for, and the reason it is not
+    # multiplied by the core count.
+    $mean = (@($load.Cores) | Measure-Object -Average).Average
+    Assert-True ([Math]::Abs($load.Total - $mean) -lt 0.01) "_Total $($load.Total) is not the mean $mean"
+
+    # No previous sample means no delta, so nothing is claimed.
+    $cold = Get-CpuLoad -Previous $null -Current $current
+    Assert-True (-not $cold.Ready) 'a first sample claimed to be ready'
+    Assert-Equal 0 @($cold.Cores).Count
+}
+
+Test-Case 'per-core order is numeric, so core 10 does not land next to core 1' {
+    $tick = 10000000
+    $previous = @{}
+    $current = @{}
+
+    foreach ($name in @('_Total', '0', '1', '2', '9', '10', '11')) {
+        $previous[$name] = [pscustomobject]@{ Idle = 0.0; Stamp = 0.0 }
+        $current[$name] = [pscustomobject]@{ Idle = 0.0; Stamp = $tick }
+    }
+    # Make each core's load its own index, so position is checkable.
+    foreach ($pair in @(@('0', 0), @('1', 10), @('2', 20), @('9', 90), @('10', 95), @('11', 99))) {
+        $current[$pair[0]].Idle = $tick * (1.0 - ($pair[1] / 100.0))
+    }
+
+    $load = Get-CpuLoad -Previous $previous -Current $current
+    $expected = @(0, 10, 20, 90, 95, 99)
+    Assert-Equal $expected.Count @($load.Cores).Count
+    for ($i = 0; $i -lt $expected.Count; $i++) {
+        Assert-Equal $expected[$i] ([int][Math]::Round($load.Cores[$i]))
+    }
+}
+
+Test-Case 'network rates come from byte deltas, and a reset counter is skipped' {
+    $frequency = 10000000
+
+    $previous = @{
+        'eth' = [pscustomobject]@{ Received = 1000.0; Sent = 500.0; Stamp = 0.0; Frequency = $frequency }
+        'wifi' = [pscustomobject]@{ Received = 9000.0; Sent = 100.0; Stamp = 0.0; Frequency = $frequency }
+    }
+    $current = @{
+        'eth' = [pscustomobject]@{ Received = 3048.0; Sent = 1524.0; Stamp = $frequency; Frequency = $frequency }
+        # This adapter was reset: the counter went backwards.
+        'wifi' = [pscustomobject]@{ Received = 40.0; Sent = 612.0; Stamp = $frequency; Frequency = $frequency }
+    }
+
+    $net = Get-NetworkLoad -Previous $previous -Current $current
+    Assert-True $net.Ready 'a rate with both samples reported itself unready'
+
+    # eth contributed 2048 down and 1024 up over one second; wifi's negative
+    # receive delta was dropped but its positive send delta counted.
+    Assert-Equal 2048 ([int]$net.Received)
+    Assert-Equal 1536 ([int]$net.Sent)
+
+    $cold = Get-NetworkLoad -Previous $null -Current $current
+    Assert-True (-not $cold.Ready) 'a first network sample claimed to be ready'
+    Assert-Equal 0 ([int]$cold.Received)
+}
+
+Test-Case 'process CPU is its share of every core, and unknown stays unknown' {
+    $previous = @{
+        10 = [pscustomobject]@{ Id = 10; Name = 'busy';  WorkingSet = 1000.0; Threads = 4; CpuSeconds = 100.0 }
+        11 = [pscustomobject]@{ Id = 11; Name = 'idle';  WorkingSet = 2000.0; Threads = 2; CpuSeconds = 50.0 }
+        12 = [pscustomobject]@{ Id = 12; Name = 'closed'; WorkingSet = 500.0; Threads = 1; CpuSeconds = 5.0 }
+    }
+    $current = @{
+        10 = [pscustomobject]@{ Id = 10; Name = 'busy';  WorkingSet = 1100.0; Threads = 4; CpuSeconds = 102.0 }
+        11 = [pscustomobject]@{ Id = 11; Name = 'idle';  WorkingSet = 2000.0; Threads = 2; CpuSeconds = 50.0 }
+        # Protected process: its CPU time could not be read.
+        13 = [pscustomobject]@{ Id = 13; Name = 'guarded'; WorkingSet = 300.0; Threads = 1; CpuSeconds = $null }
+        # Brand new since the last sample, so there is no delta for it.
+        14 = [pscustomobject]@{ Id = 14; Name = 'fresh'; WorkingSet = 100.0; Threads = 1; CpuSeconds = 0.5 }
+    }
+
+    $rows = @(Get-ProcessLoad -Previous $previous -Current $current -ElapsedSeconds 1.0 -Cores 4)
+    $byId = @{}
+    foreach ($row in $rows) { $byId[$row.Id] = $row }
+
+    # A process that dropped off is gone from the list, not carried forward.
+    Assert-Equal 4 $rows.Count
+    Assert-True (-not $byId.ContainsKey(12)) 'an exited process is still listed'
+
+    # Two CPU seconds over one wall second on four cores is 50%.
+    Assert-True $byId[10].CpuKnown 'a process with two samples has no CPU figure'
+    Assert-Equal 50 ([int][Math]::Round($byId[10].Cpu))
+    Assert-Equal 0 ([int][Math]::Round($byId[11].Cpu))
+
+    # Neither of these can be differenced, and 0.0 would be a claim we cannot make.
+    Assert-True (-not $byId[13].CpuKnown) 'an unreadable process claimed a CPU figure'
+    Assert-True (-not $byId[14].CpuKnown) 'a brand new process claimed a CPU figure'
+}
+
+Test-Case 'sorting and filtering the process list' {
+    $rows = @(
+        [pscustomobject]@{ Id = 30; Name = 'zeta';  Cpu = 1.0;  CpuKnown = $true; WorkingSet = 300.0; Threads = 1; CpuSeconds = 1.0 }
+        [pscustomobject]@{ Id = 10; Name = 'alpha'; Cpu = 9.0;  CpuKnown = $true; WorkingSet = 100.0; Threads = 1; CpuSeconds = 1.0 }
+        [pscustomobject]@{ Id = 20; Name = 'mid';   Cpu = 5.0;  CpuKnown = $true; WorkingSet = 900.0; Threads = 1; CpuSeconds = 1.0 }
+    )
+
+    Assert-Equal 10 (@(Sort-TaskProcess -Processes $rows -Key 'cpu')[0].Id)
+    Assert-Equal 20 (@(Sort-TaskProcess -Processes $rows -Key 'mem')[0].Id)
+    Assert-Equal 10 (@(Sort-TaskProcess -Processes $rows -Key 'pid')[0].Id)
+    Assert-Equal 'alpha' (@(Sort-TaskProcess -Processes $rows -Key 'name')[0].Name)
+
+    # An unknown key falls back to CPU rather than throwing mid-refresh.
+    Assert-Equal 10 (@(Sort-TaskProcess -Processes $rows -Key 'nonsense')[0].Id)
+
+    Assert-Equal 3 (@(Select-TaskProcess -Processes $rows -Filter '').Count)
+    Assert-Equal 3 (@(Select-TaskProcess -Processes $rows -Filter '   ').Count)
+    Assert-Equal 1 (@(Select-TaskProcess -Processes $rows -Filter 'alph').Count)
+    # Filtering by pid, not just name.
+    Assert-Equal 1 (@(Select-TaskProcess -Processes $rows -Filter '20').Count)
+    Assert-Equal 0 (@(Select-TaskProcess -Processes $rows -Filter 'nothing').Count)
+}
+
+Test-Case 'the critical process list covers what bugchecks Windows' {
+    # Ending any of these is a CRITICAL_PROCESS_DIED stop, not a closed program,
+    # so Stop-TaskProcess refuses rather than confirming.
+    foreach ($name in @('csrss', 'smss', 'wininit', 'winlogon', 'services', 'lsass', 'System', 'Idle')) {
+        Assert-True (Test-CriticalProcess -Name $name) "$name is not guarded"
+    }
+    # Case must not matter: the name comes from whatever Get-Process reports.
+    Assert-True (Test-CriticalProcess -Name 'CSRSS') 'the guard is case sensitive'
+
+    foreach ($name in @('notepad', 'chrome', 'svchost', 'explorer', 'discord', '')) {
+        Assert-True (-not (Test-CriticalProcess -Name $name)) "$name is guarded but should not be"
+    }
+}
+
+Test-Case 'history rings trim to their limit, oldest first' {
+    $ring = [System.Collections.Generic.List[double]]::new()
+    foreach ($value in 1..10) { Add-TaskHistory -History $ring -Value $value -Limit 4 }
+
+    Assert-Equal 4 $ring.Count
+    Assert-Equal 7 $ring[0]
+    Assert-Equal 10 $ring[3]
+}
+
+Test-Case 'the monitor starts cold and says so' {
+    $monitor = New-TaskMonitor
+    Assert-True (-not $monitor.Ready) 'a fresh monitor claimed to be ready'
+    Assert-Equal 'cpu' $monitor.SortKey
+    Assert-True ($monitor.Cores -ge 1) 'the core count is not positive'
+    Assert-Equal 0 @($monitor.Processes).Count
+}
+
+Test-Case 'two real samples populate every panel' {
+    # The one test that touches live counters. Reads only - it samples and
+    # measures, and never calls Stop-TaskProcess.
+    $monitor = New-TaskMonitor
+    Update-TaskMonitor -Monitor $monitor | Out-Null
+    Start-Sleep -Milliseconds 350
+    Update-TaskMonitor -Monitor $monitor | Out-Null
+
+    Assert-Equal 0 @($monitor.Errors).Count "sampling reported: $(@($monitor.Errors) -join '; ')"
+    Assert-True $monitor.Ready 'two samples did not make the monitor ready'
+
+    Assert-True ($monitor.Cpu.Total -ge 0 -and $monitor.Cpu.Total -le 100) "CPU total is $($monitor.Cpu.Total)"
+    Assert-Equal $monitor.Cores @($monitor.Cpu.Cores).Count
+
+    Assert-True ($null -ne $monitor.Memory) 'no memory sample'
+    Assert-True ($monitor.Memory.Total -gt 0) 'total memory is not positive'
+    Assert-True ($monitor.Memory.Used -le $monitor.Memory.Total) 'used memory exceeds total'
+
+    Assert-True (@($monitor.Disks).Count -ge 1) 'no fixed disk was found'
+    Assert-True (@($monitor.Processes).Count -gt 10) 'suspiciously few processes'
+
+    # The history rings only take a value once there is a delta behind it.
+    Assert-True ($monitor.CpuHistory.Count -ge 1) 'no CPU history was recorded'
+    Assert-True ($monitor.MemHistory.Count -ge 2) 'no memory history was recorded'
+
+    foreach ($proc in @($monitor.Processes)) {
+        Assert-True ($proc.Id -ge 0) "process id $($proc.Id) is negative"
+        Assert-True ($proc.Cpu -ge 0 -and $proc.Cpu -le 100) "process CPU is $($proc.Cpu)"
+    }
+}
+
+Test-Case 'the console frame fits the window it is drawn into' {
+    # Write-Frame homes the cursor to the top of the buffer to repaint. A frame
+    # as tall as the window scrolls it by one on the final newline, which moves
+    # (0,0) off screen and breaks every later repaint - so the layout has to
+    # leave at least one row spare.
+    $monitor = New-TaskMonitor
+    Update-TaskMonitor -Monitor $monitor | Out-Null
+    Start-Sleep -Milliseconds 250
+    Update-TaskMonitor -Monitor $monitor | Out-Null
+
+    foreach ($height in @(24, 30, 50)) {
+        $header = @(New-TaskHeaderLines -Monitor $monitor -Width 100)
+        $viewport = [Math]::Max(3, $height - $TaskChromeRows - $header.Count)
+
+        # Seven rows of chrome: blank, title, rule, column header, rule, status,
+        # keys. The body is the viewport.
+        $frameHeight = 7 + $header.Count + $viewport
+        Assert-True ($frameHeight -lt $height) "at height $height the frame is $frameHeight rows"
+    }
+}
+
+Test-Case 'the key hint fits an 80-column window' {
+    # Write-Frame truncates at the window width, and the tail of this line is
+    # 'esc back' - the one key someone stuck in the monitor needs to find.
+    $hint = Get-TaskKeyHint
+    Assert-True ($hint.Length -le 79) "the hint is $($hint.Length) characters"
+    Assert-True ($hint -match 'esc back$') 'the hint does not end with the way out'
+
+    foreach ($key in @('up/down', 'sort', 'kill', 'filter', 'pause')) {
+        Assert-True ($hint -match [regex]::Escape($key)) "the hint never mentions $key"
+    }
+}
+
+Test-Case 'every gauge line fits the width it was given' {
+    $monitor = New-TaskMonitor
+    Update-TaskMonitor -Monitor $monitor | Out-Null
+    Start-Sleep -Milliseconds 250
+    Update-TaskMonitor -Monitor $monitor | Out-Null
+
+    # 78 is the narrow case: an 80-column console. Anything wider than the
+    # window gets cut off mid-graph.
+    foreach ($width in @(78, 100, 140)) {
+        foreach ($line in @(New-TaskHeaderLines -Monitor $monitor -Width $width)) {
+            Assert-True ($line.Text.Length -le $width) `
+                "at width $width a gauge line is $($line.Text.Length): $($line.Text)"
+        }
+    }
+}
+
+Test-Case 'table rows and the header line up column for column' {
+    $header = New-TaskTableRow -Pointer ' ' -Id 'PID' -Name 'NAME' -Cpu 'CPU%' -Memory 'MEMORY' `
+        -Threads 'THR' -Time 'CPU TIME' -NameWidth 20 -Wide
+    $row = New-TaskTableRow -Pointer '>' -Id '4321' -Name 'powershell' -Cpu '12.5' -Memory '119M' `
+        -Threads '19' -Time '0:00:07' -NameWidth 20 -Wide
+
+    Assert-Equal $header.Length $row.Length
+
+    # A name longer than its column is truncated, not allowed to shove every
+    # column after it out of line.
+    $long = New-TaskTableRow -Pointer ' ' -Id '1' -Name ('x' * 60) -Cpu '0.0' -Memory '1M' `
+        -Threads '1' -Time '0:00:00' -NameWidth 20 -Wide
+    Assert-Equal $header.Length $long.Length
+
+    # The narrow layout drops the two rightmost columns rather than wrapping.
+    $narrow = New-TaskTableRow -Pointer ' ' -Id '1' -Name 'short' -Cpu '0.0' -Memory '1M' `
+        -Threads '1' -Time '0:00:00' -NameWidth 20
+    Assert-True ($narrow.Length -lt $header.Length) 'the narrow row is not narrower'
+}
+
+# -----------------------------------------------------------------------------
 Write-Section 'GUI'
 
 $xamlPath = Join-Path $RepoRoot 'data/gui.xaml'
@@ -1154,6 +1506,17 @@ if (Test-StaApartment) {
 
             # One drawn row per step, built from the presets rather than XAML.
             Assert-Equal @(Get-OneClickSteps).Count $gui.Ui.OneClickSteps.Children.Count
+
+            # The task page exists, is wired, and is not sampling until it is
+            # looked at - a CIM round trip a second is not free.
+            Assert-True ($null -ne $gui.Ui.TasksPanel) 'no task panel'
+            Assert-True ($null -ne $gui.Ui.TaskRows) 'no process table'
+            Assert-Equal 'Tasks' $gui.NavNames[1]
+            Assert-Equal 'Collapsed' ([string]$gui.Ui.TasksPanel.Visibility)
+            Assert-True (-not $Ctx.Gui.TaskTimer.IsEnabled) 'the sampler is running on a page nobody opened'
+
+            # Sort picker: one entry per sort key the engine understands.
+            Assert-Equal 4 $gui.Ui.TaskSort.Items.Count
 
             # A nav item with no panel behind it would silently show nothing.
             Assert-Equal $gui.Ui.NavList.Items.Count $gui.NavNames.Count

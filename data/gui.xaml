@@ -325,6 +325,58 @@
       <Setter Property="FontFamily" Value="Segoe UI"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
     </Style>
+
+    <!-- The process table. WPF's stock ListView chrome is light grey with a
+         blue selection, which on this palette reads as a control from another
+         application, so the item and the column header are both retemplated. -->
+    <Style TargetType="ListView">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="FontFamily" Value="Consolas"/>
+      <Setter Property="FontSize" Value="12"/>
+    </Style>
+
+    <Style TargetType="ListViewItem">
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="Padding" Value="0,3"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ListViewItem">
+            <Border x:Name="Chrome" Background="Transparent" CornerRadius="4" Padding="{TemplateBinding Padding}">
+              <GridViewRowPresenter Columns="{TemplateBinding GridView.ColumnCollection}"
+                                    Content="{TemplateBinding Content}"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="#FF130E1F"/>
+              </Trigger>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="#FF2A1B4D"/>
+                <Setter Property="Foreground" Value="{StaticResource Text}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style TargetType="GridViewColumnHeader">
+      <Setter Property="Foreground" Value="{StaticResource Faint}"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="FontSize" Value="10.5"/>
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="GridViewColumnHeader">
+            <Border Background="Transparent" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1"
+                    Padding="6,5">
+              <ContentPresenter HorizontalAlignment="Left"/>
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
   </Window.Resources>
 
   <Grid>
@@ -368,6 +420,7 @@
         <ListBox x:Name="NavList" Background="Transparent" BorderThickness="0" Margin="0,12,0,0"
                  ItemContainerStyle="{StaticResource NavItem}">
           <ListBoxItem Content="One click" IsSelected="True"/>
+          <ListBoxItem Content="Tasks"/>
           <ListBoxItem Content="Tweaks"/>
           <ListBoxItem Content="Apps"/>
           <ListBoxItem Content="Store"/>
@@ -454,6 +507,147 @@
                 </Grid>
               </Border>
             </ScrollViewer>
+          </Grid>
+
+          <!-- Task manager. The meters and the per-core strip are drawn in code
+               from the same sampler the console monitor uses; only the frame
+               lives here. -->
+          <Grid x:Name="TasksPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Tasks" Style="{StaticResource PageTitle}"/>
+              <TextBlock x:Name="TaskSummary" FontSize="11" Foreground="{StaticResource Faint}"
+                         VerticalAlignment="Center" Margin="12,3,0,0"/>
+            </StackPanel>
+
+            <!-- Four meters across the top: CPU, memory, disk, network. -->
+            <Grid Grid.Row="1" Margin="0,0,0,10">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+
+              <Border Grid.Column="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                      BorderThickness="1" CornerRadius="8" Padding="12,8" Margin="0,0,5,0">
+                <StackPanel>
+                  <TextBlock Text="CPU" FontSize="10.5" Foreground="{StaticResource Faint}"/>
+                  <TextBlock x:Name="CpuValue" Text="--" FontSize="20" Foreground="{StaticResource Text}" Margin="0,1,0,0"/>
+                  <ProgressBar x:Name="CpuBar" Height="4" Minimum="0" Maximum="100" Margin="0,6,0,0"/>
+                  <TextBlock x:Name="CpuDetail" Text="" FontSize="10.5" Foreground="{StaticResource Muted}"
+                             Margin="0,6,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+              </Border>
+
+              <Border Grid.Column="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                      BorderThickness="1" CornerRadius="8" Padding="12,8" Margin="5,0,5,0">
+                <StackPanel>
+                  <TextBlock Text="MEMORY" FontSize="10.5" Foreground="{StaticResource Faint}"/>
+                  <TextBlock x:Name="MemValue" Text="--" FontSize="20" Foreground="{StaticResource Text}" Margin="0,1,0,0"/>
+                  <ProgressBar x:Name="MemBar" Height="4" Minimum="0" Maximum="100" Margin="0,6,0,0"/>
+                  <TextBlock x:Name="MemDetail" Text="" FontSize="10.5" Foreground="{StaticResource Muted}"
+                             Margin="0,6,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+              </Border>
+
+              <Border Grid.Column="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                      BorderThickness="1" CornerRadius="8" Padding="12,8" Margin="5,0,5,0">
+                <StackPanel>
+                  <TextBlock Text="DISK" FontSize="10.5" Foreground="{StaticResource Faint}"/>
+                  <TextBlock x:Name="DiskValue" Text="--" FontSize="20" Foreground="{StaticResource Text}" Margin="0,1,0,0"/>
+                  <ProgressBar x:Name="DiskBar" Height="4" Minimum="0" Maximum="100" Margin="0,6,0,0"/>
+                  <TextBlock x:Name="DiskDetail" Text="" FontSize="10.5" Foreground="{StaticResource Muted}"
+                             Margin="0,6,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+              </Border>
+
+              <Border Grid.Column="3" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                      BorderThickness="1" CornerRadius="8" Padding="12,8" Margin="5,0,0,0">
+                <StackPanel>
+                  <TextBlock Text="NETWORK" FontSize="10.5" Foreground="{StaticResource Faint}"/>
+                  <TextBlock x:Name="NetValue" Text="--" FontSize="20" Foreground="{StaticResource Text}" Margin="0,1,0,0"/>
+                  <!-- The history graph goes here, drawn as a polyline. -->
+                  <Border Height="4" Margin="0,6,0,0"/>
+                  <TextBlock x:Name="NetDetail" Text="" FontSize="10.5" Foreground="{StaticResource Muted}"
+                             Margin="0,6,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+              </Border>
+            </Grid>
+
+            <!-- CPU history and the per-core strip. -->
+            <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="8" Padding="12,8" Margin="0,0,0,10">
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*"/>
+                  <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Canvas x:Name="CpuGraph" Grid.Column="0" Height="46" ClipToBounds="True"
+                        HorizontalAlignment="Stretch" Background="Transparent"/>
+                <StackPanel x:Name="CoreStrip" Grid.Column="1" Orientation="Horizontal" Margin="14,0,0,0"
+                            VerticalAlignment="Bottom"/>
+              </Grid>
+            </Border>
+
+            <!-- Process table. -->
+            <Grid Grid.Row="3">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+
+              <DockPanel Grid.Row="0" Margin="0,0,0,10" LastChildFill="False">
+                <Grid Width="200" DockPanel.Dock="Left" Margin="0,0,8,0">
+                  <TextBox x:Name="TaskSearch" ToolTip="Filter by process name or pid"/>
+                  <TextBlock Text="Filter processes">
+                    <TextBlock.Style>
+                      <Style TargetType="TextBlock" BasedOn="{StaticResource Watermark}">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <Style.Triggers>
+                          <DataTrigger Binding="{Binding Text, ElementName=TaskSearch}" Value="">
+                            <Setter Property="Visibility" Value="Visible"/>
+                          </DataTrigger>
+                        </Style.Triggers>
+                      </Style>
+                    </TextBlock.Style>
+                  </TextBlock>
+                </Grid>
+                <ComboBox x:Name="TaskSort" Width="150" DockPanel.Dock="Left" Margin="0,0,8,0"
+                          ToolTip="Sort the process list"/>
+                <Button x:Name="BtnTaskPause" Content="Pause" DockPanel.Dock="Left"
+                        ToolTip="Stop refreshing so the list holds still"/>
+                <Button x:Name="BtnTaskKill" Content="End process" DockPanel.Dock="Right" Margin="8,0,0,0"
+                        ToolTip="End the selected process"/>
+              </DockPanel>
+
+              <Border Grid.Row="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                      BorderThickness="1" CornerRadius="8">
+                <!-- A ListView rather than hand-built rows: the process list is
+                     replaced wholesale every second, and virtualisation is what
+                     keeps that cheap with 150-plus processes. -->
+                <ListView x:Name="TaskRows" Background="Transparent" BorderThickness="0" Margin="4"
+                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                  <ListView.View>
+                    <GridView AllowsColumnReorder="False">
+                      <GridViewColumn Header="PID" Width="70" DisplayMemberBinding="{Binding Id}"/>
+                      <GridViewColumn Header="Name" Width="240" DisplayMemberBinding="{Binding Name}"/>
+                      <GridViewColumn Header="CPU %" Width="80" DisplayMemberBinding="{Binding CpuText}"/>
+                      <GridViewColumn Header="Memory" Width="100" DisplayMemberBinding="{Binding MemoryText}"/>
+                      <GridViewColumn Header="Threads" Width="80" DisplayMemberBinding="{Binding Threads}"/>
+                      <GridViewColumn Header="CPU time" Width="100" DisplayMemberBinding="{Binding TimeText}"/>
+                    </GridView>
+                  </ListView.View>
+                </ListView>
+              </Border>
+            </Grid>
           </Grid>
 
           <Grid x:Name="TweaksPanel" Visibility="Collapsed">

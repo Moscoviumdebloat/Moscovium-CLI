@@ -550,6 +550,7 @@ function Show-MainMenu {
         [pscustomobject]@{ Name = 'Apps';     Hint = "$($Ctx.Apps.Count) curated packages";                    Action = 'apps' }
         [pscustomobject]@{ Name = 'Toolbox';  Hint = 'Debloat scripts, network, boot, control panels';         Action = 'toolbox' }
         [pscustomobject]@{ Name = 'Profiles'; Hint = 'Save or run a setup checklist';                          Action = 'profiles' }
+        [pscustomobject]@{ Name = 'Tasks';    Hint = 'Live CPU, memory, disk, network and processes';          Action = 'tasks' }
         [pscustomobject]@{ Name = 'Status';   Hint = 'What is currently applied on this machine';              Action = 'status' }
         [pscustomobject]@{ Name = 'GUI';      Hint = 'Open the same thing as a window';                       Action = 'gui' }
         [pscustomobject]@{ Name = 'Quit';     Hint = '';                                                       Action = 'quit' }
@@ -573,6 +574,7 @@ function Show-MainMenu {
             'apps'     { Show-AppMenu }
             'toolbox'  { Show-ToolboxMenu }
             'profiles' { Show-ProfileMenu }
+            'tasks'    { Show-TaskManager }
             'status'   { Write-Banner; Show-TweakStatus; Wait-ForKey }
             'gui'      { Clear-Host; Show-Gui | Out-Null; Clear-Host }
             'quit'     { return }

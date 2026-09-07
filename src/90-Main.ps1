@@ -29,6 +29,7 @@ function Show-Help {
     Write-Line ''
     Write-Line '  OTHER' -Color White
     Write-Line '    -Gui               open the graphical interface' -Color Gray
+    Write-Line '    -Tasks             live task manager: CPU, memory, disk, network, processes' -Color Gray
     Write-Line '    -Toolbox <id>      run a toolbox action (see -List toolbox)' -Color Gray
     Write-Line '    -Profile <path>    run a saved setup profile' -Color Gray
     Write-Line '    -SaveProfile <path>  write the current -Apply/-Install selection as a profile' -Color Gray
@@ -217,6 +218,11 @@ function Invoke-Main {
     }
 
     if (& $has 'Gui') { return (Show-Gui -BoundParameters $Bound) }
+
+    # Its own screen, like the GUI: it takes over the console until you leave it,
+    # so it does not combine with the one-shot actions below. With output
+    # redirected it prints a single snapshot instead.
+    if (& $has 'Tasks') { Show-TaskManager; return 0 }
 
     $didSomething = $false
 
