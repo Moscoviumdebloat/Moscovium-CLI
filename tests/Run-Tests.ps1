@@ -1371,6 +1371,29 @@ Test-Case 'applying a scheme registers it and clears the roles it does not cover
     Assert-True ($source -match 'foreach \(\$role in \$roles\.Keys\)[\s\S]{0,400}\$value = ''''') 'uncovered roles are not cleared'
 }
 
+Test-Case 'the two games look in their own cfg folders' {
+    # The CS2 update moved cfg down into game\csgo\; the legacy CS:GO depot
+    # still uses the original csgo\ path. The desktop app searches the CS2 path
+    # for both of its pages, so its CS:GO page writes into the CS2 folder -
+    # with separate tabs here, each looks in its own place.
+    $cs2 = Get-CsConfigRelativePath -Game CS2
+    $csgo = Get-CsConfigRelativePath -Game CSGO
+
+    Assert-True ($cs2 -ne $csgo) 'both games resolve to one path'
+    Assert-Equal 'steamapps\common\Counter-Strike Global Offensive\game\csgo\cfg' $cs2
+    Assert-Equal 'steamapps\common\Counter-Strike Global Offensive\csgo\cfg' $csgo
+    Assert-Equal $cs2 (Get-CsConfigRelativePath)
+
+    # Both searches answer without throwing on a machine with neither installed.
+    foreach ($game in @('CS2', 'CSGO')) {
+        $folders = @(Find-CsConfigFolder -Game $game)
+        foreach ($folder in $folders) {
+            Assert-True (Test-Path -LiteralPath $folder) "$game reported a folder that is not there: $folder"
+            Assert-True ($folder.EndsWith((Get-CsConfigRelativePath -Game $game))) "$game returned a $game-wrong path: $folder"
+        }
+    }
+}
+
 Test-Case 'CS2 and CS:GO have their own launch options' {
     $cs2 = Get-CsLaunchOption -Game CS2
     $csgo = Get-CsLaunchOption -Game CSGO
@@ -1388,8 +1411,39 @@ if (Test-StaApartment) {
         $gui = New-GuiWindow
         try {
             Assert-Equal @(Get-CursorPresets).Count $gui.Ui.CursorPresets.Children.Count
-            Assert-True ($null -ne $gui.Ui.BtnCsLaunchCsgo) 'no CS:GO launch button'
+        }
+        finally { $gui.Window.Close() }
+    }
+
+    Test-Case 'Counter-Strike has a page per game, both wired to their own game' {
+        Import-WpfAssembly
+        $gui = New-GuiWindow
+        try {
+            Assert-True ($null -ne $gui.Ui.Cs2Panel) 'no CS2 panel'
+            Assert-True ($null -ne $gui.Ui.CsgoPanel) 'no CS:GO panel'
+            Assert-True ($gui.NavNames -contains 'Counter-Strike 2') 'CS2 is not in the sidebar'
+            Assert-True ($gui.NavNames -contains 'CS:GO') 'CS:GO is not in the sidebar'
+
+            # Every nav item needs a panel behind it or it shows nothing.
+            Assert-Equal $gui.Ui.NavList.Items.Count $gui.NavNames.Count
+
+            # Each page shows its own game's launch options, filled in at open.
+            Assert-Equal (Get-CsLaunchOption -Game CS2) $gui.Ui.Cs2LaunchText.Text
+            Assert-Equal (Get-CsLaunchOption -Game CSGO) $gui.Ui.CsgoLaunchText.Text
+            Assert-True ($gui.Ui.Cs2LaunchText.Text -ne $gui.Ui.CsgoLaunchText.Text) 'both pages show one string'
+
+            # And its own folder search, so the two texts describe different paths
+            # when neither game is installed.
+            foreach ($name in @('CsFolderText', 'CsgoFolderText')) {
+                Assert-True (-not [string]::IsNullOrWhiteSpace($gui.Ui[$name].Text)) "$name was never filled in"
+            }
+
+            # yabosen.cfg is a CS2 config, so only that page offers it.
+            Assert-True ($null -ne $gui.Ui.BtnCsDefault) 'no yabosen.cfg button on the CS2 page'
+            Assert-True ($null -ne $gui.Ui.BtnCsFile) 'no CS2 cfg button'
+            Assert-True ($null -ne $gui.Ui.BtnCsgoFile) 'no CS:GO cfg button'
             Assert-True ($null -ne $gui.Ui.BtnCsLaunch) 'no CS2 launch button'
+            Assert-True ($null -ne $gui.Ui.BtnCsLaunchCsgo) 'no CS:GO launch button'
         }
         finally { $gui.Window.Close() }
     }

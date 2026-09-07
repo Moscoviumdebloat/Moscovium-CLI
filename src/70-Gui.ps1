@@ -1109,15 +1109,22 @@ function New-GuiGuideCard {
     return $outer
 }
 
+# Both game pages, each looking in its own cfg path. Called at window-open and
+# again after an install, so a folder that appears in between is picked up.
 function Update-GuiCsFolderText {
     if (-not $Ctx.Gui) { return }
 
-    $folders = @(Find-CsConfigFolder)
-    $Ctx.Gui.Ui.CsFolderText.Text = if ($folders.Count -eq 0) {
-        'No Counter-Strike cfg folder found. Is it installed through Steam?'
-    }
-    else {
-        "Found $($folders.Count) cfg folder(s):" + [Environment]::NewLine + ($folders -join [Environment]::NewLine)
+    foreach ($pair in @(@('CS2', 'CsFolderText', 'Cs2LaunchText'), @('CSGO', 'CsgoFolderText', 'CsgoLaunchText'))) {
+        $game = $pair[0]
+        $folders = @(Find-CsConfigFolder -Game $game)
+
+        $text = "No cfg folder found. Looked for $(Get-CsConfigRelativePath -Game $game) on every ready drive."
+        if ($folders.Count -gt 0) {
+            $text = "Found $($folders.Count) cfg folder(s):" + [Environment]::NewLine + ($folders -join [Environment]::NewLine)
+        }
+
+        $Ctx.Gui.Ui[$pair[1]].Text = $text
+        $Ctx.Gui.Ui[$pair[2]].Text = Get-CsLaunchOption -Game $game
     }
 }
 
@@ -1148,7 +1155,9 @@ function New-GuiWindow {
         'CpuGraph', 'CoreStrip', 'TaskRows', 'TaskSearch', 'TaskSort', 'BtnTaskPause', 'BtnTaskKill',
         'StoreRows', 'BtnStoreRefresh', 'BtnStoreInstall', 'GuideRows',
         'CursorPresets', 'BtnCursorInstall', 'BtnCursorRestore', 'WallpaperStyle', 'BtnWallpaper', 'BtnCsLaunchCsgo',
-        'CsFolderText', 'BtnCsDefault', 'BtnCsFile', 'BtnCsLaunch',
+        'Cs2Panel', 'CsgoPanel', 'CsFolderText', 'CsgoFolderText',
+        'Cs2LaunchText', 'CsgoLaunchText',
+        'BtnCsDefault', 'BtnCsFile', 'BtnCsgoFile', 'BtnCsLaunch',
         'InstallPath', 'BtnBrowseInstallPath', 'GitHubToken', 'BtnSaveSettings', 'BtnOpenStateFolder',
         'TweakSearch', 'TweakCategory', 'TweakRows', 'BtnApply', 'BtnRevert', 'BtnTweakAll', 'BtnTweakNone',
         'AppSearch', 'AppCategory', 'AppRows', 'BtnInstall', 'BtnAppNone',
@@ -1254,8 +1263,8 @@ function New-GuiWindow {
 
     # Order has to match the ListBoxItems in the XAML and the $panels array in
     # the SelectionChanged handler. -1 means "no count worth showing".
-    $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Customization', 'Profiles', 'Settings')
-    $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, @(Get-CustomizationTools).Count, -1, -1)
+    $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Counter-Strike 2', 'CS:GO', 'Customization', 'Profiles', 'Settings')
+    $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1, @(Get-CustomizationTools).Count, -1, -1)
 
     # The item Content becomes a DockPanel below, so the labels are no longer
     # readable off the ListBox. Keep them where a handler can still find them.
@@ -1309,6 +1318,7 @@ function New-GuiWindow {
         $panels = @($Ctx.Gui.Ui.OneClickPanel, $Ctx.Gui.Ui.TasksPanel, $Ctx.Gui.Ui.TweaksPanel,
                     $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.PackagesPanel, $Ctx.Gui.Ui.StorePanel,
                     $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.GuidesPanel, $Ctx.Gui.Ui.PersonalizePanel,
+                    $Ctx.Gui.Ui.Cs2Panel, $Ctx.Gui.Ui.CsgoPanel,
                     $Ctx.Gui.Ui.CustomizationPanel, $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
         for ($i = 0; $i -lt $panels.Count; $i++) {
             $panels[$i].Visibility = if ($i -eq $sender.SelectedIndex) { 'Visible' } else { 'Collapsed' }
@@ -1513,7 +1523,7 @@ function New-GuiWindow {
     })
 
     $ui.BtnCsDefault.Add_Click({
-        Invoke-GuiWork -Label 'installing config' -Work { Install-CsConfig }
+        Invoke-GuiWork -Label 'installing config' -Work { Install-CsConfig -Game CS2 }
         Update-GuiCsFolderText
     })
 
@@ -1523,7 +1533,18 @@ function New-GuiWindow {
         if ($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { return }
 
         $cfg = $dialog.FileName
-        Invoke-GuiWork -Label 'installing config' -Work { Install-CsConfig -LocalPath $cfg }
+        Invoke-GuiWork -Label 'installing config' -Work { Install-CsConfig -LocalPath $cfg -Game CS2 }
+        Update-GuiCsFolderText
+    })
+
+    $ui.BtnCsgoFile.Add_Click({
+        $dialog = New-Object Windows.Forms.OpenFileDialog
+        $dialog.Filter = 'Counter-Strike config (*.cfg)|*.cfg'
+        if ($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { return }
+
+        $cfg = $dialog.FileName
+        Invoke-GuiWork -Label 'installing config' -Work { Install-CsConfig -LocalPath $cfg -Game CSGO }
+        Update-GuiCsFolderText
     })
 
     $ui.BtnCsLaunch.Add_Click({

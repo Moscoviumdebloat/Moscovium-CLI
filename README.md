@@ -28,7 +28,8 @@ which ships with Windows, is enough.
 | **16 toolbox actions** | WinUtil, Win11Debloat, Windows Update policy, TCP autotuning, dynamic tick, CPU priority, and the classic control panels - each on its own, when you do not want the whole box. |
 | **6 guides** | The manual walkthroughs - BIOS, GPU control panels, network - that no tool can do for you. |
 | **App store** | Community releases from the Moscovium dev orgs on GitHub. |
-| **Personalise** | The desktop app's six cursor packs, fetched on demand, plus your own; wallpaper; Counter-Strike configs and launch options for CS2 and CS:GO. |
+| **Personalise** | The desktop app's six cursor packs, fetched on demand, plus your own, and wallpaper. |
+| **Counter-Strike** | A page per game, as the desktop app has: configs and launch options for CS2 and for CS:GO. |
 | **Profiles** | Setup checklists, interchangeable with the desktop app's. |
 | **Two front-ends** | The same engine drives a terminal UI and a window. `-Gui` opens the window. |
 
@@ -248,13 +249,34 @@ It circumvents licensing, the same reason MAS is not in the catalog.
 .\moscovium.ps1 -CsConfig yabosen               # or a path to your own .cfg
 ```
 
-Also a Personalise screen in the menu, with CS2 and CS:GO launch options.
+Also a Personalise screen in the menu.
 
 The desktop app's three cursor packs are 345 files - too much to carry in a
 single script. So a preset is fetched when you pick it: the seventeen files
 Windows has roles for, straight from the desktop app's own repository, then
 applied and registered under Mouse Properties exactly as the desktop app does.
 Cursors are per-user and `-Cursor default` puts them back.
+
+### Counter-Strike
+
+A page per game in the window and a screen per game in the menu, the way the
+desktop app splits them - because the two differ in more than the title:
+
+|  | CS2 | CS:GO |
+|---|---|---|
+| cfg folder | `...\Counter-Strike Global Offensive\game\csgo\cfg` | `...\Counter-Strike Global Offensive\csgo\cfg` |
+| launch options | `-high -novid -allow_third_party_software -tickrate 128 -noaafonts` | `-tickrate 128 -allow_third_party_software +exec autoexec -freq 180` |
+| yabosen.cfg | yes | not offered - it is a CS2 config |
+
+The CS2 update moved cfg down into `game\csgo\`; the legacy CS:GO depot still
+uses the original path. The desktop app searches the CS2 path for both of its
+pages, so its CS:GO page writes into the CS2 folder - here each page looks in
+its own place.
+
+```powershell
+.\moscovium.ps1 -CsConfig yabosen        # CS2, from Yabosen/YabosenCFG
+.\moscovium.ps1 -CsConfig C:\my.cfg      # into every CS2 cfg folder found
+```
 
 ### Toolbox
 

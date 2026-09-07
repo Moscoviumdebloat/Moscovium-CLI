@@ -290,7 +290,9 @@
       <Setter Property="Foreground" Value="{StaticResource Muted}"/>
       <Setter Property="FontFamily" Value="Segoe UI"/>
       <Setter Property="FontSize" Value="14"/>
-      <Setter Property="Padding" Value="18,12"/>
+      <!-- 9 rather than 12: fourteen pages at the roomier padding overflowed
+           the sidebar at the window's minimum height and clipped Settings. -->
+      <Setter Property="Padding" Value="18,9"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
         <Setter.Value>
@@ -428,6 +430,8 @@
           <ListBoxItem Content="Toolbox"/>
           <ListBoxItem Content="Guides"/>
           <ListBoxItem Content="Personalise"/>
+          <ListBoxItem Content="Counter-Strike 2"/>
+          <ListBoxItem Content="CS:GO"/>
           <ListBoxItem Content="Customization"/>
           <ListBoxItem Content="Profiles"/>
           <ListBoxItem Content="Settings"/>
@@ -868,23 +872,88 @@
                   </StackPanel>
                 </Border>
 
-                <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
-                        CornerRadius="8" Padding="16">
-                  <StackPanel>
-                    <TextBlock Text="Counter-Strike configs" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                    <TextBlock x:Name="CsFolderText" Foreground="{StaticResource Muted}" FontSize="12"
-                               TextWrapping="Wrap" Margin="0,0,0,12" Text="Looking for a cfg folder..."/>
-                    <StackPanel Orientation="Horizontal">
-                      <Button x:Name="BtnCsDefault" Content="Install yabosen.cfg" Style="{StaticResource Primary}"/>
-                      <Button x:Name="BtnCsFile" Content="Install a .cfg"/>
-                      <Button x:Name="BtnCsLaunch" Content="Copy CS2 launch options"/>
-                      <Button x:Name="BtnCsLaunchCsgo" Content="Copy CS:GO launch options"/>
-                    </StackPanel>
-                  </StackPanel>
-                </Border>
-
               </StackPanel>
             </ScrollViewer>
+          </Grid>
+
+          <!-- Counter-Strike gets a page per game, as it does in the desktop
+               app. The two differ in more than the title: different launch
+               options, different cfg paths, and yabosen.cfg is a CS2 config. -->
+          <Grid x:Name="Cs2Panel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Counter-Strike 2" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+
+            <Border Grid.Row="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                    CornerRadius="8" Padding="16" Margin="0,0,0,12">
+              <StackPanel>
+                <TextBlock Text="Configs" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <TextBlock x:Name="CsFolderText" Foreground="{StaticResource Muted}" FontSize="12"
+                           TextWrapping="Wrap" Margin="0,0,0,12" Text="Looking for a cfg folder..."/>
+                <StackPanel Orientation="Horizontal">
+                  <Button x:Name="BtnCsDefault" Content="Install yabosen.cfg" Style="{StaticResource Primary}"/>
+                  <Button x:Name="BtnCsFile" Content="Install a .cfg"/>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+
+            <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                    CornerRadius="8" Padding="16">
+              <StackPanel>
+                <TextBlock Text="Launch options" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <TextBlock x:Name="Cs2LaunchText" Foreground="{StaticResource Muted}" FontSize="12"
+                           FontFamily="Consolas" TextWrapping="Wrap" Margin="0,0,0,12" Text=""/>
+                <StackPanel Orientation="Horizontal">
+                  <Button x:Name="BtnCsLaunch" Content="Copy to clipboard"/>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+          </Grid>
+
+          <Grid x:Name="CsgoPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="CS:GO" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+
+            <Border Grid.Row="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                    CornerRadius="8" Padding="16" Margin="0,0,0,12">
+              <StackPanel>
+                <TextBlock Text="Configs" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <TextBlock x:Name="CsgoFolderText" Foreground="{StaticResource Muted}" FontSize="12"
+                           TextWrapping="Wrap" Margin="0,0,0,12" Text="Looking for a cfg folder..."/>
+                <StackPanel Orientation="Horizontal">
+                  <Button x:Name="BtnCsgoFile" Content="Install a .cfg" Style="{StaticResource Primary}"/>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+
+            <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                    CornerRadius="8" Padding="16">
+              <StackPanel>
+                <TextBlock Text="Launch options" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <TextBlock x:Name="CsgoLaunchText" Foreground="{StaticResource Muted}" FontSize="12"
+                           FontFamily="Consolas" TextWrapping="Wrap" Margin="0,0,0,12" Text=""/>
+                <StackPanel Orientation="Horizontal">
+                  <Button x:Name="BtnCsLaunchCsgo" Content="Copy to clipboard"/>
+                </StackPanel>
+              </StackPanel>
+            </Border>
           </Grid>
 
           <Grid x:Name="SettingsPanel" Visibility="Collapsed">

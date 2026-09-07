@@ -436,8 +436,24 @@ function Set-Wallpaper {
 
 # Steam can live on any drive, and a library folder can hold the game without
 # Steam itself being there, so every ready drive gets checked.
+# CS2 and CS:GO keep their configs in different places inside the same Steam
+# folder: the CS2 update moved cfg down into game\csgo\, and the legacy CS:GO
+# depot still uses the original csgo\ path. On a normal modern install only the
+# CS2 one exists, which is why the desktop app gets away with searching that
+# path for both of its pages - its CS:GO page writes into the CS2 folder.
+#
+# Now that the two have separate tabs here, each looks in its own place.
+function Get-CsConfigRelativePath {
+    param([ValidateSet('CS2', 'CSGO')][string]$Game = 'CS2')
+
+    if ($Game -eq 'CSGO') { return 'steamapps\common\Counter-Strike Global Offensive\csgo\cfg' }
+    return 'steamapps\common\Counter-Strike Global Offensive\game\csgo\cfg'
+}
+
 function Find-CsConfigFolder {
-    $relative = 'steamapps\common\Counter-Strike Global Offensive\game\csgo\cfg'
+    param([ValidateSet('CS2', 'CSGO')][string]$Game = 'CS2')
+
+    $relative = Get-CsConfigRelativePath -Game $Game
     $found = [System.Collections.Generic.List[string]]::new()
 
     $candidates = @(
@@ -472,12 +488,17 @@ function Install-CsConfig {
     param(
         [string]$Url = 'https://raw.githubusercontent.com/Yabosen/YabosenCFG/main/yabosen.cfg',
         [string]$FileName = 'yabosen.cfg',
-        [string]$LocalPath
+        [string]$LocalPath,
+        [ValidateSet('CS2', 'CSGO')][string]$Game = 'CS2'
     )
 
-    $folders = @(Find-CsConfigFolder)
+    $label = 'CS2'
+    if ($Game -eq 'CSGO') { $label = 'CS:GO' }
+
+    $folders = @(Find-CsConfigFolder -Game $Game)
     if ($folders.Count -eq 0) {
-        Write-Err 'No CS2 cfg folder found. Is Counter-Strike installed through Steam?'
+        Write-Err "No $label cfg folder found. Is it installed through Steam?"
+        Write-Info "Looked for: $(Get-CsConfigRelativePath -Game $Game)"
         return
     }
 

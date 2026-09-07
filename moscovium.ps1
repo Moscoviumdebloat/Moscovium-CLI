@@ -5,7 +5,7 @@
 
         irm https://moscovium.win | iex
 
-    Build aae5e5d634  (a digest of src/ and data/ - same sources, same id).
+    Build 91a9205372  (a digest of src/ and data/ - same sources, same id).
     Check with:  .\moscovium.ps1 -Version
 
     GENERATED FILE - do not edit.
@@ -6265,8 +6265,24 @@ param(
 
     # Steam can live on any drive, and a library folder can hold the game without
     # Steam itself being there, so every ready drive gets checked.
+    # CS2 and CS:GO keep their configs in different places inside the same Steam
+    # folder: the CS2 update moved cfg down into game\csgo\, and the legacy CS:GO
+    # depot still uses the original csgo\ path. On a normal modern install only the
+    # CS2 one exists, which is why the desktop app gets away with searching that
+    # path for both of its pages - its CS:GO page writes into the CS2 folder.
+    #
+    # Now that the two have separate tabs here, each looks in its own place.
+    function Get-CsConfigRelativePath {
+        param([ValidateSet('CS2', 'CSGO')][string]$Game = 'CS2')
+
+        if ($Game -eq 'CSGO') { return 'steamapps\common\Counter-Strike Global Offensive\csgo\cfg' }
+        return 'steamapps\common\Counter-Strike Global Offensive\game\csgo\cfg'
+    }
+
     function Find-CsConfigFolder {
-        $relative = 'steamapps\common\Counter-Strike Global Offensive\game\csgo\cfg'
+        param([ValidateSet('CS2', 'CSGO')][string]$Game = 'CS2')
+
+        $relative = Get-CsConfigRelativePath -Game $Game
         $found = [System.Collections.Generic.List[string]]::new()
 
         $candidates = @(
@@ -6301,12 +6317,17 @@ param(
         param(
             [string]$Url = 'https://raw.githubusercontent.com/Yabosen/YabosenCFG/main/yabosen.cfg',
             [string]$FileName = 'yabosen.cfg',
-            [string]$LocalPath
+            [string]$LocalPath,
+            [ValidateSet('CS2', 'CSGO')][string]$Game = 'CS2'
         )
 
-        $folders = @(Find-CsConfigFolder)
+        $label = 'CS2'
+        if ($Game -eq 'CSGO') { $label = 'CS:GO' }
+
+        $folders = @(Find-CsConfigFolder -Game $Game)
         if ($folders.Count -eq 0) {
-            Write-Err 'No CS2 cfg folder found. Is Counter-Strike installed through Steam?'
+            Write-Err "No $label cfg folder found. Is it installed through Steam?"
+            Write-Info "Looked for: $(Get-CsConfigRelativePath -Game $Game)"
             return
         }
 
@@ -8542,13 +8563,10 @@ param(
             $options.Add([pscustomobject]@{ Name = 'Cursors: from a folder of .cur/.ani'; Hint = 'Matched to roles by file name'; Action = 'folder'; Id = '' })
             $options.Add([pscustomobject]@{ Name = 'Cursors: restore Windows defaults';   Hint = '';                               Action = 'restore'; Id = '' })
             $options.Add([pscustomobject]@{ Name = 'Wallpaper';                           Hint = 'Any image, with a fit style';    Action = 'wallpaper'; Id = '' })
-            $options.Add([pscustomobject]@{ Name = 'CS2: install yabosen.cfg';           Hint = 'Into every Steam cfg folder found'; Action = 'cfg-default'; Id = '' })
-            $options.Add([pscustomobject]@{ Name = 'CS2: install a .cfg of yours';        Hint = '';                               Action = 'cfg-file'; Id = '' })
-            $options.Add([pscustomobject]@{ Name = 'CS2 launch options';                  Hint = (Get-CsLaunchOption -Game CS2);   Action = 'launch-cs2'; Id = '' })
-            $options.Add([pscustomobject]@{ Name = 'CS:GO launch options';                Hint = (Get-CsLaunchOption -Game CSGO);  Action = 'launch-csgo'; Id = '' })
 
+            # Counter-Strike has its own two screens - see Show-CsMenu.
             $result = Show-Selector -Items @($options) -Title 'Personalise' -SingleSelect `
-                -Subtitle 'Cursor packs fetched from the desktop app, wallpaper, Counter-Strike' `
+                -Subtitle 'Cursor packs fetched from the desktop app, and wallpaper' `
                 -Label { param($o) $o.Name } `
                 -Sublabel { param($o) $o.Hint }
 
@@ -8578,14 +8596,63 @@ param(
                         catch { Write-Err $_.Exception.Message }
                     }
                 }
-                'cfg-default' { Install-CsConfig }
+            }
+            Wait-ForKey
+        }
+    }
+
+    # One screen per game, the way the desktop app has one page per game. They
+    # differ in more than the title: the launch options are different strings, the
+    # cfg folders are different paths, and yabosen.cfg is a CS2 config.
+    function Show-CsMenu {
+        param([ValidateSet('CS2', 'CSGO')][string]$Game = 'CS2')
+
+        $label = 'CS2'
+        if ($Game -eq 'CSGO') { $label = 'CS:GO' }
+
+        while ($true) {
+            $folders = @(Find-CsConfigFolder -Game $Game)
+
+            $subtitle = "No cfg folder found - looked for $(Get-CsConfigRelativePath -Game $Game)"
+            if ($folders.Count -eq 1) { $subtitle = $folders[0] }
+            elseif ($folders.Count -gt 1) { $subtitle = "$($folders.Count) cfg folders found" }
+
+            $options = [System.Collections.Generic.List[object]]::new()
+
+            # yabosen.cfg is a CS2 config, so it is only offered there - which is
+            # also the only place the desktop app offers it.
+            if ($Game -eq 'CS2') {
+                $options.Add([pscustomobject]@{ Name = 'Install yabosen.cfg'; Hint = 'Downloaded from Yabosen/YabosenCFG'; Action = 'cfg-default' })
+            }
+            $options.Add([pscustomobject]@{ Name = 'Install a .cfg of yours'; Hint = 'Copied into every cfg folder found'; Action = 'cfg-file' })
+            $options.Add([pscustomobject]@{ Name = 'Launch options';          Hint = (Get-CsLaunchOption -Game $Game);   Action = 'launch' })
+            $options.Add([pscustomobject]@{ Name = 'Show the cfg folders';    Hint = '';                                 Action = 'folders' })
+
+            $result = Show-Selector -Items @($options) -Title $label -SingleSelect `
+                -Subtitle $subtitle `
+                -Label { param($o) $o.Name } `
+                -Sublabel { param($o) $o.Hint }
+
+            if (-not $result.Confirmed) { return }
+
+            Write-Banner
+            switch ($result.Selected[0].Action) {
+                'cfg-default' { Install-CsConfig -Game $Game }
                 'cfg-file' {
                     Write-Line '  Path to the .cfg: ' -Color Yellow -NoNewline
                     $cfg = [string](Read-Host)
-                    if ($cfg) { Install-CsConfig -LocalPath $cfg }
+                    if ($cfg) { Install-CsConfig -LocalPath $cfg -Game $Game }
                 }
-                'launch-cs2'  { Show-CsLaunchOption -Game CS2 }
-                'launch-csgo' { Show-CsLaunchOption -Game CSGO }
+                'launch' { Show-CsLaunchOption -Game $Game }
+                'folders' {
+                    Write-SectionHeading "$label cfg folders"
+                    if ($folders.Count -eq 0) {
+                        Write-Warn "None found. Looked for $(Get-CsConfigRelativePath -Game $Game) on every ready drive."
+                    }
+                    else {
+                        foreach ($folder in $folders) { Write-Ok $folder }
+                    }
+                }
             }
             Wait-ForKey
         }
@@ -8690,7 +8757,9 @@ param(
             [pscustomobject]@{ Name = 'Profiles'; Hint = 'Save or run a setup checklist';                          Action = 'profiles' }
             [pscustomobject]@{ Name = 'Packages'; Hint = 'Install Chocolatey or Scoop';                             Action = 'packages' }
             [pscustomobject]@{ Name = 'Customize'; Hint = 'Open-Shell, Nilesoft Shell, StartAllBack, ExplorerPatcher';  Action = 'customize' }
-            [pscustomobject]@{ Name = 'Personalise'; Hint = 'Cursor packs, wallpaper, Counter-Strike configs';         Action = 'personalise' }
+            [pscustomobject]@{ Name = 'Personalise'; Hint = 'Cursor packs and wallpaper';                              Action = 'personalise' }
+            [pscustomobject]@{ Name = 'Counter-Strike 2'; Hint = 'Configs and launch options';                         Action = 'cs2' }
+            [pscustomobject]@{ Name = 'CS:GO';        Hint = 'Configs and launch options for the legacy build';        Action = 'csgo' }
             [pscustomobject]@{ Name = 'Tasks';    Hint = 'Live CPU, memory, disk, network and processes';          Action = 'tasks' }
             [pscustomobject]@{ Name = 'Status';   Hint = 'What is currently applied on this machine';              Action = 'status' }
             [pscustomobject]@{ Name = 'GUI';      Hint = 'Open the same thing as a window';                       Action = 'gui' }
@@ -8718,6 +8787,8 @@ param(
                 'packages' { Show-PackageMenu }
                 'customize' { Show-CustomizationMenu }
                 'personalise' { Show-PersonalizeMenu }
+                'cs2'      { Show-CsMenu -Game CS2 }
+                'csgo'     { Show-CsMenu -Game CSGO }
                 'tasks'    { Show-TaskManager }
                 'status'   { Write-Banner; Show-TweakStatus; Wait-ForKey }
                 'gui'      { Clear-Host; Show-Gui | Out-Null; Clear-Host }
@@ -9821,7 +9892,9 @@ param(
       <Setter Property="Foreground" Value="{StaticResource Muted}"/>
       <Setter Property="FontFamily" Value="Segoe UI"/>
       <Setter Property="FontSize" Value="14"/>
-      <Setter Property="Padding" Value="18,12"/>
+      <!-- 9 rather than 12: fourteen pages at the roomier padding overflowed
+           the sidebar at the window's minimum height and clipped Settings. -->
+      <Setter Property="Padding" Value="18,9"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
         <Setter.Value>
@@ -9959,6 +10032,8 @@ param(
           <ListBoxItem Content="Toolbox"/>
           <ListBoxItem Content="Guides"/>
           <ListBoxItem Content="Personalise"/>
+          <ListBoxItem Content="Counter-Strike 2"/>
+          <ListBoxItem Content="CS:GO"/>
           <ListBoxItem Content="Customization"/>
           <ListBoxItem Content="Profiles"/>
           <ListBoxItem Content="Settings"/>
@@ -10399,23 +10474,88 @@ param(
                   </StackPanel>
                 </Border>
 
-                <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
-                        CornerRadius="8" Padding="16">
-                  <StackPanel>
-                    <TextBlock Text="Counter-Strike configs" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                    <TextBlock x:Name="CsFolderText" Foreground="{StaticResource Muted}" FontSize="12"
-                               TextWrapping="Wrap" Margin="0,0,0,12" Text="Looking for a cfg folder..."/>
-                    <StackPanel Orientation="Horizontal">
-                      <Button x:Name="BtnCsDefault" Content="Install yabosen.cfg" Style="{StaticResource Primary}"/>
-                      <Button x:Name="BtnCsFile" Content="Install a .cfg"/>
-                      <Button x:Name="BtnCsLaunch" Content="Copy CS2 launch options"/>
-                      <Button x:Name="BtnCsLaunchCsgo" Content="Copy CS:GO launch options"/>
-                    </StackPanel>
-                  </StackPanel>
-                </Border>
-
               </StackPanel>
             </ScrollViewer>
+          </Grid>
+
+          <!-- Counter-Strike gets a page per game, as it does in the desktop
+               app. The two differ in more than the title: different launch
+               options, different cfg paths, and yabosen.cfg is a CS2 config. -->
+          <Grid x:Name="Cs2Panel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Counter-Strike 2" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+
+            <Border Grid.Row="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                    CornerRadius="8" Padding="16" Margin="0,0,0,12">
+              <StackPanel>
+                <TextBlock Text="Configs" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <TextBlock x:Name="CsFolderText" Foreground="{StaticResource Muted}" FontSize="12"
+                           TextWrapping="Wrap" Margin="0,0,0,12" Text="Looking for a cfg folder..."/>
+                <StackPanel Orientation="Horizontal">
+                  <Button x:Name="BtnCsDefault" Content="Install yabosen.cfg" Style="{StaticResource Primary}"/>
+                  <Button x:Name="BtnCsFile" Content="Install a .cfg"/>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+
+            <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                    CornerRadius="8" Padding="16">
+              <StackPanel>
+                <TextBlock Text="Launch options" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <TextBlock x:Name="Cs2LaunchText" Foreground="{StaticResource Muted}" FontSize="12"
+                           FontFamily="Consolas" TextWrapping="Wrap" Margin="0,0,0,12" Text=""/>
+                <StackPanel Orientation="Horizontal">
+                  <Button x:Name="BtnCsLaunch" Content="Copy to clipboard"/>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+          </Grid>
+
+          <Grid x:Name="CsgoPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="CS:GO" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+
+            <Border Grid.Row="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                    CornerRadius="8" Padding="16" Margin="0,0,0,12">
+              <StackPanel>
+                <TextBlock Text="Configs" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <TextBlock x:Name="CsgoFolderText" Foreground="{StaticResource Muted}" FontSize="12"
+                           TextWrapping="Wrap" Margin="0,0,0,12" Text="Looking for a cfg folder..."/>
+                <StackPanel Orientation="Horizontal">
+                  <Button x:Name="BtnCsgoFile" Content="Install a .cfg" Style="{StaticResource Primary}"/>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+
+            <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                    CornerRadius="8" Padding="16">
+              <StackPanel>
+                <TextBlock Text="Launch options" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <TextBlock x:Name="CsgoLaunchText" Foreground="{StaticResource Muted}" FontSize="12"
+                           FontFamily="Consolas" TextWrapping="Wrap" Margin="0,0,0,12" Text=""/>
+                <StackPanel Orientation="Horizontal">
+                  <Button x:Name="BtnCsLaunchCsgo" Content="Copy to clipboard"/>
+                </StackPanel>
+              </StackPanel>
+            </Border>
           </Grid>
 
           <Grid x:Name="SettingsPanel" Visibility="Collapsed">
@@ -11617,15 +11757,22 @@ param(
         return $outer
     }
 
+    # Both game pages, each looking in its own cfg path. Called at window-open and
+    # again after an install, so a folder that appears in between is picked up.
     function Update-GuiCsFolderText {
         if (-not $Ctx.Gui) { return }
 
-        $folders = @(Find-CsConfigFolder)
-        $Ctx.Gui.Ui.CsFolderText.Text = if ($folders.Count -eq 0) {
-            'No Counter-Strike cfg folder found. Is it installed through Steam?'
-        }
-        else {
-            "Found $($folders.Count) cfg folder(s):" + [Environment]::NewLine + ($folders -join [Environment]::NewLine)
+        foreach ($pair in @(@('CS2', 'CsFolderText', 'Cs2LaunchText'), @('CSGO', 'CsgoFolderText', 'CsgoLaunchText'))) {
+            $game = $pair[0]
+            $folders = @(Find-CsConfigFolder -Game $game)
+
+            $text = "No cfg folder found. Looked for $(Get-CsConfigRelativePath -Game $game) on every ready drive."
+            if ($folders.Count -gt 0) {
+                $text = "Found $($folders.Count) cfg folder(s):" + [Environment]::NewLine + ($folders -join [Environment]::NewLine)
+            }
+
+            $Ctx.Gui.Ui[$pair[1]].Text = $text
+            $Ctx.Gui.Ui[$pair[2]].Text = Get-CsLaunchOption -Game $game
         }
     }
 
@@ -11656,7 +11803,9 @@ param(
             'CpuGraph', 'CoreStrip', 'TaskRows', 'TaskSearch', 'TaskSort', 'BtnTaskPause', 'BtnTaskKill',
             'StoreRows', 'BtnStoreRefresh', 'BtnStoreInstall', 'GuideRows',
             'CursorPresets', 'BtnCursorInstall', 'BtnCursorRestore', 'WallpaperStyle', 'BtnWallpaper', 'BtnCsLaunchCsgo',
-            'CsFolderText', 'BtnCsDefault', 'BtnCsFile', 'BtnCsLaunch',
+            'Cs2Panel', 'CsgoPanel', 'CsFolderText', 'CsgoFolderText',
+            'Cs2LaunchText', 'CsgoLaunchText',
+            'BtnCsDefault', 'BtnCsFile', 'BtnCsgoFile', 'BtnCsLaunch',
             'InstallPath', 'BtnBrowseInstallPath', 'GitHubToken', 'BtnSaveSettings', 'BtnOpenStateFolder',
             'TweakSearch', 'TweakCategory', 'TweakRows', 'BtnApply', 'BtnRevert', 'BtnTweakAll', 'BtnTweakNone',
             'AppSearch', 'AppCategory', 'AppRows', 'BtnInstall', 'BtnAppNone',
@@ -11762,8 +11911,8 @@ param(
 
         # Order has to match the ListBoxItems in the XAML and the $panels array in
         # the SelectionChanged handler. -1 means "no count worth showing".
-        $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Customization', 'Profiles', 'Settings')
-        $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, @(Get-CustomizationTools).Count, -1, -1)
+        $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Counter-Strike 2', 'CS:GO', 'Customization', 'Profiles', 'Settings')
+        $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1, @(Get-CustomizationTools).Count, -1, -1)
 
         # The item Content becomes a DockPanel below, so the labels are no longer
         # readable off the ListBox. Keep them where a handler can still find them.
@@ -11817,6 +11966,7 @@ param(
             $panels = @($Ctx.Gui.Ui.OneClickPanel, $Ctx.Gui.Ui.TasksPanel, $Ctx.Gui.Ui.TweaksPanel,
                         $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.PackagesPanel, $Ctx.Gui.Ui.StorePanel,
                         $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.GuidesPanel, $Ctx.Gui.Ui.PersonalizePanel,
+                        $Ctx.Gui.Ui.Cs2Panel, $Ctx.Gui.Ui.CsgoPanel,
                         $Ctx.Gui.Ui.CustomizationPanel, $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
             for ($i = 0; $i -lt $panels.Count; $i++) {
                 $panels[$i].Visibility = if ($i -eq $sender.SelectedIndex) { 'Visible' } else { 'Collapsed' }
@@ -12021,7 +12171,7 @@ param(
         })
 
         $ui.BtnCsDefault.Add_Click({
-            Invoke-GuiWork -Label 'installing config' -Work { Install-CsConfig }
+            Invoke-GuiWork -Label 'installing config' -Work { Install-CsConfig -Game CS2 }
             Update-GuiCsFolderText
         })
 
@@ -12031,7 +12181,18 @@ param(
             if ($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { return }
 
             $cfg = $dialog.FileName
-            Invoke-GuiWork -Label 'installing config' -Work { Install-CsConfig -LocalPath $cfg }
+            Invoke-GuiWork -Label 'installing config' -Work { Install-CsConfig -LocalPath $cfg -Game CS2 }
+            Update-GuiCsFolderText
+        })
+
+        $ui.BtnCsgoFile.Add_Click({
+            $dialog = New-Object Windows.Forms.OpenFileDialog
+            $dialog.Filter = 'Counter-Strike config (*.cfg)|*.cfg'
+            if ($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { return }
+
+            $cfg = $dialog.FileName
+            Invoke-GuiWork -Label 'installing config' -Work { Install-CsConfig -LocalPath $cfg -Game CSGO }
+            Update-GuiCsFolderText
         })
 
         $ui.BtnCsLaunch.Add_Click({
@@ -12593,4 +12754,4 @@ param(
         Restore-ConsoleEncoding -Previous $previousEncoding
     }
 
-} $PSBoundParameters '1.2.0' $SourceUrl 'aae5e5d634'
+} $PSBoundParameters '1.2.0' $SourceUrl '91a9205372'

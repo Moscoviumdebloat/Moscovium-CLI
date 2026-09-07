@@ -570,13 +570,10 @@ function Show-PersonalizeMenu {
         $options.Add([pscustomobject]@{ Name = 'Cursors: from a folder of .cur/.ani'; Hint = 'Matched to roles by file name'; Action = 'folder'; Id = '' })
         $options.Add([pscustomobject]@{ Name = 'Cursors: restore Windows defaults';   Hint = '';                               Action = 'restore'; Id = '' })
         $options.Add([pscustomobject]@{ Name = 'Wallpaper';                           Hint = 'Any image, with a fit style';    Action = 'wallpaper'; Id = '' })
-        $options.Add([pscustomobject]@{ Name = 'CS2: install yabosen.cfg';           Hint = 'Into every Steam cfg folder found'; Action = 'cfg-default'; Id = '' })
-        $options.Add([pscustomobject]@{ Name = 'CS2: install a .cfg of yours';        Hint = '';                               Action = 'cfg-file'; Id = '' })
-        $options.Add([pscustomobject]@{ Name = 'CS2 launch options';                  Hint = (Get-CsLaunchOption -Game CS2);   Action = 'launch-cs2'; Id = '' })
-        $options.Add([pscustomobject]@{ Name = 'CS:GO launch options';                Hint = (Get-CsLaunchOption -Game CSGO);  Action = 'launch-csgo'; Id = '' })
 
+        # Counter-Strike has its own two screens - see Show-CsMenu.
         $result = Show-Selector -Items @($options) -Title 'Personalise' -SingleSelect `
-            -Subtitle 'Cursor packs fetched from the desktop app, wallpaper, Counter-Strike' `
+            -Subtitle 'Cursor packs fetched from the desktop app, and wallpaper' `
             -Label { param($o) $o.Name } `
             -Sublabel { param($o) $o.Hint }
 
@@ -606,14 +603,63 @@ function Show-PersonalizeMenu {
                     catch { Write-Err $_.Exception.Message }
                 }
             }
-            'cfg-default' { Install-CsConfig }
+        }
+        Wait-ForKey
+    }
+}
+
+# One screen per game, the way the desktop app has one page per game. They
+# differ in more than the title: the launch options are different strings, the
+# cfg folders are different paths, and yabosen.cfg is a CS2 config.
+function Show-CsMenu {
+    param([ValidateSet('CS2', 'CSGO')][string]$Game = 'CS2')
+
+    $label = 'CS2'
+    if ($Game -eq 'CSGO') { $label = 'CS:GO' }
+
+    while ($true) {
+        $folders = @(Find-CsConfigFolder -Game $Game)
+
+        $subtitle = "No cfg folder found - looked for $(Get-CsConfigRelativePath -Game $Game)"
+        if ($folders.Count -eq 1) { $subtitle = $folders[0] }
+        elseif ($folders.Count -gt 1) { $subtitle = "$($folders.Count) cfg folders found" }
+
+        $options = [System.Collections.Generic.List[object]]::new()
+
+        # yabosen.cfg is a CS2 config, so it is only offered there - which is
+        # also the only place the desktop app offers it.
+        if ($Game -eq 'CS2') {
+            $options.Add([pscustomobject]@{ Name = 'Install yabosen.cfg'; Hint = 'Downloaded from Yabosen/YabosenCFG'; Action = 'cfg-default' })
+        }
+        $options.Add([pscustomobject]@{ Name = 'Install a .cfg of yours'; Hint = 'Copied into every cfg folder found'; Action = 'cfg-file' })
+        $options.Add([pscustomobject]@{ Name = 'Launch options';          Hint = (Get-CsLaunchOption -Game $Game);   Action = 'launch' })
+        $options.Add([pscustomobject]@{ Name = 'Show the cfg folders';    Hint = '';                                 Action = 'folders' })
+
+        $result = Show-Selector -Items @($options) -Title $label -SingleSelect `
+            -Subtitle $subtitle `
+            -Label { param($o) $o.Name } `
+            -Sublabel { param($o) $o.Hint }
+
+        if (-not $result.Confirmed) { return }
+
+        Write-Banner
+        switch ($result.Selected[0].Action) {
+            'cfg-default' { Install-CsConfig -Game $Game }
             'cfg-file' {
                 Write-Line '  Path to the .cfg: ' -Color Yellow -NoNewline
                 $cfg = [string](Read-Host)
-                if ($cfg) { Install-CsConfig -LocalPath $cfg }
+                if ($cfg) { Install-CsConfig -LocalPath $cfg -Game $Game }
             }
-            'launch-cs2'  { Show-CsLaunchOption -Game CS2 }
-            'launch-csgo' { Show-CsLaunchOption -Game CSGO }
+            'launch' { Show-CsLaunchOption -Game $Game }
+            'folders' {
+                Write-SectionHeading "$label cfg folders"
+                if ($folders.Count -eq 0) {
+                    Write-Warn "None found. Looked for $(Get-CsConfigRelativePath -Game $Game) on every ready drive."
+                }
+                else {
+                    foreach ($folder in $folders) { Write-Ok $folder }
+                }
+            }
         }
         Wait-ForKey
     }
@@ -718,7 +764,9 @@ function Show-MainMenu {
         [pscustomobject]@{ Name = 'Profiles'; Hint = 'Save or run a setup checklist';                          Action = 'profiles' }
         [pscustomobject]@{ Name = 'Packages'; Hint = 'Install Chocolatey or Scoop';                             Action = 'packages' }
         [pscustomobject]@{ Name = 'Customize'; Hint = 'Open-Shell, Nilesoft Shell, StartAllBack, ExplorerPatcher';  Action = 'customize' }
-        [pscustomobject]@{ Name = 'Personalise'; Hint = 'Cursor packs, wallpaper, Counter-Strike configs';         Action = 'personalise' }
+        [pscustomobject]@{ Name = 'Personalise'; Hint = 'Cursor packs and wallpaper';                              Action = 'personalise' }
+        [pscustomobject]@{ Name = 'Counter-Strike 2'; Hint = 'Configs and launch options';                         Action = 'cs2' }
+        [pscustomobject]@{ Name = 'CS:GO';        Hint = 'Configs and launch options for the legacy build';        Action = 'csgo' }
         [pscustomobject]@{ Name = 'Tasks';    Hint = 'Live CPU, memory, disk, network and processes';          Action = 'tasks' }
         [pscustomobject]@{ Name = 'Status';   Hint = 'What is currently applied on this machine';              Action = 'status' }
         [pscustomobject]@{ Name = 'GUI';      Hint = 'Open the same thing as a window';                       Action = 'gui' }
@@ -746,6 +794,8 @@ function Show-MainMenu {
             'packages' { Show-PackageMenu }
             'customize' { Show-CustomizationMenu }
             'personalise' { Show-PersonalizeMenu }
+            'cs2'      { Show-CsMenu -Game CS2 }
+            'csgo'     { Show-CsMenu -Game CSGO }
             'tasks'    { Show-TaskManager }
             'status'   { Write-Banner; Show-TweakStatus; Wait-ForKey }
             'gui'      { Clear-Host; Show-Gui | Out-Null; Clear-Host }
