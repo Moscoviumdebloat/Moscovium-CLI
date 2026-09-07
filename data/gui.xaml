@@ -493,6 +493,7 @@
           <ListBoxItem Content="Guides"/>
           <ListBoxItem Content="Personalise"/>
           <ListBoxItem Content="Mouse"/>
+          <ListBoxItem Content="Drivers"/>
           <ListBoxItem Content="Counter-Strike 2"/>
           <ListBoxItem Content="CS:GO"/>
           <ListBoxItem Content="Customization"/>
@@ -995,6 +996,39 @@
 
               </StackPanel>
             </ScrollViewer>
+          </Grid>
+
+          <!-- Reports and backs up; deliberately does not mass-install. The
+               adapter cards and the problem list are drawn in code. -->
+          <Grid x:Name="DriversPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Drivers" Style="{StaticResource PageTitle}"/>
+              <TextBlock x:Name="DriverSummary" FontSize="11" Foreground="{StaticResource Faint}"
+                         VerticalAlignment="Center" Margin="12,3,0,0" Text=""/>
+            </StackPanel>
+
+            <DockPanel Grid.Row="1" Margin="0,0,0,10" LastChildFill="False">
+              <Button x:Name="BtnDriverRefresh" Content="Refresh" DockPanel.Dock="Left"/>
+              <Button x:Name="BtnDriverBackup" Content="Back up all drivers" Style="{StaticResource Primary}" DockPanel.Dock="Left"
+                      ToolTip="Export every third-party driver package to a folder"/>
+              <Button x:Name="BtnDeviceManager" Content="Device Manager" DockPanel.Dock="Left"/>
+              <Button x:Name="BtnDriverDdu" Content="Install DDU" DockPanel.Dock="Right" Margin="8,0,0,0"
+                      ToolTip="Display Driver Uninstaller - run it in Safe Mode, not from here"/>
+            </DockPanel>
+
+            <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="8">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="7">
+                <StackPanel x:Name="DriverRows"/>
+              </ScrollViewer>
+            </Border>
           </Grid>
 
           <!-- The Pointer Options tab of the Windows mouse control panel, with

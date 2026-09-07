@@ -22,6 +22,7 @@ which ships with Windows, is enough.
 | **One-click debloat box** | The landing page in the window and the first entry in the menu. Six steps behind one prompt: WinUtil preset, Win11Debloat preset, security-only Windows Update, TCP autotuning, CPU priority, dynamic tick. |
 | **Task manager** | btop-shaped: CPU with per-core bars and history, memory, disk, network, and a sortable process list you can end a process from. |
 | **Search apps** | One query across winget, Chocolatey and Scoop, with install from whichever one has it. |
+| **Drivers** | Display adapters and their driver dates, devices reporting a problem in plain words, a full driver backup, and the vendor download page for your GPU. |
 | **Mouse** | The Pointer Options tab: pointer speed, acceleration, snap-to, trails, hide-while-typing, CTRL highlight - applied live, plus a raw-input preset. |
 | **Package managers** | Install Chocolatey or Scoop from their own install scripts, with winget status alongside. |
 | **Customization** | The desktop app's shell replacements - Open-Shell, Nilesoft Shell, StartAllBack, ExplorerPatcher - each fetched from its vendor's current release. |
@@ -278,6 +279,38 @@ publishes is also what the desktop app bundles.
 The desktop page's fifth button, the StartAllBack trial reset, is not here.
 It circumvents licensing, the same reason MAS is not in the catalog.
 
+### Drivers
+
+```powershell
+.moscovium.ps1 -Drivers                        # adapters, problem devices
+.moscovium.ps1 -BackupDrivers D:driver-backup  # every third-party package (admin)
+```
+
+Its own page in the window, a **Drivers** screen in the menu.
+
+**It reports and backs up; it does not mass-install.** The tools that bulk-install
+drivers from scraped packs are how a working machine stops booting, and this one
+gets run on machines people have just set up. There is a test that fails if the
+driver engine ever grows a call that installs a package.
+
+**Problem devices in plain words.** `ConfigManagerErrorCode` 28 means nothing to
+anyone; *the drivers for this device are not installed* is the whole answer. All
+36 documented codes are spelled out, and a disabled device (22) or an unplugged
+one (45) is not flagged as a missing driver, because neither is a fault.
+
+**The GPU vendor comes from the PCI id.** `AdapterCompatibility` is whatever the
+driver put there - on the dev box it reads *Broadcom Inc.* for a VMware adapter.
+`PNPDeviceID` carries `VEN_xxxx`, which is the real vendor and does not lie.
+Virtual adapters are named as such rather than sent to a download page for
+hardware that is not there.
+
+**The links go to the vendors, because winget has nothing else.** Searching it
+for `nvidia`, `geforce`, `intel driver`, `AMD Adrenalin` and `AMD Radeon` turns
+up CUDA, GeForce NOW and AMD Cloud Edition - nothing that installs a display
+driver. Display Driver Uninstaller
+(`Wagnardsoft.DisplayDriverUninstaller`) is the one real package, so it is the
+one thing offered as an install, with the warning that it belongs in Safe Mode.
+
 ### Mouse
 
 ```powershell
@@ -441,6 +474,7 @@ src/              function libraries, concatenated in name order
   20-Tweaks       apply, revert, status
   30-Apps         winget, download, zip and script installs
   40-Toolbox      one-shot actions
+  47-Drivers      adapters, problem devices, driver backup
   49-Mouse        pointer settings through SystemParametersInfo
   50-Profile      setup profiles
   52-Tasks        task manager sampling

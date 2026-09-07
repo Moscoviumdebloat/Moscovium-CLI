@@ -80,6 +80,10 @@ function Get-ToolboxActions {
             Description = 'services.msc'
         }
         [pscustomobject]@{
+            Id = 'device-manager'; Name = 'Open: Device Manager'; Admin = $false
+            Description = 'devmgmt.msc, where a device with a problem code gets sorted out.'
+        }
+        [pscustomobject]@{
             Id = 'mouse'; Name = 'Open: Mouse properties'; Admin = $false
             Description = 'main.cpl, where mouse acceleration lives.'
         }
@@ -629,6 +633,7 @@ function Invoke-ToolboxAction {
 
             'control-panel' { Invoke-NativeCommand -FilePath 'control.exe' -NoWait | Out-Null; Write-Ok 'Opened.' }
             'services'      { Invoke-NativeCommand -FilePath 'services.msc' -NoWait | Out-Null; Write-Ok 'Opened.' }
+            'device-manager' { Invoke-NativeCommand -FilePath 'devmgmt.msc' -NoWait | Out-Null; Write-Ok 'Opened.' }
             'mouse'         { Invoke-NativeCommand -FilePath 'control.exe' -Arguments @('main.cpl') -NoWait | Out-Null; Write-Ok 'Opened.' }
             'keyboard'      { Invoke-NativeCommand -FilePath 'control.exe' -Arguments @('keyboard') -NoWait | Out-Null; Write-Ok 'Opened.' }
             'sound'         { Invoke-NativeCommand -FilePath 'control.exe' -Arguments @('mmsys.cpl') -NoWait | Out-Null; Write-Ok 'Opened.' }

@@ -476,7 +476,7 @@ function Update-GuiToolboxRow {
     $groups = @(
         @{ Title = 'Third-party debloat scripts'; Ids = @('winutil', 'winutil-preset', 'raphi', 'raphi-auto') }
         @{ Title = 'System tuning';               Ids = @('updates-security', 'network-better', 'network-default', 'dynamictick-off', 'dynamictick-on', 'priority-22', 'priority-default') }
-        @{ Title = 'Classic control panels';      Ids = @('control-panel', 'services', 'mouse', 'keyboard', 'sound') }
+        @{ Title = 'Classic control panels';      Ids = @('control-panel', 'services', 'device-manager', 'mouse', 'keyboard', 'sound') }
     )
 
     # The one-click box is not here: it has the landing page to itself.
@@ -600,6 +600,90 @@ function Update-GuiOneClickSteps {
 
         $ui.OneClickSteps.Children.Add($line) | Out-Null
     }
+}
+
+# -----------------------------------------------------------------------------
+# Drivers page
+# -----------------------------------------------------------------------------
+
+function Update-GuiDriverRow {
+    if (-not $Ctx.Gui) { return }
+    $ui = $Ctx.Gui.Ui
+
+    $ui.DriverRows.Children.Clear()
+
+    $adapters = @()
+    $problems = @()
+    $failure = ''
+
+    try { $adapters = @(Get-GraphicsAdapter) } catch { $failure = $_.Exception.Message }
+    try { $problems = @(Get-DriverProblemDevice) } catch { $failure = $_.Exception.Message }
+
+    $first = $true
+    $ui.DriverRows.Children.Add((New-GuiGroupHeader -Title 'Display adapters' -Count $adapters.Count -First:$first)) | Out-Null
+    $first = $false
+
+    foreach ($adapter in $adapters) {
+        $detail = 'driver ' + $adapter.DriverVersion
+        if ($adapter.DriverDate) { $detail += '   ' + $adapter.DriverDate.ToString('yyyy-MM-dd') }
+
+        $status = 'PCI ' + $adapter.PciId
+        $ink, $fill = '#FF8B81A8', '#FF150F22'
+
+        if ($adapter.Vendor) {
+            $status = $adapter.Vendor.Name
+            if ($adapter.Vendor.Virtual) {
+                $detail += '   virtual adapter - no vendor driver to install'
+            }
+            else {
+                $detail += '   ' + $adapter.Vendor.Url
+                $ink, $fill = '#FF7EE0A6', '#FF102A1E'
+            }
+        }
+
+        $row = New-GuiRow -Item $adapter -Primary $adapter.Name -Secondary $detail `
+            -Status $status -StatusBrush $ink -StatusFill $fill -NoCheckBox
+
+        # Only a vendor with a real download page gets a button.
+        if ($adapter.Vendor -and -not $adapter.Vendor.Virtual -and $adapter.Vendor.Url) {
+            $open = New-Object Windows.Controls.Button
+            $open.Content = 'Get drivers'
+            $open.Padding = New-Object Windows.Thickness 12, 4, 12, 4
+            $open.Margin = New-Object Windows.Thickness 8, 0, 0, 0
+            $open.VerticalAlignment = 'Center'
+            $open.Tag = $adapter.Vendor.Url
+            [Windows.Controls.Grid]::SetColumn($open, 2)
+
+            $open.Add_Click({
+                param($sender, $e)
+                $url = [string]$sender.Tag
+                try { Start-Process $url | Out-Null; Write-Ok "Opened $url" }
+                catch { Write-Err "Could not open the browser: $($_.Exception.Message)" }
+            })
+
+            $row.Element.Child.Children.Add($open) | Out-Null
+        }
+
+        $ui.DriverRows.Children.Add($row.Element) | Out-Null
+    }
+
+    $ui.DriverRows.Children.Add((New-GuiGroupHeader -Title 'Devices reporting a problem' -Count $problems.Count)) | Out-Null
+
+    foreach ($device in $problems) {
+        # A missing driver is red; a device someone disabled or unplugged is not
+        # a fault to go hunting drivers for.
+        $ink, $fill = '#FFFFCB7A', '#FF2E2410'
+        if ($device.Missing) { $ink, $fill = '#FFFF7B94', '#FF2E1018' }
+
+        $row = New-GuiRow -Item $device -Primary $device.Name -Secondary $device.Meaning `
+            -Status "code $($device.Code)" -StatusBrush $ink -StatusFill $fill -NoCheckBox
+        $ui.DriverRows.Children.Add($row.Element) | Out-Null
+    }
+
+    $summary = "$($adapters.Count) adapter(s), $($problems.Count) device(s) with a problem"
+    if (-not $Ctx.IsAdmin) { $summary += '   backup needs administrator' }
+    if ($failure) { $summary = $failure }
+    $ui.DriverSummary.Text = $summary
 }
 
 # -----------------------------------------------------------------------------
@@ -1262,6 +1346,8 @@ function New-GuiWindow {
         'CpuGraph', 'CoreStrip', 'TaskRows', 'TaskSearch', 'TaskSort', 'BtnTaskPause', 'BtnTaskKill',
         'StoreRows', 'BtnStoreRefresh', 'BtnStoreInstall', 'GuideRows',
         'CursorPresets', 'BtnCursorInstall', 'BtnCursorRestore', 'WallpaperStyle', 'BtnWallpaper', 'BtnCsLaunchCsgo',
+        'DriversPanel', 'DriverSummary', 'DriverRows', 'BtnDriverRefresh',
+        'BtnDriverBackup', 'BtnDeviceManager', 'BtnDriverDdu',
         'MousePanel', 'MouseSummary', 'MouseSpeedSlider', 'MouseSpeedValue',
         'MouseTrailsSlider', 'MouseTrailsValue', 'ChkMousePrecision', 'ChkMouseSnap',
         'ChkMouseTrails', 'ChkMouseVanish', 'ChkMouseSonar', 'BtnMouseRaw', 'BtnMouseDefault',
@@ -1378,8 +1464,8 @@ function New-GuiWindow {
 
     # Order has to match the ListBoxItems in the XAML and the $panels array in
     # the SelectionChanged handler. -1 means "no count worth showing".
-    $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Search apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Mouse', 'Counter-Strike 2', 'CS:GO', 'Customization', 'Profiles', 'Settings')
-    $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1, -1, @(Get-CustomizationTools).Count, -1, -1)
+    $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Search apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Mouse', 'Drivers', 'Counter-Strike 2', 'CS:GO', 'Customization', 'Profiles', 'Settings')
+    $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1, -1, -1, @(Get-CustomizationTools).Count, -1, -1)
 
     # The item Content becomes a DockPanel below, so the labels are no longer
     # readable off the ListBox. Keep them where a handler can still find them.
@@ -1434,7 +1520,8 @@ function New-GuiWindow {
                     $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.SearchAppsPanel,
                     $Ctx.Gui.Ui.PackagesPanel, $Ctx.Gui.Ui.StorePanel,
                     $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.GuidesPanel, $Ctx.Gui.Ui.PersonalizePanel,
-                    $Ctx.Gui.Ui.MousePanel, $Ctx.Gui.Ui.Cs2Panel, $Ctx.Gui.Ui.CsgoPanel,
+                    $Ctx.Gui.Ui.MousePanel, $Ctx.Gui.Ui.DriversPanel,
+                    $Ctx.Gui.Ui.Cs2Panel, $Ctx.Gui.Ui.CsgoPanel,
                     $Ctx.Gui.Ui.CustomizationPanel, $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
         for ($i = 0; $i -lt $panels.Count; $i++) {
             $panels[$i].Visibility = if ($i -eq $sender.SelectedIndex) { 'Visible' } else { 'Collapsed' }
@@ -1463,6 +1550,31 @@ function New-GuiWindow {
     $ui.BtnTweakAll.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Tweaks) { $r.CheckBox.IsChecked = $true } })
     $ui.BtnTweakNone.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Tweaks) { $r.CheckBox.IsChecked = $false } })
     $ui.BtnAppNone.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Apps) { $r.CheckBox.IsChecked = $false } })
+
+    # ---- drivers -----------------------------------------------------------
+    $ui.BtnDriverRefresh.Add_Click({ Update-GuiDriverRow })
+
+    $ui.BtnDeviceManager.Add_Click({
+        Invoke-GuiWork -Label 'device manager' -Work { Invoke-ToolboxAction -Id 'device-manager' }
+    })
+
+    $ui.BtnDriverBackup.Add_Click({
+        $dialog = New-Object Windows.Forms.FolderBrowserDialog
+        $dialog.Description = 'Where to export every third-party driver package'
+        if ($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { return }
+
+        $folder = $dialog.SelectedPath
+        Invoke-GuiWork -Label 'exporting drivers' -Work { Backup-Driver -Path $folder | Out-Null }
+    })
+
+    $ui.BtnDriverDdu.Add_Click({
+        Invoke-GuiWork -Label 'installing DDU' -Work {
+            $resolved = Resolve-App -Names @('Wagnardsoft.DisplayDriverUninstaller')
+            if ($resolved.Matched.Count -gt 0) { Invoke-AppInstall -Apps $resolved.Matched }
+            else { Invoke-WingetInstall -Id 'Wagnardsoft.DisplayDriverUninstaller' -Name 'Display Driver Uninstaller' }
+            Write-Warn 'DDU is meant to be run from Safe Mode. Running it on a live desktop is how people end up with no display driver at all.'
+        }
+    })
 
     # ---- mouse -------------------------------------------------------------
     # Sliders fire per pixel while dragging, so the write happens on release
@@ -1830,6 +1942,7 @@ function New-GuiWindow {
 
     # ---- go ----------------------------------------------------------------
     Update-GuiOneClickSteps
+    Update-GuiDriverRow
     Update-GuiMouseControls
     Update-GuiPackageRow
     Update-GuiCustomizationRow

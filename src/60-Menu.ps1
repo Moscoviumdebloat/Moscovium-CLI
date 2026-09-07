@@ -610,6 +610,94 @@ function Show-CustomizationMenu {
 # Until this existed the Personalise features were window-only.
 # The Pointer Options tab as a screen: every setting with its current value,
 # enter to change it. Toggles flip; ranges ask for a number.
+# Drivers: what is there, what is broken, where the real ones come from.
+# Deliberately no "install all drivers" - see the note at the top of 47-Drivers.
+function Show-DriverMenu {
+    while ($true) {
+        $adapters = @()
+        try { $adapters = @(Get-GraphicsAdapter) } catch { }
+
+        $problems = @()
+        try { $problems = @(Get-DriverProblemDevice) } catch { }
+
+        $subtitle = 'No device is reporting a problem'
+        if ($problems.Count -gt 0) { $subtitle = "$($problems.Count) device(s) reporting a problem" }
+
+        $options = [System.Collections.Generic.List[object]]::new()
+        $options.Add([pscustomobject]@{ Name = 'Overview'; Hint = 'Adapters, problem devices, driver sources'; Action = 'overview'; Data = $null })
+
+        # One row per adapter that has a real vendor page behind it.
+        foreach ($adapter in $adapters) {
+            if (-not $adapter.Vendor -or $adapter.Vendor.Virtual -or -not $adapter.Vendor.Url) { continue }
+            $options.Add([pscustomobject]@{
+                Name = "Get $($adapter.Vendor.Name) drivers"
+                Hint = $adapter.Vendor.Url
+                Action = 'vendor'; Data = $adapter.Vendor
+            })
+        }
+
+        $options.Add([pscustomobject]@{ Name = 'Back up all drivers'; Hint = 'Export every third-party package to a folder (admin)'; Action = 'backup'; Data = $null })
+        $options.Add([pscustomobject]@{ Name = 'List driver packages'; Hint = 'Third-party packages Windows did not ship with (admin)'; Action = 'packages'; Data = $null })
+        $options.Add([pscustomobject]@{ Name = 'Install Display Driver Uninstaller'; Hint = 'DDU - run it in Safe Mode, not from here'; Action = 'ddu'; Data = $null })
+        $options.Add([pscustomobject]@{ Name = 'Open Device Manager'; Hint = 'devmgmt.msc'; Action = 'devmgmt'; Data = $null })
+
+        $result = Show-Selector -Items @($options) -Title 'Drivers' -SingleSelect `
+            -Subtitle $subtitle `
+            -Label { param($o) $o.Name } `
+            -Sublabel { param($o) $o.Hint }
+
+        if (-not $result.Confirmed) { return }
+        $choice = $result.Selected[0]
+
+        Write-Banner
+        switch ($choice.Action) {
+            'overview' { Show-DriverOverview }
+            'vendor' {
+                Write-SectionHeading "$($choice.Data.Name) drivers"
+                Write-Info 'Opening the vendor download page in your browser:'
+                Write-Line "      $($choice.Data.Url)" -Color White
+                try { Start-Process $choice.Data.Url | Out-Null }
+                catch { Write-Err "Could not open the browser: $($_.Exception.Message)" }
+            }
+            'backup' {
+                $default = Get-DefaultDriverBackupPath
+                Write-SectionHeading 'Back up drivers'
+                Write-Line "  Folder (blank for $default): " -Color Yellow -NoNewline
+                $folder = [string](Read-Host)
+                if (-not $folder) { $folder = $default }
+                Backup-Driver -Path $folder | Out-Null
+            }
+            'packages' {
+                Write-SectionHeading 'Third-party driver packages'
+                $packages = @(Get-DriverPackage)
+                if ($packages.Count -gt 0) {
+                    Write-Info "$($packages.Count) package(s)"
+                    foreach ($package in @($packages | Sort-Object ProviderName, ClassName)) {
+                        Write-Line '  - ' -Color DarkGray -NoNewline
+                        Write-Line ([string]$package.Driver).PadRight(16) -Color White -NoNewline
+                        Write-Line ([string]$package.ProviderName).PadRight(28) -Color Gray -NoNewline
+                        Write-Line ([string]$package.ClassName) -Color DarkGray
+                    }
+                }
+            }
+            'ddu' {
+                # Through the app engine, so it gets the same winget handling
+                # everything else does.
+                $resolved = Resolve-App -Names @('Wagnardsoft.DisplayDriverUninstaller')
+                if ($resolved.Matched.Count -gt 0) { Invoke-AppInstall -Apps $resolved.Matched }
+                else {
+                    Write-SectionHeading 'Display Driver Uninstaller'
+                    Invoke-WingetInstall -Id 'Wagnardsoft.DisplayDriverUninstaller' -Name 'Display Driver Uninstaller'
+                }
+                Write-Line ''
+                Write-Warn 'DDU is meant to be run from Safe Mode. Running it on a live desktop is how people end up with no display driver at all.'
+            }
+            'devmgmt' { Invoke-ToolboxAction -Id 'device-manager' }
+        }
+        Wait-ForKey
+    }
+}
+
 function Show-MouseMenu {
     while ($true) {
         $entries = @(Get-MouseSnapshot)
@@ -882,6 +970,7 @@ function Show-MainMenu {
         [pscustomobject]@{ Name = 'Customize'; Hint = 'Open-Shell, Nilesoft Shell, StartAllBack, ExplorerPatcher';  Action = 'customize' }
         [pscustomobject]@{ Name = 'Personalise'; Hint = 'Cursor packs and wallpaper';                              Action = 'personalise' }
         [pscustomobject]@{ Name = 'Mouse';    Hint = 'Pointer speed, acceleration, trails, visibility';        Action = 'mouse' }
+        [pscustomobject]@{ Name = 'Drivers';  Hint = 'Adapters, problem devices, backup, vendor downloads';   Action = 'drivers' }
         [pscustomobject]@{ Name = 'Counter-Strike 2'; Hint = 'Configs and launch options';                         Action = 'cs2' }
         [pscustomobject]@{ Name = 'CS:GO';        Hint = 'Configs and launch options for the legacy build';        Action = 'csgo' }
         [pscustomobject]@{ Name = 'Tasks';    Hint = 'Live CPU, memory, disk, network and processes';          Action = 'tasks' }
@@ -913,6 +1002,7 @@ function Show-MainMenu {
             'customize' { Show-CustomizationMenu }
             'personalise' { Show-PersonalizeMenu }
             'mouse'    { Show-MouseMenu }
+            'drivers'  { Show-DriverMenu }
             'cs2'      { Show-CsMenu -Game CS2 }
             'csgo'     { Show-CsMenu -Game CSGO }
             'tasks'    { Show-TaskManager }

@@ -652,7 +652,8 @@ Test-Case 'every main-menu entry has a handler, and every handler an entry' {
     # And the pages that exist are actually offered. Every one of these is a
     # screen someone can only get to from here.
     foreach ($action in @('oneclick', 'tweaks', 'apps', 'toolbox', 'profiles', 'findapp', 'packages',
-                          'customize', 'personalise', 'mouse', 'cs2', 'csgo', 'tasks', 'status', 'gui', 'quit')) {
+                          'customize', 'personalise', 'mouse', 'drivers', 'cs2', 'csgo', 'tasks',
+                          'status', 'gui', 'quit')) {
         Assert-True ($entries -contains $action) "the main menu has no '$action' entry"
     }
 }
@@ -661,7 +662,7 @@ Test-Case 'every menu screen the switch calls really exists' {
     # A typo in a handler name would only surface when someone picked that row.
     foreach ($name in @('Show-TweakMenu', 'Show-AppMenu', 'Show-ToolboxMenu', 'Show-ProfileMenu',
                         'Show-AppSearchMenu', 'Show-PackageMenu', 'Show-CustomizationMenu',
-                        'Show-PersonalizeMenu', 'Show-MouseMenu', 'Show-CsMenu', 'Show-TaskManager',
+                        'Show-PersonalizeMenu', 'Show-MouseMenu', 'Show-DriverMenu', 'Show-CsMenu', 'Show-TaskManager',
                         'Show-TweakStatus', 'Show-Gui')) {
         Assert-True ($null -ne (Get-Command -Name $name -ErrorAction SilentlyContinue)) "$name is not defined"
     }
@@ -1534,6 +1535,182 @@ if (Test-StaApartment) {
         }
         finally { $gui.Window.Close() }
     }
+}
+
+# -----------------------------------------------------------------------------
+Write-Section 'Drivers'
+
+Test-Case 'the GPU vendor comes from the PCI id, not from what the driver claims' {
+    # Win32_VideoController.AdapterCompatibility is whatever the driver put
+    # there: on this machine it reads 'Broadcom Inc.' for a VMware adapter.
+    # PNPDeviceID carries VEN_xxxx, which is the real PCI vendor.
+    Assert-Equal 'nvidia' (Resolve-GraphicsVendor -PnpDeviceId 'PCI\VEN_10DE&DEV_2484&SUBSYS_147D10DE').Id
+    Assert-Equal 'amd'    (Resolve-GraphicsVendor -PnpDeviceId 'PCI\VEN_1002&DEV_73BF').Id
+    Assert-Equal 'amd'    (Resolve-GraphicsVendor -PnpDeviceId 'PCI\VEN_1022&DEV_15D8').Id
+    Assert-Equal 'intel'  (Resolve-GraphicsVendor -PnpDeviceId 'PCI\VEN_8086&DEV_9A49').Id
+    Assert-Equal 'vmware' (Resolve-GraphicsVendor -PnpDeviceId 'PCI\VEN_15AD&DEV_0405').Id
+
+    # Case does not matter - PNPDeviceID casing is not guaranteed.
+    Assert-Equal 'nvidia' (Resolve-GraphicsVendor -PnpDeviceId 'pci\ven_10de&dev_2484').Id
+
+    # Unknown or missing resolves to nothing rather than guessing.
+    Assert-True ($null -eq (Resolve-GraphicsVendor -PnpDeviceId 'PCI\VEN_FFFF&DEV_0001')) 'an unknown vendor resolved'
+    Assert-True ($null -eq (Resolve-GraphicsVendor -PnpDeviceId 'ROOT\BASICDISPLAY')) 'a non-PCI id resolved'
+    Assert-True ($null -eq (Resolve-GraphicsVendor -PnpDeviceId '')) 'an empty id resolved'
+}
+
+Test-Case 'the vendor table is consistent, and virtual adapters have no link' {
+    $vendors = @(Get-GraphicsVendors)
+    Assert-True ($vendors.Count -ge 4) 'the vendor table looks short'
+
+    $seen = @{}
+    foreach ($vendor in $vendors) {
+        Assert-True (-not [string]::IsNullOrWhiteSpace($vendor.Name)) "$($vendor.Id) has no name"
+        Assert-True (@($vendor.PciIds).Count -ge 1) "$($vendor.Id) has no PCI ids"
+
+        foreach ($pci in @($vendor.PciIds)) {
+            Assert-True ($pci -match '^[0-9A-F]{4}$') "$($vendor.Id) has a malformed PCI id '$pci'"
+            # A PCI id claimed by two vendors would make detection order matter.
+            Assert-True (-not $seen.ContainsKey($pci)) "PCI id $pci is claimed by $($seen[$pci]) and $($vendor.Id)"
+            $seen[$pci] = $vendor.Id
+        }
+
+        if ($vendor.Virtual) {
+            # There is no vendor driver to go and get for a virtual adapter, and
+            # sending someone to a download page for hardware they do not have
+            # is worse than saying so.
+            Assert-Equal '' $vendor.Url "$($vendor.Id) is virtual but carries a download link"
+        }
+        else {
+            Assert-True ($vendor.Url -match '^https://') "$($vendor.Id) has no https download page"
+        }
+    }
+
+    foreach ($id in @('nvidia', 'amd', 'intel')) {
+        Assert-True (@($vendors | Where-Object { $_.Id -eq $id }).Count -eq 1) "$id is missing from the vendor table"
+    }
+}
+
+Test-Case 'the real vendor download pages are live' {
+    # Live, one HEAD each. Intel is deliberately not checked: it answers 403 to
+    # every scripted request regardless of user agent, so asserting it is
+    # reachable would fail forever and asserting it 403s would be testing
+    # Intel's bot protection rather than this code.
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    foreach ($id in @('nvidia', 'amd')) {
+        $vendor = @(Get-GraphicsVendors | Where-Object { $_.Id -eq $id })[0]
+
+        $request = [Net.HttpWebRequest]::Create($vendor.Url)
+        $request.Method = 'HEAD'
+        $request.UserAgent = 'Mozilla/5.0 Moscovium-CLI tests'
+        $request.Timeout = 25000
+        $request.AllowAutoRedirect = $true
+
+        $response = $null
+        try {
+            $response = $request.GetResponse()
+            Assert-Equal 'OK' ([string]$response.StatusCode) "$id answered $($response.StatusCode)"
+        }
+        finally { if ($response) { $response.Dispose() } }
+    }
+
+    # Intel's URL is still checked for shape, just not for a response.
+    $intel = @(Get-GraphicsVendors | Where-Object { $_.Id -eq 'intel' })[0]
+    Assert-True ($intel.Url -match '^https://www\.intel\.com/') "Intel's URL is not on intel.com: $($intel.Url)"
+}
+
+Test-Case 'problem codes read as sentences, not as numbers' {
+    # 28 means nothing to anyone; 'the drivers for this device are not
+    # installed' is the whole answer.
+    Assert-True ((Get-DeviceProblemMeaning -Code 28) -match 'not installed') 'code 28 is not explained'
+    Assert-True ((Get-DeviceProblemMeaning -Code 22) -match 'disabled') 'code 22 is not explained'
+    Assert-True ((Get-DeviceProblemMeaning -Code 43) -match 'reported problems') 'code 43 is not explained'
+    Assert-True ((Get-DeviceProblemMeaning -Code 45) -match 'not currently connected') 'code 45 is not explained'
+
+    # Every documented code says something, and none of them falls through to
+    # the generic text.
+    foreach ($code in @(1, 3, 9, 10, 12, 14, 16, 18, 19, 21, 22, 24, 28, 29, 31, 32, 33, 34,
+                        35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52)) {
+        $meaning = Get-DeviceProblemMeaning -Code $code
+        Assert-True (-not [string]::IsNullOrWhiteSpace($meaning)) "code $code has no meaning"
+        Assert-True ($meaning -notmatch "^Device Manager problem code") "code $code fell through to the generic text"
+    }
+
+    # An undocumented code still says something useful rather than throwing.
+    Assert-True ((Get-DeviceProblemMeaning -Code 999) -match '999') 'an unknown code lost its number'
+}
+
+Test-Case 'the live device and adapter reads answer without throwing' {
+    $adapters = @(Get-GraphicsAdapter)
+    Assert-True ($adapters.Count -ge 1) 'no display adapter was reported'
+
+    foreach ($adapter in $adapters) {
+        Assert-True (-not [string]::IsNullOrWhiteSpace($adapter.Name)) 'an adapter has no name'
+        # Either a PCI id was parsed or the vendor is unknown - never a vendor
+        # with no id behind it.
+        if ($adapter.Vendor) { Assert-True ($adapter.PciId -match '^[0-9A-F]{4}$') 'a vendor was resolved without a PCI id' }
+    }
+
+    # Problem devices: none is a perfectly good answer, so this only checks the
+    # shape of whatever came back.
+    foreach ($device in @(Get-DriverProblemDevice)) {
+        Assert-True ($device.Code -ne 0) 'a working device is in the problem list'
+        Assert-True (-not [string]::IsNullOrWhiteSpace($device.Meaning)) "code $($device.Code) has no meaning"
+        Assert-True ($device.Missing -is [bool]) 'Missing is not a boolean'
+        # A disabled or unplugged device is a choice, not a missing driver.
+        if ($device.Code -in @(22, 45)) { Assert-True (-not $device.Missing) "code $($device.Code) is flagged as a missing driver" }
+    }
+}
+
+Test-Case 'a driver backup dry run previews rather than refusing' {
+    # The admin check must come after the dry-run check: a preview should say
+    # what an elevated run would do, not refuse because this process is not
+    # elevated. Same order as Invoke-TweakApply and Invoke-ToolboxAction.
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/47-Drivers.ps1') -Raw
+    $body = [regex]::Match($source, '(?ms)^function Backup-Driver \{.*?^\}').Value
+    Assert-True ($body.Length -gt 0) 'Backup-Driver was not found'
+
+    $dryRunAt = $body.IndexOf('$Ctx.DryRun')
+    $adminAt = $body.IndexOf('Test-DriverToolsAvailable')
+    Assert-True ($dryRunAt -ge 0 -and $adminAt -ge 0) 'the two checks were not found'
+    Assert-True ($dryRunAt -lt $adminAt) 'the admin check runs before the dry-run check'
+
+    $probe = Join-Path ([IO.Path]::GetTempPath()) "moscovium-drivers-$([guid]::NewGuid().ToString('N'))"
+    $previousDryRun = $Ctx.DryRun
+    $Ctx.DryRun = $true
+    try {
+        Assert-True (-not (Backup-Driver -Path $probe)) 'a dry run reported a backup'
+        Assert-True (-not (Test-Path -LiteralPath $probe)) 'a dry run created the destination folder'
+    }
+    finally { $Ctx.DryRun = $previousDryRun }
+}
+
+Test-Case 'drivers are reported and backed up, never mass-installed' {
+    # The guard on the whole design. Tools that bulk-install scraped driver
+    # packs are how a working machine stops booting, and this one is run on
+    # machines people have just set up.
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/47-Drivers.ps1') -Raw
+
+    Assert-True ($source -notmatch 'Add-WindowsDriver') 'the driver engine calls Add-WindowsDriver'
+    Assert-True ($source -match 'Export-WindowsDriver') 'the driver engine cannot back anything up'
+
+    # pnputil may be *named* - the backup tells you how to restore a package
+    # with it - but never run. Naming it in a hint and shelling out to it are
+    # different things, so the rule is about invocation, not about the word.
+    foreach ($line in @($source -split "`r?`n")) {
+        if ($line -notmatch 'pnputil') { continue }
+
+        $trimmed = $line.TrimStart()
+        $isComment = $trimmed.StartsWith('#')
+        $isMessage = $trimmed -match '^Write-(Info|Line|Warn|Ok|Step|Err|Log)\b'
+
+        Assert-True ($isComment -or $isMessage) "pnputil is invoked rather than just named: $trimmed"
+    }
+
+    # Device Manager is reachable, since sorting a problem code out by hand is
+    # what the report leads to.
+    Assert-Equal 'device-manager' (Resolve-ToolboxAction -Id 'device-manager').Id
 }
 
 # -----------------------------------------------------------------------------
@@ -2554,6 +2731,13 @@ if (Test-StaApartment) {
             # settings at window-open rather than left at its XAML default.
             Assert-True ($null -ne $gui.Ui.MousePanel) 'no mouse panel'
             Assert-True ($gui.NavNames -contains 'Mouse') 'Mouse is not in the sidebar'
+
+            # Drivers page: rows drawn at window-open, one group header for the
+            # adapters and one for the problem devices.
+            Assert-True ($null -ne $gui.Ui.DriversPanel) 'no drivers panel'
+            Assert-True ($gui.NavNames -contains 'Drivers') 'Drivers is not in the sidebar'
+            Assert-True ($gui.Ui.DriverRows.Children.Count -ge 2) 'the drivers page drew no rows'
+            Assert-True (-not [string]::IsNullOrWhiteSpace($gui.Ui.DriverSummary.Text)) 'the drivers summary is empty'
 
             foreach ($name in @('MouseSpeedSlider', 'MouseTrailsSlider', 'ChkMousePrecision',
                                 'ChkMouseSnap', 'ChkMouseTrails', 'ChkMouseVanish', 'ChkMouseSonar',

@@ -5,7 +5,7 @@
 
         irm https://moscovium.win | iex
 
-    Build a5e9e9b339  (a digest of src/ and data/ - same sources, same id).
+    Build 8d79fc15b3  (a digest of src/ and data/ - same sources, same id).
     Check with:  .\moscovium.ps1 -Version
 
     GENERATED FILE - do not edit.
@@ -32,6 +32,8 @@ param(
     [string]  $Customize,
     [string]  $FindApp,
     [string[]]$FindIn,
+    [switch]  $Drivers,
+    [string]  $BackupDrivers,
     [switch]  $Mouse,
     [string[]]$SetMouse,
     [string]  $MousePreset,
@@ -4822,6 +4824,10 @@ param(
                 Description = 'services.msc'
             }
             [pscustomobject]@{
+                Id = 'device-manager'; Name = 'Open: Device Manager'; Admin = $false
+                Description = 'devmgmt.msc, where a device with a problem code gets sorted out.'
+            }
+            [pscustomobject]@{
                 Id = 'mouse'; Name = 'Open: Mouse properties'; Admin = $false
                 Description = 'main.cpl, where mouse acceleration lives.'
             }
@@ -5371,6 +5377,7 @@ param(
 
                 'control-panel' { Invoke-NativeCommand -FilePath 'control.exe' -NoWait | Out-Null; Write-Ok 'Opened.' }
                 'services'      { Invoke-NativeCommand -FilePath 'services.msc' -NoWait | Out-Null; Write-Ok 'Opened.' }
+                'device-manager' { Invoke-NativeCommand -FilePath 'devmgmt.msc' -NoWait | Out-Null; Write-Ok 'Opened.' }
                 'mouse'         { Invoke-NativeCommand -FilePath 'control.exe' -Arguments @('main.cpl') -NoWait | Out-Null; Write-Ok 'Opened.' }
                 'keyboard'      { Invoke-NativeCommand -FilePath 'control.exe' -Arguments @('keyboard') -NoWait | Out-Null; Write-Ok 'Opened.' }
                 'sound'         { Invoke-NativeCommand -FilePath 'control.exe' -Arguments @('mmsys.cpl') -NoWait | Out-Null; Write-Ok 'Opened.' }
@@ -5869,6 +5876,331 @@ param(
             Write-Line $app.Version -Color $(if ($app.DownloadUrl) { Get-Color 'Ok' } else { Get-Color 'Muted' })
             Write-Info $app.Description
         }
+    }
+
+# ===== src/47-Drivers.ps1 ==============================================
+
+    # =============================================================================
+    # Drivers: what is installed, what is broken, and where the real ones come from.
+    #
+    # Deliberately not a driver installer. The tools that mass-install drivers from
+    # scraped packs are exactly the kind of thing that turns a working machine into
+    # a non-booting one, and this tool is run on machines people have just set up.
+    # So this reports, backs up, and points at the vendor.
+    #
+    # Where the vendor links come from
+    # -----------------------------------------------------------------------------
+    # winget does not carry the GPU vendor tools. Checked live: searching it for
+    # 'nvidia', 'geforce', 'intel driver', 'AMD Adrenalin' and 'AMD Radeon' turns up
+    # CUDA, GeForce NOW and AMD's Cloud Edition, and nothing that installs a display
+    # driver. Display Driver Uninstaller is the one real package
+    # (Wagnardsoft.DisplayDriverUninstaller), so it is the one thing offered as an
+    # install; everything else is a link to the vendor's own download page, which is
+    # where a GPU driver should come from anyway.
+    #
+    # Why the PCI vendor id and not AdapterCompatibility
+    # -----------------------------------------------------------------------------
+    # Win32_VideoController.AdapterCompatibility is whatever the driver put there.
+    # On the machine this was written on it reads 'Broadcom Inc.' for a VMware
+    # adapter. PNPDeviceID carries VEN_xxxx, which is the actual PCI vendor and does
+    # not lie.
+    # =============================================================================
+
+    # PCI vendor ids, from the PCI-SIG assignments.
+    function Get-GraphicsVendors {
+        @(
+            [pscustomobject]@{
+                Id = 'nvidia'; Name = 'NVIDIA'; PciIds = @('10DE')
+                Url = 'https://www.nvidia.com/en-us/drivers/'
+                Virtual = $false
+            }
+            [pscustomobject]@{
+                # 1002 is ATI/Radeon, 1022 is AMD's own id used by some integrated parts.
+                Id = 'amd'; Name = 'AMD'; PciIds = @('1002', '1022')
+                Url = 'https://www.amd.com/en/support/download/drivers.html'
+                Virtual = $false
+            }
+            [pscustomobject]@{
+                Id = 'intel'; Name = 'Intel'; PciIds = @('8086')
+                Url = 'https://www.intel.com/content/www/us/en/download-center/home.html'
+                Virtual = $false
+            }
+            # Virtual adapters have no vendor driver to go and get, and saying so is
+            # more use than sending someone to a download page for hardware they do
+            # not have.
+            [pscustomobject]@{
+                Id = 'vmware'; Name = 'VMware'; PciIds = @('15AD'); Url = ''; Virtual = $true
+            }
+            [pscustomobject]@{
+                Id = 'hyperv'; Name = 'Microsoft'; PciIds = @('1414'); Url = ''; Virtual = $true
+            }
+            [pscustomobject]@{
+                Id = 'virtualbox'; Name = 'VirtualBox'; PciIds = @('80EE'); Url = ''; Virtual = $true
+            }
+            [pscustomobject]@{
+                Id = 'qemu'; Name = 'QEMU / Red Hat'; PciIds = @('1234', '1AF4'); Url = ''; Virtual = $true
+            }
+        )
+    }
+
+    function Resolve-GraphicsVendor {
+        param([AllowEmptyString()][string]$PnpDeviceId)
+
+        if ([string]::IsNullOrWhiteSpace($PnpDeviceId)) { return $null }
+        if ($PnpDeviceId -notmatch 'VEN_([0-9A-Fa-f]{4})') { return $null }
+
+        $pci = $Matches[1].ToUpperInvariant()
+        foreach ($vendor in Get-GraphicsVendors) {
+            if ($vendor.PciIds -contains $pci) { return $vendor }
+        }
+
+        return $null
+    }
+
+    function Get-GraphicsAdapter {
+        $query = 'SELECT Name,DriverVersion,DriverDate,AdapterCompatibility,PNPDeviceID,AdapterRAM,Status FROM Win32_VideoController'
+        $adapters = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($row in @(Get-CimInstance -Query $query -ErrorAction Stop)) {
+            $vendor = Resolve-GraphicsVendor -PnpDeviceId ([string]$row.PNPDeviceID)
+
+            $pci = ''
+            if ([string]$row.PNPDeviceID -match 'VEN_([0-9A-Fa-f]{4})') { $pci = $Matches[1].ToUpperInvariant() }
+
+            $date = $null
+            try { if ($row.DriverDate) { $date = [DateTime]$row.DriverDate } } catch { }
+
+            $adapters.Add([pscustomobject]@{
+                Name          = [string]$row.Name
+                DriverVersion = [string]$row.DriverVersion
+                DriverDate    = $date
+                Vendor        = $vendor
+                PciId         = $pci
+                # Kept so the difference is visible when it disagrees with the PCI id.
+                ReportedBy    = [string]$row.AdapterCompatibility
+            })
+        }
+
+        return @($adapters)
+    }
+
+    # -----------------------------------------------------------------------------
+    # Devices that are not working
+    # -----------------------------------------------------------------------------
+
+    # Win32_PnPEntity.ConfigManagerErrorCode, in the words Device Manager uses.
+    # The common ones are worth spelling out - '28' means nothing to anyone, while
+    # 'the drivers for this device are not installed' is the whole answer.
+    function Get-DeviceProblemMeaning {
+        param([Parameter(Mandatory)][int]$Code)
+
+        switch ($Code) {
+            1  { return 'Not configured correctly.' }
+            3  { return 'The driver may be corrupted, or the system is low on memory.' }
+            9  { return 'Windows cannot identify this hardware - its registry information is invalid.' }
+            10 { return 'The device cannot start.' }
+            12 { return 'Cannot find enough free resources to use.' }
+            14 { return 'Cannot work properly until the computer is restarted.' }
+            16 { return 'Windows cannot identify all the resources this device uses.' }
+            18 { return 'Reinstall the drivers for this device.' }
+            19 { return 'The registry entry for this device is incomplete or damaged.' }
+            21 { return 'Windows is removing this device.' }
+            22 { return 'This device is disabled.' }
+            24 { return 'Not present, not working properly, or missing drivers.' }
+            28 { return 'The drivers for this device are not installed.' }
+            29 { return 'Disabled because its firmware did not give it the required resources.' }
+            31 { return 'Windows cannot load the drivers required for this device.' }
+            32 { return 'A driver for this device has been disabled - a dependency is not starting.' }
+            33 { return 'Windows cannot determine which resources this device requires.' }
+            34 { return 'Windows cannot determine the settings for this device.' }
+            35 { return 'The system firmware does not have enough information to configure this device.' }
+            36 { return 'This device is requesting a PCI interrupt but is configured for ISA, or the reverse.' }
+            37 { return 'Windows cannot initialize the device driver.' }
+            38 { return 'A previous instance of the driver is still in memory.' }
+            39 { return 'The driver may be corrupted or missing.' }
+            40 { return 'Its service key information in the registry is missing or wrong.' }
+            41 { return 'The driver loaded but Windows cannot find the hardware.' }
+            42 { return 'A duplicate device is already running.' }
+            43 { return 'Windows stopped this device because it reported problems.' }
+            44 { return 'An application or service shut this device down.' }
+            45 { return 'Not currently connected to the computer.' }
+            46 { return 'Not available because the system is shutting down.' }
+            47 { return 'Prepared for safe removal, but not removed.' }
+            48 { return 'The software for this device has been blocked from starting.' }
+            49 { return 'Windows cannot start new devices - the system hive is too large.' }
+            50 { return 'Windows cannot apply all the properties for this device.' }
+            51 { return 'Waiting on another device to start.' }
+            52 { return 'Windows cannot verify the digital signature for this driver.' }
+            default { return "Device Manager problem code $Code." }
+        }
+    }
+
+    function Get-DriverProblemDevice {
+        $query = 'SELECT Name,DeviceID,ConfigManagerErrorCode,PNPClass,Manufacturer,Status FROM Win32_PnPEntity WHERE ConfigManagerErrorCode <> 0'
+        $devices = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($row in @(Get-CimInstance -Query $query -ErrorAction Stop)) {
+            $code = [int]$row.ConfigManagerErrorCode
+
+            $devices.Add([pscustomobject]@{
+                Name         = [string]$row.Name
+                Class        = [string]$row.PNPClass
+                Manufacturer = [string]$row.Manufacturer
+                Code         = $code
+                Meaning      = (Get-DeviceProblemMeaning -Code $code)
+                DeviceId     = [string]$row.DeviceID
+                # 22 and 45 are a disabled device and an unplugged one - both are
+                # states someone chose, not faults to go hunting drivers for.
+                Missing      = ($code -in @(28, 31, 39, 18, 24))
+            })
+        }
+
+        return @($devices | Sort-Object -Property Code, Name)
+    }
+
+    # -----------------------------------------------------------------------------
+    # Third-party driver packages, and backing them up
+    # -----------------------------------------------------------------------------
+
+    # Get-WindowsDriver and Export-WindowsDriver both refuse without elevation, so
+    # say which one is missing rather than letting DISM's own message surface.
+    function Test-DriverToolsAvailable {
+        if (-not (Get-Command -Name 'Get-WindowsDriver' -ErrorAction SilentlyContinue)) {
+            Write-Err 'The DISM PowerShell module is not available on this machine.'
+            return $false
+        }
+        if (-not $Ctx.IsAdmin) {
+            Write-Err 'Listing and exporting driver packages needs administrator rights.'
+            Write-Info 'Re-run from an elevated prompt, or use -Elevate.'
+            return $false
+        }
+        return $true
+    }
+
+    function Get-DriverPackage {
+        if (-not (Test-DriverToolsAvailable)) { return @() }
+
+        try { return @(Get-WindowsDriver -Online -ErrorAction Stop) }
+        catch {
+            Write-Err "Could not list driver packages: $($_.Exception.Message)"
+            return @()
+        }
+    }
+
+    # Every third-party driver package on the machine, copied out as .inf folders.
+    # The thing to do before wiping a machine whose network or chipset drivers came
+    # off a disc nobody can find any more.
+    function Backup-Driver {
+        param([Parameter(Mandatory)][string]$Path)
+
+        # Dry run before the admin check, so a preview describes what an elevated
+        # run would do rather than refusing because this process is not elevated.
+        # Same order as Invoke-TweakApply and Invoke-ToolboxAction.
+        if ($Ctx.DryRun) {
+            Write-Status -Glyph (Get-Glyph 'Info') -Color (Get-Color 'Warn') -Message 'Driver backup' -MessageColor (Get-Color 'Warn')
+            Write-Info "would export every third-party driver package to $Path"
+            if (-not $Ctx.IsAdmin) { Write-Info 'needs administrator rights' }
+            return $false
+        }
+
+        if (-not (Test-DriverToolsAvailable)) { return $false }
+
+        Write-Line ''
+        Write-Info "Exporting every third-party driver package to:"
+        Write-Line "      $Path" -Color White
+        Write-Info 'This is the drivers Windows did not ship with - graphics, chipset, network, printers.'
+        Write-Info 'It can be a few hundred megabytes and take a minute.'
+
+        if (-not (Confirm-Action 'Export them now?' -DefaultYes)) {
+            Write-Warn 'Driver backup - skipped.'
+            return $false
+        }
+
+        try {
+            New-Item -ItemType Directory -Path $Path -Force | Out-Null
+            Write-Step 'Exporting'
+
+            $exported = @(Export-WindowsDriver -Online -Destination $Path -ErrorAction Stop)
+
+            Write-Ok "$($exported.Count) driver package(s) exported."
+            Write-Info "Restore one later with:  pnputil /add-driver <inf> /install"
+            Write-Log "driver backup: $($exported.Count) packages to $Path"
+            return $true
+        }
+        catch {
+            Write-Err "Driver backup failed: $($_.Exception.Message)"
+            return $false
+        }
+    }
+
+    function Get-DefaultDriverBackupPath {
+        Join-Path $Ctx.StateDir ('drivers-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    }
+
+    # -----------------------------------------------------------------------------
+    # Console output
+    # -----------------------------------------------------------------------------
+
+    function Show-DriverOverview {
+        Write-SectionHeading 'Drivers'
+
+        # ---- graphics ----------------------------------------------------------
+        $adapters = @()
+        try { $adapters = @(Get-GraphicsAdapter) }
+        catch { Write-Err "Could not read the display adapters: $($_.Exception.Message)" }
+
+        if ($adapters.Count -eq 0) { Write-Warn 'No display adapter reported.' }
+
+        foreach ($adapter in $adapters) {
+            Write-Line ''
+            Write-Line '  ' -NoNewline
+            Write-Line $adapter.Name -Color White
+
+            $version = $adapter.DriverVersion
+            if (-not $version) { $version = 'unknown' }
+
+            $date = ''
+            if ($adapter.DriverDate) { $date = '   ' + $adapter.DriverDate.ToString('yyyy-MM-dd') }
+            Write-Info "driver $version$date"
+
+            if (-not $adapter.Vendor) {
+                Write-Info "PCI vendor $($adapter.PciId) - not one Moscovium has a download page for."
+                continue
+            }
+
+            if ($adapter.Vendor.Virtual) {
+                Write-Info "$($adapter.Vendor.Name) virtual adapter - there is no vendor driver to install."
+                continue
+            }
+
+            Write-Line '      get drivers: ' -Color (Get-Color 'Muted') -NoNewline
+            Write-Line $adapter.Vendor.Url -Color (Get-Color 'Accent')
+        }
+
+        # ---- problem devices ---------------------------------------------------
+        $problems = @()
+        try { $problems = @(Get-DriverProblemDevice) }
+        catch { Write-Err "Could not read the device list: $($_.Exception.Message)" }
+
+        Write-Line ''
+        if ($problems.Count -eq 0) {
+            Write-Ok 'No device is reporting a problem.'
+        }
+        else {
+            Write-Line "  $($problems.Count) device(s) reporting a problem" -Color (Get-Color 'Warn')
+            foreach ($device in $problems) {
+                $color = Get-Color 'Muted'
+                if ($device.Missing) { $color = Get-Color 'Err' }
+
+                Write-Line '    ' -NoNewline
+                Write-Line ("code $($device.Code)").PadRight(10) -Color $color -NoNewline
+                Write-Line $device.Name -Color White
+                Write-Info $device.Meaning
+            }
+        }
+
+        Write-Line ''
+        Write-Info 'Back them up with:  -BackupDrivers <folder>     device manager:  -Toolbox device-manager'
     }
 
 # ===== src/48-Personalize.ps1 ==========================================
@@ -9602,6 +9934,94 @@ param(
     # Until this existed the Personalise features were window-only.
     # The Pointer Options tab as a screen: every setting with its current value,
     # enter to change it. Toggles flip; ranges ask for a number.
+    # Drivers: what is there, what is broken, where the real ones come from.
+    # Deliberately no "install all drivers" - see the note at the top of 47-Drivers.
+    function Show-DriverMenu {
+        while ($true) {
+            $adapters = @()
+            try { $adapters = @(Get-GraphicsAdapter) } catch { }
+
+            $problems = @()
+            try { $problems = @(Get-DriverProblemDevice) } catch { }
+
+            $subtitle = 'No device is reporting a problem'
+            if ($problems.Count -gt 0) { $subtitle = "$($problems.Count) device(s) reporting a problem" }
+
+            $options = [System.Collections.Generic.List[object]]::new()
+            $options.Add([pscustomobject]@{ Name = 'Overview'; Hint = 'Adapters, problem devices, driver sources'; Action = 'overview'; Data = $null })
+
+            # One row per adapter that has a real vendor page behind it.
+            foreach ($adapter in $adapters) {
+                if (-not $adapter.Vendor -or $adapter.Vendor.Virtual -or -not $adapter.Vendor.Url) { continue }
+                $options.Add([pscustomobject]@{
+                    Name = "Get $($adapter.Vendor.Name) drivers"
+                    Hint = $adapter.Vendor.Url
+                    Action = 'vendor'; Data = $adapter.Vendor
+                })
+            }
+
+            $options.Add([pscustomobject]@{ Name = 'Back up all drivers'; Hint = 'Export every third-party package to a folder (admin)'; Action = 'backup'; Data = $null })
+            $options.Add([pscustomobject]@{ Name = 'List driver packages'; Hint = 'Third-party packages Windows did not ship with (admin)'; Action = 'packages'; Data = $null })
+            $options.Add([pscustomobject]@{ Name = 'Install Display Driver Uninstaller'; Hint = 'DDU - run it in Safe Mode, not from here'; Action = 'ddu'; Data = $null })
+            $options.Add([pscustomobject]@{ Name = 'Open Device Manager'; Hint = 'devmgmt.msc'; Action = 'devmgmt'; Data = $null })
+
+            $result = Show-Selector -Items @($options) -Title 'Drivers' -SingleSelect `
+                -Subtitle $subtitle `
+                -Label { param($o) $o.Name } `
+                -Sublabel { param($o) $o.Hint }
+
+            if (-not $result.Confirmed) { return }
+            $choice = $result.Selected[0]
+
+            Write-Banner
+            switch ($choice.Action) {
+                'overview' { Show-DriverOverview }
+                'vendor' {
+                    Write-SectionHeading "$($choice.Data.Name) drivers"
+                    Write-Info 'Opening the vendor download page in your browser:'
+                    Write-Line "      $($choice.Data.Url)" -Color White
+                    try { Start-Process $choice.Data.Url | Out-Null }
+                    catch { Write-Err "Could not open the browser: $($_.Exception.Message)" }
+                }
+                'backup' {
+                    $default = Get-DefaultDriverBackupPath
+                    Write-SectionHeading 'Back up drivers'
+                    Write-Line "  Folder (blank for $default): " -Color Yellow -NoNewline
+                    $folder = [string](Read-Host)
+                    if (-not $folder) { $folder = $default }
+                    Backup-Driver -Path $folder | Out-Null
+                }
+                'packages' {
+                    Write-SectionHeading 'Third-party driver packages'
+                    $packages = @(Get-DriverPackage)
+                    if ($packages.Count -gt 0) {
+                        Write-Info "$($packages.Count) package(s)"
+                        foreach ($package in @($packages | Sort-Object ProviderName, ClassName)) {
+                            Write-Line '  - ' -Color DarkGray -NoNewline
+                            Write-Line ([string]$package.Driver).PadRight(16) -Color White -NoNewline
+                            Write-Line ([string]$package.ProviderName).PadRight(28) -Color Gray -NoNewline
+                            Write-Line ([string]$package.ClassName) -Color DarkGray
+                        }
+                    }
+                }
+                'ddu' {
+                    # Through the app engine, so it gets the same winget handling
+                    # everything else does.
+                    $resolved = Resolve-App -Names @('Wagnardsoft.DisplayDriverUninstaller')
+                    if ($resolved.Matched.Count -gt 0) { Invoke-AppInstall -Apps $resolved.Matched }
+                    else {
+                        Write-SectionHeading 'Display Driver Uninstaller'
+                        Invoke-WingetInstall -Id 'Wagnardsoft.DisplayDriverUninstaller' -Name 'Display Driver Uninstaller'
+                    }
+                    Write-Line ''
+                    Write-Warn 'DDU is meant to be run from Safe Mode. Running it on a live desktop is how people end up with no display driver at all.'
+                }
+                'devmgmt' { Invoke-ToolboxAction -Id 'device-manager' }
+            }
+            Wait-ForKey
+        }
+    }
+
     function Show-MouseMenu {
         while ($true) {
             $entries = @(Get-MouseSnapshot)
@@ -9874,6 +10294,7 @@ param(
             [pscustomobject]@{ Name = 'Customize'; Hint = 'Open-Shell, Nilesoft Shell, StartAllBack, ExplorerPatcher';  Action = 'customize' }
             [pscustomobject]@{ Name = 'Personalise'; Hint = 'Cursor packs and wallpaper';                              Action = 'personalise' }
             [pscustomobject]@{ Name = 'Mouse';    Hint = 'Pointer speed, acceleration, trails, visibility';        Action = 'mouse' }
+            [pscustomobject]@{ Name = 'Drivers';  Hint = 'Adapters, problem devices, backup, vendor downloads';   Action = 'drivers' }
             [pscustomobject]@{ Name = 'Counter-Strike 2'; Hint = 'Configs and launch options';                         Action = 'cs2' }
             [pscustomobject]@{ Name = 'CS:GO';        Hint = 'Configs and launch options for the legacy build';        Action = 'csgo' }
             [pscustomobject]@{ Name = 'Tasks';    Hint = 'Live CPU, memory, disk, network and processes';          Action = 'tasks' }
@@ -9905,6 +10326,7 @@ param(
                 'customize' { Show-CustomizationMenu }
                 'personalise' { Show-PersonalizeMenu }
                 'mouse'    { Show-MouseMenu }
+                'drivers'  { Show-DriverMenu }
                 'cs2'      { Show-CsMenu -Game CS2 }
                 'csgo'     { Show-CsMenu -Game CSGO }
                 'tasks'    { Show-TaskManager }
@@ -11213,6 +11635,7 @@ param(
           <ListBoxItem Content="Guides"/>
           <ListBoxItem Content="Personalise"/>
           <ListBoxItem Content="Mouse"/>
+          <ListBoxItem Content="Drivers"/>
           <ListBoxItem Content="Counter-Strike 2"/>
           <ListBoxItem Content="CS:GO"/>
           <ListBoxItem Content="Customization"/>
@@ -11715,6 +12138,39 @@ param(
 
               </StackPanel>
             </ScrollViewer>
+          </Grid>
+
+          <!-- Reports and backs up; deliberately does not mass-install. The
+               adapter cards and the problem list are drawn in code. -->
+          <Grid x:Name="DriversPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Drivers" Style="{StaticResource PageTitle}"/>
+              <TextBlock x:Name="DriverSummary" FontSize="11" Foreground="{StaticResource Faint}"
+                         VerticalAlignment="Center" Margin="12,3,0,0" Text=""/>
+            </StackPanel>
+
+            <DockPanel Grid.Row="1" Margin="0,0,0,10" LastChildFill="False">
+              <Button x:Name="BtnDriverRefresh" Content="Refresh" DockPanel.Dock="Left"/>
+              <Button x:Name="BtnDriverBackup" Content="Back up all drivers" Style="{StaticResource Primary}" DockPanel.Dock="Left"
+                      ToolTip="Export every third-party driver package to a folder"/>
+              <Button x:Name="BtnDeviceManager" Content="Device Manager" DockPanel.Dock="Left"/>
+              <Button x:Name="BtnDriverDdu" Content="Install DDU" DockPanel.Dock="Right" Margin="8,0,0,0"
+                      ToolTip="Display Driver Uninstaller - run it in Safe Mode, not from here"/>
+            </DockPanel>
+
+            <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="8">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="7">
+                <StackPanel x:Name="DriverRows"/>
+              </ScrollViewer>
+            </Border>
           </Grid>
 
           <!-- The Pointer Options tab of the Windows mouse control panel, with
@@ -12464,7 +12920,7 @@ param(
         $groups = @(
             @{ Title = 'Third-party debloat scripts'; Ids = @('winutil', 'winutil-preset', 'raphi', 'raphi-auto') }
             @{ Title = 'System tuning';               Ids = @('updates-security', 'network-better', 'network-default', 'dynamictick-off', 'dynamictick-on', 'priority-22', 'priority-default') }
-            @{ Title = 'Classic control panels';      Ids = @('control-panel', 'services', 'mouse', 'keyboard', 'sound') }
+            @{ Title = 'Classic control panels';      Ids = @('control-panel', 'services', 'device-manager', 'mouse', 'keyboard', 'sound') }
         )
 
         # The one-click box is not here: it has the landing page to itself.
@@ -12588,6 +13044,90 @@ param(
 
             $ui.OneClickSteps.Children.Add($line) | Out-Null
         }
+    }
+
+    # -----------------------------------------------------------------------------
+    # Drivers page
+    # -----------------------------------------------------------------------------
+
+    function Update-GuiDriverRow {
+        if (-not $Ctx.Gui) { return }
+        $ui = $Ctx.Gui.Ui
+
+        $ui.DriverRows.Children.Clear()
+
+        $adapters = @()
+        $problems = @()
+        $failure = ''
+
+        try { $adapters = @(Get-GraphicsAdapter) } catch { $failure = $_.Exception.Message }
+        try { $problems = @(Get-DriverProblemDevice) } catch { $failure = $_.Exception.Message }
+
+        $first = $true
+        $ui.DriverRows.Children.Add((New-GuiGroupHeader -Title 'Display adapters' -Count $adapters.Count -First:$first)) | Out-Null
+        $first = $false
+
+        foreach ($adapter in $adapters) {
+            $detail = 'driver ' + $adapter.DriverVersion
+            if ($adapter.DriverDate) { $detail += '   ' + $adapter.DriverDate.ToString('yyyy-MM-dd') }
+
+            $status = 'PCI ' + $adapter.PciId
+            $ink, $fill = '#FF8B81A8', '#FF150F22'
+
+            if ($adapter.Vendor) {
+                $status = $adapter.Vendor.Name
+                if ($adapter.Vendor.Virtual) {
+                    $detail += '   virtual adapter - no vendor driver to install'
+                }
+                else {
+                    $detail += '   ' + $adapter.Vendor.Url
+                    $ink, $fill = '#FF7EE0A6', '#FF102A1E'
+                }
+            }
+
+            $row = New-GuiRow -Item $adapter -Primary $adapter.Name -Secondary $detail `
+                -Status $status -StatusBrush $ink -StatusFill $fill -NoCheckBox
+
+            # Only a vendor with a real download page gets a button.
+            if ($adapter.Vendor -and -not $adapter.Vendor.Virtual -and $adapter.Vendor.Url) {
+                $open = New-Object Windows.Controls.Button
+                $open.Content = 'Get drivers'
+                $open.Padding = New-Object Windows.Thickness 12, 4, 12, 4
+                $open.Margin = New-Object Windows.Thickness 8, 0, 0, 0
+                $open.VerticalAlignment = 'Center'
+                $open.Tag = $adapter.Vendor.Url
+                [Windows.Controls.Grid]::SetColumn($open, 2)
+
+                $open.Add_Click({
+                    param($sender, $e)
+                    $url = [string]$sender.Tag
+                    try { Start-Process $url | Out-Null; Write-Ok "Opened $url" }
+                    catch { Write-Err "Could not open the browser: $($_.Exception.Message)" }
+                })
+
+                $row.Element.Child.Children.Add($open) | Out-Null
+            }
+
+            $ui.DriverRows.Children.Add($row.Element) | Out-Null
+        }
+
+        $ui.DriverRows.Children.Add((New-GuiGroupHeader -Title 'Devices reporting a problem' -Count $problems.Count)) | Out-Null
+
+        foreach ($device in $problems) {
+            # A missing driver is red; a device someone disabled or unplugged is not
+            # a fault to go hunting drivers for.
+            $ink, $fill = '#FFFFCB7A', '#FF2E2410'
+            if ($device.Missing) { $ink, $fill = '#FFFF7B94', '#FF2E1018' }
+
+            $row = New-GuiRow -Item $device -Primary $device.Name -Secondary $device.Meaning `
+                -Status "code $($device.Code)" -StatusBrush $ink -StatusFill $fill -NoCheckBox
+            $ui.DriverRows.Children.Add($row.Element) | Out-Null
+        }
+
+        $summary = "$($adapters.Count) adapter(s), $($problems.Count) device(s) with a problem"
+        if (-not $Ctx.IsAdmin) { $summary += '   backup needs administrator' }
+        if ($failure) { $summary = $failure }
+        $ui.DriverSummary.Text = $summary
     }
 
     # -----------------------------------------------------------------------------
@@ -13250,6 +13790,8 @@ param(
             'CpuGraph', 'CoreStrip', 'TaskRows', 'TaskSearch', 'TaskSort', 'BtnTaskPause', 'BtnTaskKill',
             'StoreRows', 'BtnStoreRefresh', 'BtnStoreInstall', 'GuideRows',
             'CursorPresets', 'BtnCursorInstall', 'BtnCursorRestore', 'WallpaperStyle', 'BtnWallpaper', 'BtnCsLaunchCsgo',
+            'DriversPanel', 'DriverSummary', 'DriverRows', 'BtnDriverRefresh',
+            'BtnDriverBackup', 'BtnDeviceManager', 'BtnDriverDdu',
             'MousePanel', 'MouseSummary', 'MouseSpeedSlider', 'MouseSpeedValue',
             'MouseTrailsSlider', 'MouseTrailsValue', 'ChkMousePrecision', 'ChkMouseSnap',
             'ChkMouseTrails', 'ChkMouseVanish', 'ChkMouseSonar', 'BtnMouseRaw', 'BtnMouseDefault',
@@ -13366,8 +13908,8 @@ param(
 
         # Order has to match the ListBoxItems in the XAML and the $panels array in
         # the SelectionChanged handler. -1 means "no count worth showing".
-        $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Search apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Mouse', 'Counter-Strike 2', 'CS:GO', 'Customization', 'Profiles', 'Settings')
-        $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1, -1, @(Get-CustomizationTools).Count, -1, -1)
+        $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Search apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Mouse', 'Drivers', 'Counter-Strike 2', 'CS:GO', 'Customization', 'Profiles', 'Settings')
+        $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1, -1, -1, @(Get-CustomizationTools).Count, -1, -1)
 
         # The item Content becomes a DockPanel below, so the labels are no longer
         # readable off the ListBox. Keep them where a handler can still find them.
@@ -13422,7 +13964,8 @@ param(
                         $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.SearchAppsPanel,
                         $Ctx.Gui.Ui.PackagesPanel, $Ctx.Gui.Ui.StorePanel,
                         $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.GuidesPanel, $Ctx.Gui.Ui.PersonalizePanel,
-                        $Ctx.Gui.Ui.MousePanel, $Ctx.Gui.Ui.Cs2Panel, $Ctx.Gui.Ui.CsgoPanel,
+                        $Ctx.Gui.Ui.MousePanel, $Ctx.Gui.Ui.DriversPanel,
+                        $Ctx.Gui.Ui.Cs2Panel, $Ctx.Gui.Ui.CsgoPanel,
                         $Ctx.Gui.Ui.CustomizationPanel, $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
             for ($i = 0; $i -lt $panels.Count; $i++) {
                 $panels[$i].Visibility = if ($i -eq $sender.SelectedIndex) { 'Visible' } else { 'Collapsed' }
@@ -13451,6 +13994,31 @@ param(
         $ui.BtnTweakAll.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Tweaks) { $r.CheckBox.IsChecked = $true } })
         $ui.BtnTweakNone.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Tweaks) { $r.CheckBox.IsChecked = $false } })
         $ui.BtnAppNone.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Apps) { $r.CheckBox.IsChecked = $false } })
+
+        # ---- drivers -----------------------------------------------------------
+        $ui.BtnDriverRefresh.Add_Click({ Update-GuiDriverRow })
+
+        $ui.BtnDeviceManager.Add_Click({
+            Invoke-GuiWork -Label 'device manager' -Work { Invoke-ToolboxAction -Id 'device-manager' }
+        })
+
+        $ui.BtnDriverBackup.Add_Click({
+            $dialog = New-Object Windows.Forms.FolderBrowserDialog
+            $dialog.Description = 'Where to export every third-party driver package'
+            if ($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { return }
+
+            $folder = $dialog.SelectedPath
+            Invoke-GuiWork -Label 'exporting drivers' -Work { Backup-Driver -Path $folder | Out-Null }
+        })
+
+        $ui.BtnDriverDdu.Add_Click({
+            Invoke-GuiWork -Label 'installing DDU' -Work {
+                $resolved = Resolve-App -Names @('Wagnardsoft.DisplayDriverUninstaller')
+                if ($resolved.Matched.Count -gt 0) { Invoke-AppInstall -Apps $resolved.Matched }
+                else { Invoke-WingetInstall -Id 'Wagnardsoft.DisplayDriverUninstaller' -Name 'Display Driver Uninstaller' }
+                Write-Warn 'DDU is meant to be run from Safe Mode. Running it on a live desktop is how people end up with no display driver at all.'
+            }
+        })
 
         # ---- mouse -------------------------------------------------------------
         # Sliders fire per pixel while dragging, so the write happens on release
@@ -13818,6 +14386,7 @@ param(
 
         # ---- go ----------------------------------------------------------------
         Update-GuiOneClickSteps
+        Update-GuiDriverRow
         Update-GuiMouseControls
         Update-GuiPackageRow
         Update-GuiCustomizationRow
@@ -13927,6 +14496,8 @@ param(
         Write-Line '    -Toolbox <id>      run a toolbox action (see -List toolbox)' -Color Gray
         Write-Line '    -InstallManager <id>  install a package manager: choco or scoop' -Color Gray
         Write-Line '    -Customize <id>    install Open-Shell, Nilesoft Shell, StartAllBack or ExplorerPatcher' -Color Gray
+        Write-Line '    -Drivers           display adapters, devices with problems, where to get drivers' -Color Gray
+        Write-Line '    -BackupDrivers <folder>  export every third-party driver package (needs admin)' -Color Gray
         Write-Line '    -Mouse             show the mouse pointer settings' -Color Gray
         Write-Line '    -SetMouse <name=value>  e.g. precision=0, speed=6, trails=0' -Color Gray
         Write-Line '    -MousePreset <id>  raw (no acceleration, 1:1) or default' -Color Gray
@@ -14218,6 +14789,15 @@ param(
 
         # Per-user (HKCU) and applied through SystemParametersInfo, so none of these
         # joins $mutating - elevating to move a slider would be needless UAC.
+        if (& $has 'Drivers') { Show-DriverOverview; $didSomething = $true }
+
+        if (& $has 'BackupDrivers') {
+            $target = [string]$Bound['BackupDrivers']
+            if (-not $target) { $target = Get-DefaultDriverBackupPath }
+            Backup-Driver -Path $target | Out-Null
+            $didSomething = $true
+        }
+
         if (& $has 'Mouse') { Show-MouseSettings; $didSomething = $true }
 
         if (& $has 'SetMouse') {
@@ -14324,4 +14904,4 @@ param(
         Restore-ConsoleEncoding -Previous $previousEncoding
     }
 
-} $PSBoundParameters '1.2.0' $SourceUrl 'a5e9e9b339'
+} $PSBoundParameters '1.2.0' $SourceUrl '8d79fc15b3'

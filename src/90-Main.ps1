@@ -33,6 +33,8 @@ function Show-Help {
     Write-Line '    -Toolbox <id>      run a toolbox action (see -List toolbox)' -Color Gray
     Write-Line '    -InstallManager <id>  install a package manager: choco or scoop' -Color Gray
     Write-Line '    -Customize <id>    install Open-Shell, Nilesoft Shell, StartAllBack or ExplorerPatcher' -Color Gray
+    Write-Line '    -Drivers           display adapters, devices with problems, where to get drivers' -Color Gray
+    Write-Line '    -BackupDrivers <folder>  export every third-party driver package (needs admin)' -Color Gray
     Write-Line '    -Mouse             show the mouse pointer settings' -Color Gray
     Write-Line '    -SetMouse <name=value>  e.g. precision=0, speed=6, trails=0' -Color Gray
     Write-Line '    -MousePreset <id>  raw (no acceleration, 1:1) or default' -Color Gray
@@ -324,6 +326,15 @@ function Invoke-Main {
 
     # Per-user (HKCU) and applied through SystemParametersInfo, so none of these
     # joins $mutating - elevating to move a slider would be needless UAC.
+    if (& $has 'Drivers') { Show-DriverOverview; $didSomething = $true }
+
+    if (& $has 'BackupDrivers') {
+        $target = [string]$Bound['BackupDrivers']
+        if (-not $target) { $target = Get-DefaultDriverBackupPath }
+        Backup-Driver -Path $target | Out-Null
+        $didSomething = $true
+    }
+
     if (& $has 'Mouse') { Show-MouseSettings; $didSomething = $true }
 
     if (& $has 'SetMouse') {

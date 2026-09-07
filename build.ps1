@@ -191,6 +191,8 @@ param(
     [string]  `$Customize,
     [string]  `$FindApp,
     [string[]]`$FindIn,
+    [switch]  `$Drivers,
+    [string]  `$BackupDrivers,
     [switch]  `$Mouse,
     [string[]]`$SetMouse,
     [string]  `$MousePreset,
