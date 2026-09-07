@@ -5,7 +5,7 @@
 
         irm https://moscovium.win | iex
 
-    Build 38fbeac6b7  (a digest of src/ and data/ - same sources, same id).
+    Build 5cc52380ba  (a digest of src/ and data/ - same sources, same id).
     Check with:  .\moscovium.ps1 -Version
 
     GENERATED FILE - do not edit.
@@ -3349,11 +3349,15 @@ param(
             '  |_|  |_| \___/ |___/ \___| \___/   \_/   |_| \__,_||_| |_| |_|'
         )
 
-        # Top-down gradient. Only sixteen colours are in play and none of them is a
-        # true purple, so the ramp is White -> Magenta -> DarkMagenta: conhost draws
-        # both as violet, and it needs no ANSI support.
+        # Top-down gradient, Magenta -> DarkMagenta. Only sixteen colours are in
+        # play and neither is a true purple, but conhost draws both as violet and it
+        # needs no ANSI support.
+        #
+        # No White at the top: the first line is the thin roof of the letterforms,
+        # and a white roof over purple letters reads as a rendering fault rather
+        # than a highlight. Every line is purple.
         $ramp = @(
-            [ConsoleColor]::White
+            [ConsoleColor]::Magenta
             [ConsoleColor]::Magenta
             [ConsoleColor]::Magenta
             [ConsoleColor]::DarkMagenta
@@ -9263,4 +9267,4 @@ param(
         Restore-ConsoleEncoding -Previous $previousEncoding
     }
 
-} $PSBoundParameters '1.2.0' $SourceUrl '38fbeac6b7'
+} $PSBoundParameters '1.2.0' $SourceUrl '5cc52380ba'

@@ -536,8 +536,10 @@ Test-Case 'the wordmark and the accent are purple, not cyan' {
     foreach ($value in $palette.Values) {
         Assert-True ([string]$value -notmatch 'Cyan') "the palette still holds $value"
     }
+    # Every line, including the thin roof on line 1 - a white roof over purple
+    # letters looked like a rendering fault.
     foreach ($line in @(Get-WordmarkLines)) {
-        Assert-True ([string]$line.Color -match 'Magenta|White') "wordmark line is $($line.Color)"
+        Assert-True ([string]$line.Color -match 'Magenta') "wordmark line is $($line.Color), not a purple"
     }
 }
 
