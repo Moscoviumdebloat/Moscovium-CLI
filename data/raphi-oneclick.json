@@ -1,0 +1,64 @@
+{
+  "Version": "1.0",
+  "Apps": [
+    "Default"
+  ],
+  "Tweaks": [
+    { "Name": "RemoveGamingApps", "Value": true },
+
+    { "Name": "DisableTelemetry", "Value": true },
+    { "Name": "DisableSuggestions", "Value": true },
+    { "Name": "DisableLockscreenTips", "Value": true },
+    { "Name": "DisableDesktopSpotlight", "Value": true },
+    { "Name": "DisableFindMyDevice", "Value": true },
+    { "Name": "DisableEdgeAds", "Value": true },
+    { "Name": "DisableBraveBloat", "Value": true },
+    { "Name": "DisableSettings365Ads", "Value": true },
+    { "Name": "DisableSettingsHome", "Value": true },
+
+    { "Name": "DisableBing", "Value": true },
+    { "Name": "DisableStoreSearchSuggestions", "Value": true },
+    { "Name": "DisableStartRecommended", "Value": true },
+    { "Name": "DisableStartPhoneLink", "Value": true },
+    { "Name": "ClearStartAllUsers", "Value": true },
+
+    { "Name": "DisableCopilot", "Value": true },
+    { "Name": "DisableRecall", "Value": true },
+    { "Name": "DisableClickToDo", "Value": true },
+    { "Name": "DisableAISvcAutoStart", "Value": true },
+    { "Name": "DisablePaintAI", "Value": true },
+    { "Name": "DisableNotepadAI", "Value": true },
+    { "Name": "DisableEdgeAI", "Value": true },
+
+    { "Name": "DisableDeviceAutoAppDownload", "Value": true },
+    { "Name": "PreventUpdateAutoReboot", "Value": true },
+
+    { "Name": "TaskbarAlignLeft", "Value": true },
+    { "Name": "HideSearchTb", "Value": true },
+    { "Name": "HideTaskview", "Value": true },
+    { "Name": "DisableWidgets", "Value": true },
+    { "Name": "HideChat", "Value": true },
+
+    { "Name": "EnableDarkMode", "Value": true },
+
+    { "Name": "ExplorerToThisPC", "Value": true },
+    { "Name": "ShowKnownFileExt", "Value": true },
+    { "Name": "HideHome", "Value": true },
+    { "Name": "HideGallery", "Value": true },
+
+    { "Name": "DisableDVR", "Value": true },
+    { "Name": "DisableGameBarIntegration", "Value": true },
+
+    { "Name": "DisableMouseAcceleration", "Value": true },
+    { "Name": "DisableStickyKeys", "Value": true },
+    { "Name": "DisableDragTray", "Value": true },
+    { "Name": "DisableFastStartup", "Value": true }
+  ],
+  "Deployment": [
+    { "Name": "CreateRestorePoint", "Value": true },
+    { "Name": "SkipRegistryBackup", "Value": false },
+    { "Name": "RestartExplorer", "Value": true },
+    { "Name": "UserSelectionIndex", "Value": 0 },
+    { "Name": "AppRemovalScopeIndex", "Value": 0 }
+  ]
+}

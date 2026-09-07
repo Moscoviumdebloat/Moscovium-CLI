@@ -474,8 +474,10 @@ function Update-GuiToolboxRow {
     # Group by what the action actually does, so "runs a third-party script" is
     # never mistaken for "opens a control panel".
     $groups = @(
+        # First, and on its own, because it is the one that runs everything else.
+        @{ Title = 'Everything at once';          Ids = @('oneclick') }
         @{ Title = 'Third-party debloat scripts'; Ids = @('winutil', 'winutil-preset', 'raphi', 'raphi-auto') }
-        @{ Title = 'System tuning';               Ids = @('network-better', 'network-default', 'dynamictick-off', 'dynamictick-on', 'priority-22', 'priority-default') }
+        @{ Title = 'System tuning';               Ids = @('updates-security', 'network-better', 'network-default', 'dynamictick-off', 'dynamictick-on', 'priority-22', 'priority-default') }
         @{ Title = 'Classic control panels';      Ids = @('control-panel', 'services', 'mouse', 'keyboard', 'sound') }
     )
 

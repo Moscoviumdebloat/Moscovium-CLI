@@ -21,7 +21,8 @@ which ships with Windows, is enough.
 |---|---|
 | **40 tweaks** | Privacy & telemetry, Explorer & taskbar, gaming & performance, hardware, advanced. Applied, reverted, or reported on. |
 | **127 apps** | The full curated winget catalog, plus direct-download and archive installers, across 8 categories. |
-| **15 toolbox actions** | WinUtil, Win11Debloat, TCP autotuning, dynamic tick, CPU priority, and the classic control panels. |
+| **One-click debloat box** | Six steps behind one prompt: WinUtil preset, Win11Debloat preset, security-only Windows Update, TCP autotuning, CPU priority, dynamic tick. |
+| **17 toolbox actions** | WinUtil, Win11Debloat, Windows Update policy, TCP autotuning, dynamic tick, CPU priority, and the classic control panels. |
 | **6 guides** | The manual walkthroughs - BIOS, GPU control panels, network - that no tool can do for you. |
 | **App store** | Community releases from the Moscovium dev orgs on GitHub. |
 | **Personalise** | Cursor schemes, wallpaper, Counter-Strike configs. |
@@ -156,6 +157,7 @@ silently.
 
 ```powershell
 .\moscovium.ps1 -List toolbox
+.\moscovium.ps1 -Toolbox oneclick          # the whole debloat box
 .\moscovium.ps1 -Toolbox winutil-preset
 .\moscovium.ps1 -Toolbox network-better
 ```
@@ -359,6 +361,49 @@ nothing. The CLI sends `-Config` alone, which is exactly what WinUtil's own
 "copy config command" button produces.
 
 `raphi-auto` genuinely is unattended; all 24 of its flags are still valid.
+
+### The one-click box
+
+`-Toolbox oneclick` runs six steps behind a single confirmation, after listing
+both third-party URLs and everything it is about to do:
+
+| | |
+|---|---|
+| 1 | WinUtil with `data/winutil-oneclick.json` — 20 tweaks, restore point first |
+| 2 | Win11Debloat with `data/raphi-oneclick.json` — 40 tweaks, `-Silent` |
+| 3 | Windows Update set to security-only |
+| 4 | TCP autotuning disabled |
+| 5 | `Win32PrioritySeparation` = 22 |
+| 6 | Dynamic tick disabled |
+
+Steps 5 and 6 need a reboot. Step 1 is the one that is *not* unattended, for
+the reason above: WinUtil has no `-Run`, so its window opens with everything
+ticked and you press Run Tweaks.
+
+Two things about the presets are worth knowing, because both are constraints
+imposed by the tools rather than choices:
+
+**Security updates could not go in the WinUtil preset.** WinUtil exposes it as
+`WPFUpdatessecurity`, which is a *Button*, not a checkbox — and `Invoke-WPFImpex`
+only restores checkbox selections, filtering names to
+`^WPF(?:Install|Tweaks|Toggle|Feature|Appx)`. A config naming it is silently
+dropped. So `Set-SecurityUpdatePolicy` in `src/40-Toolbox.ps1` writes the same
+policy values `Invoke-WPFUpdatessecurity` does, and it is also available on its
+own as `-Toolbox updates-security`.
+
+**Bing removal could not come from WinUtil either.** There is no Bing tweak
+anywhere in its 42 `WPFTweaks*` keys. It comes from Win11Debloat's
+`DisableBing`, which is in the Raphi preset.
+
+`data/winutil-oneclick.json` is a flat array, which is what current WinUtil
+exports — `($selectedApps + $selectedTweaks + ...) | ConvertTo-Json`. The
+older `winutil-debloat.json` object form still imports, but through WinUtil's
+`$isLegacyConfig` branch.
+
+`data/raphi-oneclick.json` uses Win11Debloat's own `-Config` schema
+(`Version` / `Apps` / `Tweaks` / `Deployment`), validated in the test suite
+against the same rules `Test-ConfigConsistency` and `Import-ConfigToParams`
+apply. Both presets ask their script to take a restore point first.
 
 ## Requirements
 

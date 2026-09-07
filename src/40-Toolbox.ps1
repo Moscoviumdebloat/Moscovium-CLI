@@ -12,9 +12,15 @@
 # =============================================================================
 
 $EmbeddedWinutilConfigJson = ''
+$EmbeddedWinutilOneClickJson = ''
+$EmbeddedRaphiOneClickJson = ''
 
 function Get-ToolboxActions {
     @(
+        [pscustomobject]@{
+            Id = 'oneclick'; Name = 'One-click debloat box'; Admin = $true
+            Description = 'The whole thing in one go: WinUtil preset, Win11Debloat preset, recommended Windows Update settings, TCP autotuning off, Win32PrioritySeparation 22, dynamic tick off.'
+        }
         # The four below launch a third-party script in its own elevated window,
         # so they do not require Moscovium itself to be elevated first.
         [pscustomobject]@{
@@ -32,6 +38,10 @@ function Get-ToolboxActions {
         [pscustomobject]@{
             Id = 'raphi-auto'; Name = 'Raphi Win11Debloat (Moscovium preset)'; Admin = $false
             Description = 'Runs Win11Debloat unattended with the GUI''s 24-flag preset.'
+        }
+        [pscustomobject]@{
+            Id = 'updates-security'; Name = 'Windows Update: security-only'; Admin = $true
+            Description = 'Defers feature updates 365 days and quality updates 4 days, stops driver offers, and blocks reboots while you are signed in.'
         }
         [pscustomobject]@{
             Id = 'network-better'; Name = 'Network: disable TCP autotuning'; Admin = $true
@@ -222,24 +232,46 @@ function Invoke-RemoteScript {
     return $true
 }
 
-function Get-WinutilConfigPath {
-    $json = $EmbeddedWinutilConfigJson
+# Both WinUtil and Win11Debloat take a preset as a file path, so the embedded
+# JSON has to be spilled to disk before either can be handed it. Running from a
+# source checkout the literal is empty, so fall back to data/.
+#
+# UTF-8 without a BOM: Win11Debloat reads its config with ConvertFrom-Json,
+# which chokes on a BOM in Windows PowerShell 5.1.
+function Get-PresetConfigPath {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Json,
+        [Parameter(Mandatory)][string]$DataFile,
+        [Parameter(Mandatory)][string]$Label
+    )
 
-    if ([string]::IsNullOrWhiteSpace($json)) {
+    if ([string]::IsNullOrWhiteSpace($Json)) {
         $candidate = $null
-        if ($PSScriptRoot) { $candidate = Join-Path $PSScriptRoot '..\data\winutil-debloat.json' }
+        if ($PSScriptRoot) { $candidate = Join-Path $PSScriptRoot (Join-Path '..\data' $DataFile) }
         if ($candidate -and (Test-Path -LiteralPath $candidate)) {
-            $json = Get-Content -LiteralPath $candidate -Raw -Encoding UTF8
+            $Json = Get-Content -LiteralPath $candidate -Raw -Encoding UTF8
         }
         else {
-            throw 'The WinUtil preset is not embedded in this build.'
+            throw "The $Label preset is not embedded in this build."
         }
     }
 
     Initialize-State
-    $path = Join-Path $Ctx.StateDir 'winutil-debloat.json'
-    [IO.File]::WriteAllText($path, $json, (New-Object Text.UTF8Encoding $false))
+    $path = Join-Path $Ctx.StateDir $DataFile
+    [IO.File]::WriteAllText($path, $Json, (New-Object Text.UTF8Encoding $false))
     return $path
+}
+
+function Get-WinutilConfigPath {
+    Get-PresetConfigPath -Json $EmbeddedWinutilConfigJson -DataFile 'winutil-debloat.json' -Label 'WinUtil'
+}
+
+function Get-WinutilOneClickPath {
+    Get-PresetConfigPath -Json $EmbeddedWinutilOneClickJson -DataFile 'winutil-oneclick.json' -Label 'WinUtil one-click'
+}
+
+function Get-RaphiOneClickPath {
+    Get-PresetConfigPath -Json $EmbeddedRaphiOneClickJson -DataFile 'raphi-oneclick.json' -Label 'Win11Debloat one-click'
 }
 
 # The GUI's Raphi preset, kept in the same order for easy diffing.
@@ -254,6 +286,74 @@ function Get-RaphiPresetArguments {
         '-DisableSettings365Ads', '-DisableSettingsHome',
         '-DisablePaintAI', '-DisableNotepadAI', '-DisableStickyKeys'
     )
+}
+
+# Windows Update, set to what WinUtil calls "Security" - the same policy values
+# its Invoke-WPFUpdatessecurity writes.
+#
+# This is implemented here rather than pushed into the WinUtil preset because it
+# cannot go in a preset: WPFUpdatessecurity is a Button, and WinUtil's config
+# import only restores checkbox selections (Invoke-WPFImpex filters names to
+# ^WPF(?:Install|Tweaks|Toggle|Feature|Appx) and hands them to the checkbox
+# setter). A config naming it would be silently dropped.
+function Set-SecurityUpdatePolicy {
+    $updatePolicy = 'HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
+    $autoUpdate   = "$updatePolicy\AU"
+
+    # Undo a previous "disable updates" pass first, so this lands on a machine
+    # that can still fetch security fixes.
+    Write-Step 'Restoring Windows Update delivery'
+    Remove-RegistryValue -Path $autoUpdate -Name 'NoAutoUpdate'
+    Remove-RegistryValue -Path 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\DeliveryOptimization\Config' -Name 'DODownloadMode'
+
+    foreach ($pair in @(@('BITS', 'Manual'), @('wuauserv', 'Manual'), @('UsoSvc', 'Automatic'))) {
+        try { Set-Service -Name $pair[0] -StartupType $pair[1] -ErrorAction Stop }
+        catch { Write-Warn "Could not set the $($pair[0]) service to $($pair[1]) - $($_.Exception.Message)" }
+    }
+    try { Start-Service -Name 'UsoSvc' -ErrorAction Stop } catch { }
+
+    $taskPaths = @(
+        '\Microsoft\Windows\InstallService\*'
+        '\Microsoft\Windows\UpdateOrchestrator\*'
+        '\Microsoft\Windows\UpdateAssistant\*'
+        '\Microsoft\Windows\WaaSMedic\*'
+        '\Microsoft\Windows\WindowsUpdate\*'
+        '\Microsoft\WindowsUpdate\*'
+    )
+    foreach ($taskPath in $taskPaths) {
+        Get-ScheduledTask -TaskPath $taskPath -ErrorAction SilentlyContinue |
+            Enable-ScheduledTask -ErrorAction SilentlyContinue | Out-Null
+    }
+
+    Write-Step 'Turning off driver offers through Windows Update'
+    Set-RegistryValue -Path 'HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\Device Metadata' `
+        -Name 'PreventDeviceMetadataFromNetwork' -Type 'DWord' -Value 1
+
+    $driverSearching = 'HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Windows\DriverSearching'
+    Set-RegistryValue -Path $driverSearching -Name 'DontPromptForWindowsUpdate' -Type 'DWord' -Value 1
+    Set-RegistryValue -Path $driverSearching -Name 'DontSearchWindowsUpdate' -Type 'DWord' -Value 1
+    Set-RegistryValue -Path $driverSearching -Name 'DriverUpdateWizardWuSearchEnabled' -Type 'DWord' -Value 0
+    Set-RegistryValue -Path $updatePolicy -Name 'ExcludeWUDriversInQualityUpdate' -Type 'DWord' -Value 1
+
+    Write-Step 'Deferring feature updates 365 days and quality updates 4 days'
+    Set-RegistryValue -Path $updatePolicy -Name 'DeferFeatureUpdates' -Type 'DWord' -Value 1
+    Set-RegistryValue -Path $updatePolicy -Name 'DeferFeatureUpdatesPeriodInDays' -Type 'DWord' -Value 365
+    Set-RegistryValue -Path $updatePolicy -Name 'DeferQualityUpdates' -Type 'DWord' -Value 1
+    Set-RegistryValue -Path $updatePolicy -Name 'DeferQualityUpdatesPeriodInDays' -Type 'DWord' -Value 4
+
+    # The pre-policy UX settings would otherwise fight the policy values above.
+    $legacySettings = 'HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'
+    foreach ($name in @('BranchReadinessLevel', 'DeferFeatureUpdatesPeriodInDays', 'DeferQualityUpdatesPeriodInDays')) {
+        Remove-RegistryValue -Path $legacySettings -Name $name
+    }
+
+    Write-Step 'Blocking automatic restarts while you are signed in'
+    # NoAutoRebootWithLoggedOnUsers only takes effect under AUOptions 4.
+    Set-RegistryValue -Path $autoUpdate -Name 'AUOptions' -Type 'DWord' -Value 4
+    Set-RegistryValue -Path $autoUpdate -Name 'NoAutoRebootWithLoggedOnUsers' -Type 'DWord' -Value 1
+    Set-RegistryValue -Path $autoUpdate -Name 'AUPowerManagement' -Type 'DWord' -Value 0
+
+    Write-Ok 'Windows Update set to security-only.'
 }
 
 function Invoke-NativeCommand {
@@ -275,20 +375,136 @@ function Invoke-NativeCommand {
     return $process.ExitCode
 }
 
+# The whole debloat pass, in order, behind one confirmation.
+#
+# Steps 1 and 2 hand control to a third-party script in its own window. Step 1
+# is the one that is not unattended: WinUtil has no -Run switch, so the preset
+# arrives with everything ticked and the user presses Run Tweaks. Step 2 is
+# genuinely silent. Steps 3-6 are ours and run here.
+function Invoke-OneClickDebloat {
+    $winutilConfig = Get-WinutilOneClickPath
+    $raphiConfig   = Get-RaphiOneClickPath
+
+    $winutilCount = @((Get-Content -LiteralPath $winutilConfig -Raw -Encoding UTF8 | ConvertFrom-Json)).Count
+    $raphiTweaks  = @((Get-Content -LiteralPath $raphiConfig -Raw -Encoding UTF8 | ConvertFrom-Json).Tweaks).Count
+
+    Write-Line ''
+    Write-Info 'The box runs six steps, in this order:'
+    Write-Line "      1. WinUtil with $winutilCount tweaks preselected (christitus.com/win)" -Color White
+    Write-Line "      2. Win11Debloat with $raphiTweaks tweaks, silent (debloat.raphi.re)" -Color White
+    Write-Line '      3. Windows Update set to security-only' -Color White
+    Write-Line '      4. TCP autotuning disabled' -Color White
+    Write-Line '      5. Win32PrioritySeparation set to 22' -Color White
+    Write-Line '      6. Dynamic tick disabled' -Color White
+    Write-Line ''
+    Write-Warn 'Steps 1 and 2 are scripts published by third parties. Moscovium does not review or pin them.'
+    Write-Warn 'Step 1 is not unattended: WinUtil has no -Run switch, so press Run Tweaks in its window.'
+    Write-Info 'Both presets ask their script to take a restore point first.'
+    Write-Info 'Steps 5 and 6 need a reboot before they take effect.'
+
+    if (-not (Confirm-Action 'Run the whole box?' -DefaultYes)) {
+        Write-Warn 'One-click debloat box - skipped.'
+        return
+    }
+
+    # Already answered for the whole run; do not ask again per step. The URLs
+    # were both listed above, so nothing new is being consented to.
+    $previousAssumeYes = $Ctx.AssumeYes
+    $Ctx.AssumeYes = $true
+
+    $failed = [System.Collections.Generic.List[string]]::new()
+
+    try {
+        $steps = @(
+            @{ Name = 'WinUtil preset'; Action = {
+                Invoke-RemoteScript -Url 'https://christitus.com/win' -Label 'WinUtil (one-click preset)' `
+                    -ScriptArguments @('-Config', $winutilConfig)
+            } }
+            @{ Name = 'Win11Debloat preset'; Action = {
+                Invoke-RemoteScript -Url 'https://debloat.raphi.re/' -Label 'Win11Debloat (one-click preset)' `
+                    -ScriptArguments @('-Silent', '-Config', $raphiConfig)
+            } }
+            @{ Name = 'Windows Update security-only'; Action = { Set-SecurityUpdatePolicy; $true } }
+            @{ Name = 'TCP autotuning'; Action = { Invoke-ToolboxStep -Id 'network-better' } }
+            @{ Name = 'Win32PrioritySeparation'; Action = { Invoke-ToolboxStep -Id 'priority-22' } }
+            @{ Name = 'Dynamic tick'; Action = { Invoke-ToolboxStep -Id 'dynamictick-off' } }
+        )
+
+        $number = 0
+        foreach ($step in $steps) {
+            $number++
+            Write-Line ''
+            Write-Rule -Title "Step $number of $($steps.Count) - $($step.Name)"
+
+            try {
+                if (-not (& $step.Action)) { $failed.Add($step.Name) }
+            }
+            catch {
+                Write-Err "$($step.Name) - $($_.Exception.Message)"
+                $failed.Add($step.Name)
+            }
+        }
+    }
+    finally {
+        $Ctx.AssumeYes = $previousAssumeYes
+    }
+
+    Write-Line ''
+    if ($failed.Count -eq 0) {
+        Write-Ok 'All six steps finished.'
+    }
+    else {
+        Write-Warn "$($failed.Count) of 6 steps did not complete: $(@($failed) -join ', ')"
+    }
+    Write-Info 'Reboot to pick up the priority and dynamic tick changes.'
+}
+
+# The local half of the box. Kept separate from Invoke-ToolboxAction so a step
+# can report success or failure rather than swallowing it into a log line.
+function Invoke-ToolboxStep {
+    param([Parameter(Mandatory)][string]$Id)
+
+    switch ($Id) {
+        'network-better' {
+            $code = Invoke-NativeCommand -FilePath 'netsh.exe' -Arguments @('int', 'tcp', 'set', 'global', 'autotuninglevel=disabled')
+            if ($code -ne 0) { throw "netsh exited with code $code." }
+            Write-Ok 'TCP autotuning disabled.'
+            return $true
+        }
+        'priority-22' {
+            Set-RegistryValue -Path 'HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\PriorityControl' `
+                -Name 'Win32PrioritySeparation' -Type 'DWord' -Value 22
+            Write-Ok 'Win32PrioritySeparation set to 22. Reboot to apply.'
+            return $true
+        }
+        'dynamictick-off' {
+            $code = Invoke-NativeCommand -FilePath 'bcdedit.exe' -Arguments @('/set', 'disabledynamictick', 'yes')
+            if ($code -ne 0) { throw "bcdedit exited with code $code." }
+            Write-Ok 'Dynamic tick disabled. Reboot to apply.'
+            return $true
+        }
+        default { throw "No toolbox step '$Id'." }
+    }
+}
+
 function Invoke-ToolboxAction {
     param([Parameter(Mandatory)][string]$Id)
 
     $action = Resolve-ToolboxAction -Id $Id
     if (-not $action) { return }
 
-    if ($action.Admin -and -not $Ctx.IsAdmin) {
-        Write-Err "$($action.Name) needs administrator rights. Re-run from an elevated prompt, or let Moscovium relaunch itself."
-        return
-    }
-
+    # Dry run first: a preview should describe what an elevated run would do
+    # rather than refuse because this process is not elevated. Matches the order
+    # Invoke-TweakApply uses.
     if ($Ctx.DryRun) {
         Write-Status -Glyph (Get-Glyph 'Info') -Color (Get-Color 'Warn') -Message $action.Name -MessageColor (Get-Color 'Warn')
         Write-Info "would run toolbox action '$($action.Id)'"
+        if ($action.Admin -and -not $Ctx.IsAdmin) { Write-Info 'needs administrator rights' }
+        return
+    }
+
+    if ($action.Admin -and -not $Ctx.IsAdmin) {
+        Write-Err "$($action.Name) needs administrator rights. Re-run from an elevated prompt, or let Moscovium relaunch itself."
         return
     }
 
@@ -322,11 +538,11 @@ function Invoke-ToolboxAction {
                     -ScriptArguments (@('-RunDefaults') + (Get-RaphiPresetArguments)) | Out-Null
             }
 
-            'network-better' {
-                $code = Invoke-NativeCommand -FilePath 'netsh.exe' -Arguments @('int', 'tcp', 'set', 'global', 'autotuninglevel=disabled')
-                if ($code -ne 0) { throw "netsh exited with code $code." }
-                Write-Ok 'TCP autotuning disabled.'
-            }
+            'oneclick' { Invoke-OneClickDebloat }
+
+            'updates-security' { Set-SecurityUpdatePolicy }
+
+            'network-better' { Invoke-ToolboxStep -Id 'network-better' | Out-Null }
 
             'network-default' {
                 $code = Invoke-NativeCommand -FilePath 'netsh.exe' -Arguments @('int', 'tcp', 'set', 'global', 'autotuninglevel=normal')
@@ -334,11 +550,7 @@ function Invoke-ToolboxAction {
                 Write-Ok 'TCP autotuning restored to normal.'
             }
 
-            'dynamictick-off' {
-                $code = Invoke-NativeCommand -FilePath 'bcdedit.exe' -Arguments @('/set', 'disabledynamictick', 'yes')
-                if ($code -ne 0) { throw "bcdedit exited with code $code." }
-                Write-Ok 'Dynamic tick disabled. Reboot to apply.'
-            }
+            'dynamictick-off' { Invoke-ToolboxStep -Id 'dynamictick-off' | Out-Null }
 
             'dynamictick-on' {
                 $code = Invoke-NativeCommand -FilePath 'bcdedit.exe' -Arguments @('/deletevalue', 'disabledynamictick')
@@ -347,11 +559,7 @@ function Invoke-ToolboxAction {
                 else { Write-Ok 'Dynamic tick restored. Reboot to apply.' }
             }
 
-            'priority-22' {
-                Set-RegistryValue -Path 'HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\PriorityControl' `
-                    -Name 'Win32PrioritySeparation' -Type 'DWord' -Value 22
-                Write-Ok 'Win32PrioritySeparation set to 22. Reboot to apply.'
-            }
+            'priority-22' { Invoke-ToolboxStep -Id 'priority-22' | Out-Null }
 
             'priority-default' {
                 Set-RegistryValue -Path 'HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\PriorityControl' `

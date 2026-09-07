@@ -775,6 +775,129 @@ Test-Case 'licence-circumvention entries are absent from the catalog' {
 }
 
 # -----------------------------------------------------------------------------
+Write-Section 'One-click presets'
+
+# These two files are read by other people's scripts, so the tests check them
+# against those scripts' own rules rather than against our idea of the format.
+$winutilOneClick = Join-Path $RepoRoot 'data/winutil-oneclick.json'
+$raphiOneClick   = Join-Path $RepoRoot 'data/raphi-oneclick.json'
+
+Test-Case 'the WinUtil preset is a flat array of unique WPFTweaks keys' {
+    # WinUtil's current export is ($selectedApps + $selectedTweaks + ...) piped
+    # to ConvertTo-Json, so a flat array is what its importer expects. The
+    # PSCustomObject form still works, but only through its legacy branch.
+    # ConvertFrom-Json emits a JSON array as ONE pipeline object, so @(pipeline)
+    # yields a single Object[] element. Bind it first, then wrap.
+    $parsed = Get-Content -LiteralPath $winutilOneClick -Raw -Encoding UTF8 | ConvertFrom-Json
+    $entries = @($parsed)
+
+    Assert-True ($entries.Count -gt 0) 'the preset is empty'
+    Assert-Equal $entries.Count (@($entries | Sort-Object -Unique).Count)
+
+    foreach ($entry in $entries) {
+        Assert-True ($entry -is [string]) "entry '$entry' is not a string"
+        # Invoke-WPFImpex drops anything outside this set on import.
+        Assert-True ($entry -match '^WPF(Install|Tweaks|Toggle|Feature|Appx)') `
+            "'$entry' is not a selectable WinUtil checkbox name"
+    }
+}
+
+Test-Case 'the WinUtil preset takes a restore point before anything else' {
+    # ConvertFrom-Json emits a JSON array as ONE pipeline object, so @(pipeline)
+    # yields a single Object[] element. Bind it first, then wrap.
+    $parsed = Get-Content -LiteralPath $winutilOneClick -Raw -Encoding UTF8 | ConvertFrom-Json
+    $entries = @($parsed)
+    Assert-Equal 'WPFTweaksRestorePoint' $entries[0]
+}
+
+Test-Case 'the Win11Debloat preset matches its own config schema' {
+    # Mirrors Test-ConfigConsistency and Import-ConfigToParams in Win11Debloat.
+    $config = Get-Content -LiteralPath $raphiOneClick -Raw -Encoding UTF8 | ConvertFrom-Json
+
+    # Import-JsonFile rejects a Version other than the expected '1.0'.
+    Assert-Equal '1.0' $config.Version
+    Assert-True ($null -ne $config.Tweaks) 'the config has no Tweaks'
+
+    foreach ($app in @($config.Apps)) {
+        Assert-True ($app -is [string]) 'Apps entries must be strings'
+    }
+
+    $names = [System.Collections.Generic.List[string]]::new()
+    foreach ($setting in @($config.Tweaks) + @($config.Deployment)) {
+        Assert-True ($null -ne $setting.PSObject.Properties['Name']) 'a setting has no Name'
+        Assert-True ($null -ne $setting.PSObject.Properties['Value']) 'a setting has no Value'
+        Assert-True ($setting.Name -is [string]) 'a setting Name is not a string'
+        Assert-True (-not [string]::IsNullOrWhiteSpace($setting.Name)) 'a setting Name is blank'
+    }
+
+    foreach ($tweak in @($config.Tweaks)) {
+        # Import-ConfigToParams skips any tweak whose Value is not exactly $true.
+        Assert-True ($tweak.Value -eq $true) "tweak '$($tweak.Name)' would be skipped on import"
+        Assert-True (-not $names.Contains($tweak.Name)) "tweak '$($tweak.Name)' is listed twice"
+        $names.Add($tweak.Name)
+    }
+}
+
+Test-Case 'the Win11Debloat preset removes Bing from search' {
+    # The reason this file exists at all: WinUtil has no Bing tweak, so the
+    # removal has to come from Win11Debloat's DisableBing.
+    $config = Get-Content -LiteralPath $raphiOneClick -Raw -Encoding UTF8 | ConvertFrom-Json
+    $names = @($config.Tweaks | ForEach-Object { $_.Name })
+    Assert-True ($names -contains 'DisableBing') 'DisableBing is missing'
+}
+
+Test-Case 'the Win11Debloat deployment block passes its consistency checks' {
+    $config = Get-Content -LiteralPath $raphiOneClick -Raw -Encoding UTF8 | ConvertFrom-Json
+
+    $lookup = @{}
+    foreach ($setting in @($config.Deployment)) { $lookup[$setting.Name] = $setting.Value }
+
+    foreach ($key in @('AppRemovalScopeIndex', 'UserSelectionIndex')) {
+        if (-not $lookup.ContainsKey($key)) { continue }
+        Assert-True ([int]$lookup[$key] -in @(0, 1, 2)) "$key must be 0, 1 or 2"
+    }
+
+    # Scope 1 needs user 0; scope 2 needs user 1 plus an OtherUsername.
+    if ($lookup.ContainsKey('AppRemovalScopeIndex')) {
+        $scope = [int]$lookup['AppRemovalScopeIndex']
+        if ($scope -eq 1) { Assert-Equal 0 ([int]$lookup['UserSelectionIndex']) }
+        if ($scope -eq 2) {
+            Assert-Equal 1 ([int]$lookup['UserSelectionIndex'])
+            Assert-True (-not [string]::IsNullOrWhiteSpace([string]$lookup['OtherUsername'])) `
+                'scope 2 needs an OtherUsername'
+        }
+    }
+}
+
+Test-Case 'the one-click box covers every step it advertises' {
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/40-Toolbox.ps1') -Raw
+
+    foreach ($step in @('network-better', 'priority-22', 'dynamictick-off')) {
+        Assert-True ($source -match "Invoke-ToolboxStep -Id '$step'") "the box never runs $step"
+    }
+    Assert-True ($source -match 'Set-SecurityUpdatePolicy') 'the box never sets update policy'
+    Assert-True ($source -match 'Get-WinutilOneClickPath') 'the box never loads the WinUtil preset'
+    Assert-True ($source -match 'Get-RaphiOneClickPath') 'the box never loads the Win11Debloat preset'
+}
+
+Test-Case 'both presets are embedded in the built bundle' {
+    $bundle = Get-Content -LiteralPath (Join-Path $RepoRoot 'moscovium.ps1') -Raw
+
+    foreach ($name in @('EmbeddedWinutilOneClickJson', 'EmbeddedRaphiOneClickJson')) {
+        Assert-True ($bundle -match "\`$$name = @'") "$name is not embedded"
+    }
+    Assert-True ($bundle -match 'WPFTweaksRestorePoint') 'the WinUtil preset did not make it in'
+    Assert-True ($bundle -match 'DisableBing') 'the Win11Debloat preset did not make it in'
+}
+
+Test-Case 'presets are written without a BOM' {
+    # Win11Debloat parses its config with ConvertFrom-Json, which fails on a
+    # BOM under Windows PowerShell 5.1.
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/40-Toolbox.ps1') -Raw
+    Assert-True ($source -match 'New-Object Text\.UTF8Encoding \$false') 'presets may be written with a BOM'
+}
+
+# -----------------------------------------------------------------------------
 Write-Section 'GUI'
 
 $xamlPath = Join-Path $RepoRoot 'data/gui.xaml'
