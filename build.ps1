@@ -193,6 +193,7 @@ param(
     [string[]]`$FindIn,
     [switch]  `$Drivers,
     [string]  `$BackupDrivers,
+    [string]  `$GetDriver,
     [switch]  `$Mouse,
     [string[]]`$SetMouse,
     [string]  `$MousePreset,

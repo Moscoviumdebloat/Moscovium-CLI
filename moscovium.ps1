@@ -5,7 +5,7 @@
 
         irm https://moscovium.win | iex
 
-    Build 8d79fc15b3  (a digest of src/ and data/ - same sources, same id).
+    Build b28b534c9e  (a digest of src/ and data/ - same sources, same id).
     Check with:  .\moscovium.ps1 -Version
 
     GENERATED FILE - do not edit.
@@ -34,6 +34,7 @@ param(
     [string[]]$FindIn,
     [switch]  $Drivers,
     [string]  $BackupDrivers,
+    [string]  $GetDriver,
     [switch]  $Mouse,
     [string[]]$SetMouse,
     [string]  $MousePreset,
@@ -5985,6 +5986,193 @@ param(
     }
 
     # -----------------------------------------------------------------------------
+    # Where the drivers come from
+    #
+    # Each vendor is reached the only way that vendor allows, and the three are not
+    # the same. All of this was checked against the live sites:
+    #
+    #   Intel   dsadata.intel.com/installer is a stable 'always current' endpoint -
+    #           it answered 200 with an 8.7MB installer. One tool covers graphics,
+    #           chipset, Wi-Fi and Bluetooth, so Intel needs no separate CPU entry.
+    #
+    #   NVIDIA  No stable endpoint, but their own page carries the current link, so
+    #           the installer URL is scraped from it the same way Nilesoft's is.
+    #           Verified: 183MB, application/octet-stream.
+    #
+    #   AMD     Blocks direct downloads. Both drivers.amd.com/drivers/
+    #           AMDSoftwareInstaller.exe and a full versioned Adrenalin URL redirect
+    #           to amd.com/.../Download-Incomplete.html, so there is nothing to
+    #           fetch - the entry opens their page instead of pretending.
+    #
+    # The GPU driver itself still comes from the vendor's own installer, which is
+    # what every one of these downloads is. Nothing here installs a driver directly.
+    # -----------------------------------------------------------------------------
+
+    function Get-DriverSources {
+        @(
+            [pscustomobject]@{
+                Id = 'nvidia-app'; Vendor = 'nvidia'; For = 'gpu'
+                Name = 'NVIDIA App'
+                Summary = 'NVIDIA''s own driver manager. Installs the GeForce driver and keeps it current.'
+                # Scraped rather than pinned: NVIDIA versions the path, and their
+                # page always carries the current one. The pinned URL is only the
+                # fallback for when the page changes shape.
+                PageUrl = 'https://www.nvidia.com/en-us/software/nvidia-app/'
+                Pattern = 'https://us\.download\.nvidia\.com/nvapp/client/[0-9.]+/NVIDIA_app_v[0-9.]+\.exe'
+                DownloadUrl = 'https://us.download.nvidia.com/nvapp/client/11.0.9.251/NVIDIA_app_v11.0.9.251.exe'
+                OpenUrl = 'https://www.nvidia.com/en-us/drivers/'
+            }
+            [pscustomobject]@{
+                Id = 'intel-dsa'; Vendor = 'intel'; For = 'both'
+                Name = 'Intel Driver and Support Assistant'
+                Summary = 'Intel''s own detector. Covers graphics, chipset, Wi-Fi and Bluetooth in one tool.'
+                PageUrl = ''
+                Pattern = ''
+                DownloadUrl = 'https://dsadata.intel.com/installer'
+                OpenUrl = 'https://www.intel.com/content/www/us/en/download-center/home.html'
+            }
+            [pscustomobject]@{
+                Id = 'amd-gpu'; Vendor = 'amd'; For = 'gpu'
+                Name = 'AMD Software: Adrenalin Edition'
+                Summary = 'The Radeon driver and control panel. AMD blocks direct downloads, so this opens their page.'
+                PageUrl = ''
+                Pattern = ''
+                # Empty on purpose - see the note above.
+                DownloadUrl = ''
+                OpenUrl = 'https://www.amd.com/en/support/download/drivers.html'
+            }
+            [pscustomobject]@{
+                Id = 'amd-chipset'; Vendor = 'amd'; For = 'cpu'
+                Name = 'AMD Chipset Drivers'
+                Summary = 'Chipset and power plan drivers for a Ryzen or Threadripper board. Also a download AMD gates.'
+                PageUrl = ''
+                Pattern = ''
+                DownloadUrl = ''
+                OpenUrl = 'https://www.amd.com/en/support/download/drivers.html'
+            }
+        )
+    }
+
+    function Resolve-DriverSource {
+        param([Parameter(Mandatory)][string]$Id)
+
+        $sources = Get-DriverSources
+
+        $exact = @($sources | Where-Object { $_.Id -eq $Id })
+        if ($exact.Count -eq 1) { return $exact[0] }
+
+        $fuzzy = @($sources | Where-Object {
+            (Test-NameMatch -Value $_.Id -Pattern $Id) -or (Test-NameMatch -Value $_.Name -Pattern $Id)
+        })
+        if ($fuzzy.Count -eq 1) { return $fuzzy[0] }
+
+        if ($fuzzy.Count -gt 1) {
+            Write-Err "'$Id' is ambiguous. Did you mean one of these?"
+            foreach ($source in $fuzzy) { Write-Info $source.Id }
+            return $null
+        }
+
+        Write-Err "Unknown driver source '$Id'. Known: $((Get-DriverSources | ForEach-Object { $_.Id }) -join ', ')."
+        return $null
+    }
+
+    # AuthenticAMD / GenuineIntel, straight off the processor.
+    function Get-ProcessorVendor {
+        try {
+            $processor = @(Get-CimInstance -Query 'SELECT Manufacturer FROM Win32_Processor' -ErrorAction Stop)[0]
+            switch ([string]$processor.Manufacturer) {
+                'AuthenticAMD' { return 'amd' }
+                'GenuineIntel' { return 'intel' }
+                default        { return '' }
+            }
+        }
+        catch { return '' }
+    }
+
+    # Only the sources that match hardware actually in this machine: an NVIDIA
+    # entry on an all-AMD box is noise, and a link to a driver for hardware someone
+    # does not own is worse than no link.
+    function Get-RelevantDriverSources {
+        $wanted = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($adapter in @(Get-GraphicsAdapter)) {
+            if (-not $adapter.Vendor -or $adapter.Vendor.Virtual) { continue }
+            if (-not $wanted.Contains("gpu:$($adapter.Vendor.Id)")) { $wanted.Add("gpu:$($adapter.Vendor.Id)") }
+        }
+
+        $cpu = Get-ProcessorVendor
+        if ($cpu) { $wanted.Add("cpu:$cpu") }
+
+        $relevant = [System.Collections.Generic.List[object]]::new()
+        foreach ($source in Get-DriverSources) {
+            $matched = $false
+
+            # 'both' means the vendor's one tool covers graphics and chipset, so it
+            # is relevant if either matches.
+            if ($source.For -in @('gpu', 'both') -and $wanted.Contains("gpu:$($source.Vendor)")) { $matched = $true }
+            if ($source.For -in @('cpu', 'both') -and $wanted.Contains("cpu:$($source.Vendor)")) { $matched = $true }
+
+            if ($matched) { $relevant.Add($source) }
+        }
+
+        return @($relevant)
+    }
+
+    # Downloads and runs the vendor's own installer where the vendor allows it, and
+    # opens their page where it does not.
+    function Install-DriverSource {
+        param([Parameter(Mandatory)][string]$Id)
+
+        $source = Resolve-DriverSource -Id $Id
+        if (-not $source) { return $false }
+
+        if ([string]::IsNullOrWhiteSpace($source.DownloadUrl)) {
+            Write-SectionHeading $source.Name
+            Write-Info $source.Summary
+            Write-Info 'This one has to come from the vendor page - they do not allow a direct download.'
+            Write-Line "      $($source.OpenUrl)" -Color White
+
+            if ($Ctx.DryRun) { return $false }
+
+            if (Confirm-Action 'Open it in your browser?' -DefaultYes) {
+                try { Start-Process $source.OpenUrl | Out-Null }
+                catch { Write-Err "Could not open the browser: $($_.Exception.Message)" }
+            }
+            return $false
+        }
+
+        if ($Ctx.DryRun) {
+            Write-Status -Glyph (Get-Glyph 'Info') -Color (Get-Color 'Warn') -Message $source.Name -MessageColor (Get-Color 'Warn')
+            if ($source.PageUrl) { Write-Info "would take the current installer link from $($source.PageUrl) and run it" }
+            else { Write-Info "would download the installer from $($source.DownloadUrl) and run it" }
+            return $false
+        }
+
+        Write-Line ''
+        Write-Warn "$($source.Name) is $($source.Vendor.ToUpperInvariant())'s own installer:"
+        Write-Line "      $($source.OpenUrl)" -Color White
+        Write-Info 'Moscovium downloads and starts it; the vendor installer does the rest.'
+
+        # Through Install-App, which already has the download, progress, exit-code
+        # and counter handling - and knows how to run an .exe installer.
+        $app = [pscustomobject]@{
+            id             = $source.Id
+            name           = $source.Name
+            downloadUrl    = $source.DownloadUrl
+            resolvePageUrl = $(if ($source.PageUrl) { $source.PageUrl } else { $null })
+            resolvePattern = $(if ($source.Pattern) { $source.Pattern } else { $null })
+            zipUrl         = $null
+            scriptUrl      = $null
+            wingetId       = $null
+            source         = $null
+        }
+
+        $before = $Ctx.Applied
+        Install-App -App $app
+        return ($Ctx.Applied -gt $before)
+    }
+
+    # -----------------------------------------------------------------------------
     # Devices that are not working
     # -----------------------------------------------------------------------------
 
@@ -6197,6 +6385,30 @@ param(
                 Write-Line $device.Name -Color White
                 Write-Info $device.Meaning
             }
+        }
+
+        # ---- where to get drivers ----------------------------------------------
+        $sources = @()
+        try { $sources = @(Get-RelevantDriverSources) } catch { }
+
+        if ($sources.Count -gt 0) {
+            Write-Line ''
+            Write-Line '  Drivers for this machine' -Color (Get-Color 'Faint')
+
+            foreach ($source in $sources) {
+                $how = 'opens the vendor page'
+                $color = Get-Color 'Muted'
+                if ($source.DownloadUrl) { $how = 'downloads and runs the vendor installer'; $color = Get-Color 'Ok' }
+
+                Write-Line '    ' -NoNewline
+                Write-Line $source.Id.PadRight(14) -Color White -NoNewline
+                Write-Line $source.Name.PadRight(38) -Color Gray -NoNewline
+                Write-Line $how -Color $color
+                Write-Info $source.Summary
+            }
+
+            Write-Line ''
+            Write-Info 'Install one with:  -GetDriver <id>'
         }
 
         Write-Line ''
@@ -9950,13 +10162,12 @@ param(
             $options = [System.Collections.Generic.List[object]]::new()
             $options.Add([pscustomobject]@{ Name = 'Overview'; Hint = 'Adapters, problem devices, driver sources'; Action = 'overview'; Data = $null })
 
-            # One row per adapter that has a real vendor page behind it.
-            foreach ($adapter in $adapters) {
-                if (-not $adapter.Vendor -or $adapter.Vendor.Virtual -or -not $adapter.Vendor.Url) { continue }
+            # Only the vendors whose hardware is actually in this machine.
+            foreach ($source in @(Get-RelevantDriverSources)) {
+                $hint = $source.Summary
+                if (-not $source.DownloadUrl) { $hint = 'Opens the vendor page - ' + $source.Summary }
                 $options.Add([pscustomobject]@{
-                    Name = "Get $($adapter.Vendor.Name) drivers"
-                    Hint = $adapter.Vendor.Url
-                    Action = 'vendor'; Data = $adapter.Vendor
+                    Name = $source.Name; Hint = $hint; Action = 'source'; Data = $source
                 })
             }
 
@@ -9976,13 +10187,7 @@ param(
             Write-Banner
             switch ($choice.Action) {
                 'overview' { Show-DriverOverview }
-                'vendor' {
-                    Write-SectionHeading "$($choice.Data.Name) drivers"
-                    Write-Info 'Opening the vendor download page in your browser:'
-                    Write-Line "      $($choice.Data.Url)" -Color White
-                    try { Start-Process $choice.Data.Url | Out-Null }
-                    catch { Write-Err "Could not open the browser: $($_.Exception.Message)" }
-                }
+                'source' { Install-DriverSource -Id $choice.Data.Id | Out-Null }
                 'backup' {
                     $default = Get-DefaultDriverBackupPath
                     Write-SectionHeading 'Back up drivers'
@@ -13087,27 +13292,46 @@ param(
 
             $row = New-GuiRow -Item $adapter -Primary $adapter.Name -Secondary $detail `
                 -Status $status -StatusBrush $ink -StatusFill $fill -NoCheckBox
+            $ui.DriverRows.Children.Add($row.Element) | Out-Null
+        }
 
-            # Only a vendor with a real download page gets a button.
-            if ($adapter.Vendor -and -not $adapter.Vendor.Virtual -and $adapter.Vendor.Url) {
-                $open = New-Object Windows.Controls.Button
-                $open.Content = 'Get drivers'
-                $open.Padding = New-Object Windows.Thickness 12, 4, 12, 4
-                $open.Margin = New-Object Windows.Thickness 8, 0, 0, 0
-                $open.VerticalAlignment = 'Center'
-                $open.Tag = $adapter.Vendor.Url
-                [Windows.Controls.Grid]::SetColumn($open, 2)
+        # ---- driver sources ----------------------------------------------------
+        # Only vendors whose hardware is in this machine, so an NVIDIA row never
+        # shows up on an all-AMD box.
+        $sources = @()
+        try { $sources = @(Get-RelevantDriverSources) } catch { }
 
-                $open.Add_Click({
-                    param($sender, $e)
-                    $url = [string]$sender.Tag
-                    try { Start-Process $url | Out-Null; Write-Ok "Opened $url" }
-                    catch { Write-Err "Could not open the browser: $($_.Exception.Message)" }
-                })
+        $ui.DriverRows.Children.Add((New-GuiGroupHeader -Title 'Drivers for this machine' -Count $sources.Count)) | Out-Null
 
-                $row.Element.Child.Children.Add($open) | Out-Null
+        foreach ($source in $sources) {
+            $status = 'vendor page'
+            $ink, $fill = '#FF8B81A8', '#FF150F22'
+            $label = 'Open page'
+
+            if ($source.DownloadUrl) {
+                $status = 'installer'
+                $ink, $fill = '#FF7EE0A6', '#FF102A1E'
+                $label = 'Install'
             }
 
+            $row = New-GuiRow -Item $source -Primary $source.Name -Secondary $source.Summary `
+                -Status $status -StatusBrush $ink -StatusFill $fill -NoCheckBox
+
+            $get = New-Object Windows.Controls.Button
+            $get.Content = $label
+            $get.Padding = New-Object Windows.Thickness 12, 4, 12, 4
+            $get.Margin = New-Object Windows.Thickness 8, 0, 0, 0
+            $get.VerticalAlignment = 'Center'
+            $get.Tag = $source.Id
+            [Windows.Controls.Grid]::SetColumn($get, 2)
+
+            $get.Add_Click({
+                param($sender, $e)
+                $id = [string]$sender.Tag
+                Invoke-GuiWork -Label "driver: $id" -Work { Install-DriverSource -Id $id | Out-Null }
+            })
+
+            $row.Element.Child.Children.Add($get) | Out-Null
             $ui.DriverRows.Children.Add($row.Element) | Out-Null
         }
 
@@ -14498,6 +14722,7 @@ param(
         Write-Line '    -Customize <id>    install Open-Shell, Nilesoft Shell, StartAllBack or ExplorerPatcher' -Color Gray
         Write-Line '    -Drivers           display adapters, devices with problems, where to get drivers' -Color Gray
         Write-Line '    -BackupDrivers <folder>  export every third-party driver package (needs admin)' -Color Gray
+        Write-Line '    -GetDriver <id>    vendor driver tool: nvidia-app, intel-dsa, amd-gpu, amd-chipset' -Color Gray
         Write-Line '    -Mouse             show the mouse pointer settings' -Color Gray
         Write-Line '    -SetMouse <name=value>  e.g. precision=0, speed=6, trails=0' -Color Gray
         Write-Line '    -MousePreset <id>  raw (no acceleration, 1:1) or default' -Color Gray
@@ -14798,6 +15023,8 @@ param(
             $didSomething = $true
         }
 
+        if (& $has 'GetDriver') { Install-DriverSource -Id $Bound['GetDriver'] | Out-Null; $didSomething = $true }
+
         if (& $has 'Mouse') { Show-MouseSettings; $didSomething = $true }
 
         if (& $has 'SetMouse') {
@@ -14904,4 +15131,4 @@ param(
         Restore-ConsoleEncoding -Previous $previousEncoding
     }
 
-} $PSBoundParameters '1.2.0' $SourceUrl '8d79fc15b3'
+} $PSBoundParameters '1.2.0' $SourceUrl 'b28b534c9e'

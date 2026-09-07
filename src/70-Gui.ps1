@@ -643,27 +643,46 @@ function Update-GuiDriverRow {
 
         $row = New-GuiRow -Item $adapter -Primary $adapter.Name -Secondary $detail `
             -Status $status -StatusBrush $ink -StatusFill $fill -NoCheckBox
+        $ui.DriverRows.Children.Add($row.Element) | Out-Null
+    }
 
-        # Only a vendor with a real download page gets a button.
-        if ($adapter.Vendor -and -not $adapter.Vendor.Virtual -and $adapter.Vendor.Url) {
-            $open = New-Object Windows.Controls.Button
-            $open.Content = 'Get drivers'
-            $open.Padding = New-Object Windows.Thickness 12, 4, 12, 4
-            $open.Margin = New-Object Windows.Thickness 8, 0, 0, 0
-            $open.VerticalAlignment = 'Center'
-            $open.Tag = $adapter.Vendor.Url
-            [Windows.Controls.Grid]::SetColumn($open, 2)
+    # ---- driver sources ----------------------------------------------------
+    # Only vendors whose hardware is in this machine, so an NVIDIA row never
+    # shows up on an all-AMD box.
+    $sources = @()
+    try { $sources = @(Get-RelevantDriverSources) } catch { }
 
-            $open.Add_Click({
-                param($sender, $e)
-                $url = [string]$sender.Tag
-                try { Start-Process $url | Out-Null; Write-Ok "Opened $url" }
-                catch { Write-Err "Could not open the browser: $($_.Exception.Message)" }
-            })
+    $ui.DriverRows.Children.Add((New-GuiGroupHeader -Title 'Drivers for this machine' -Count $sources.Count)) | Out-Null
 
-            $row.Element.Child.Children.Add($open) | Out-Null
+    foreach ($source in $sources) {
+        $status = 'vendor page'
+        $ink, $fill = '#FF8B81A8', '#FF150F22'
+        $label = 'Open page'
+
+        if ($source.DownloadUrl) {
+            $status = 'installer'
+            $ink, $fill = '#FF7EE0A6', '#FF102A1E'
+            $label = 'Install'
         }
 
+        $row = New-GuiRow -Item $source -Primary $source.Name -Secondary $source.Summary `
+            -Status $status -StatusBrush $ink -StatusFill $fill -NoCheckBox
+
+        $get = New-Object Windows.Controls.Button
+        $get.Content = $label
+        $get.Padding = New-Object Windows.Thickness 12, 4, 12, 4
+        $get.Margin = New-Object Windows.Thickness 8, 0, 0, 0
+        $get.VerticalAlignment = 'Center'
+        $get.Tag = $source.Id
+        [Windows.Controls.Grid]::SetColumn($get, 2)
+
+        $get.Add_Click({
+            param($sender, $e)
+            $id = [string]$sender.Tag
+            Invoke-GuiWork -Label "driver: $id" -Work { Install-DriverSource -Id $id | Out-Null }
+        })
+
+        $row.Element.Child.Children.Add($get) | Out-Null
         $ui.DriverRows.Children.Add($row.Element) | Out-Null
     }
 

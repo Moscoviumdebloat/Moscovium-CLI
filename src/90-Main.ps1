@@ -35,6 +35,7 @@ function Show-Help {
     Write-Line '    -Customize <id>    install Open-Shell, Nilesoft Shell, StartAllBack or ExplorerPatcher' -Color Gray
     Write-Line '    -Drivers           display adapters, devices with problems, where to get drivers' -Color Gray
     Write-Line '    -BackupDrivers <folder>  export every third-party driver package (needs admin)' -Color Gray
+    Write-Line '    -GetDriver <id>    vendor driver tool: nvidia-app, intel-dsa, amd-gpu, amd-chipset' -Color Gray
     Write-Line '    -Mouse             show the mouse pointer settings' -Color Gray
     Write-Line '    -SetMouse <name=value>  e.g. precision=0, speed=6, trails=0' -Color Gray
     Write-Line '    -MousePreset <id>  raw (no acceleration, 1:1) or default' -Color Gray
@@ -334,6 +335,8 @@ function Invoke-Main {
         Backup-Driver -Path $target | Out-Null
         $didSomething = $true
     }
+
+    if (& $has 'GetDriver') { Install-DriverSource -Id $Bound['GetDriver'] | Out-Null; $didSomething = $true }
 
     if (& $has 'Mouse') { Show-MouseSettings; $didSomething = $true }
 

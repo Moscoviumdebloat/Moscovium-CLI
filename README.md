@@ -22,7 +22,7 @@ which ships with Windows, is enough.
 | **One-click debloat box** | The landing page in the window and the first entry in the menu. Six steps behind one prompt: WinUtil preset, Win11Debloat preset, security-only Windows Update, TCP autotuning, CPU priority, dynamic tick. |
 | **Task manager** | btop-shaped: CPU with per-core bars and history, memory, disk, network, and a sortable process list you can end a process from. |
 | **Search apps** | One query across winget, Chocolatey and Scoop, with install from whichever one has it. |
-| **Drivers** | Display adapters and their driver dates, devices reporting a problem in plain words, a full driver backup, and the vendor download page for your GPU. |
+| **Drivers** | Display adapters and their driver dates, devices reporting a problem in plain words, a full driver backup, and the NVIDIA / AMD / Intel driver tool for the hardware you actually have. |
 | **Mouse** | The Pointer Options tab: pointer speed, acceleration, snap-to, trails, hide-while-typing, CTRL highlight - applied live, plus a raw-input preset. |
 | **Package managers** | Install Chocolatey or Scoop from their own install scripts, with winget status alongside. |
 | **Customization** | The desktop app's shell replacements - Open-Shell, Nilesoft Shell, StartAllBack, ExplorerPatcher - each fetched from its vendor's current release. |
@@ -304,7 +304,29 @@ driver put there - on the dev box it reads *Broadcom Inc.* for a VMware adapter.
 Virtual adapters are named as such rather than sent to a download page for
 hardware that is not there.
 
-**The links go to the vendors, because winget has nothing else.** Searching it
+**Getting the actual drivers.** Each vendor is reached the only way that vendor
+allows, and the three are not the same - all checked against the live sites:
+
+| | how | why |
+|---|---|---|
+| Intel | `dsadata.intel.com/installer` | a stable always-current endpoint; one tool covers graphics **and** chipset, so Intel needs no separate CPU entry |
+| NVIDIA | scraped off their own page | no stable endpoint, but the page carries the current link - same mechanism Nilesoft uses, with a pinned fallback |
+| AMD | opens their page | AMD **blocks direct downloads**: both `drivers.amd.com/drivers/AMDSoftwareInstaller.exe` and a full versioned Adrenalin URL redirect to their *Download Incomplete* page, so there is nothing to fetch |
+
+Only vendors whose hardware is in the machine are offered - a link to a driver
+for hardware you do not own is worse than no link. GPU vendor comes from the
+PCI id and CPU vendor from `Win32_Processor`, so an all-AMD box never sees an
+NVIDIA row.
+
+```powershell
+.\moscovium.ps1 -GetDriver nvidia-app     # or intel-dsa, amd-gpu, amd-chipset
+```
+
+The NVIDIA scrape is the fragile one: if their page changes shape the resolver
+falls back to a pinned, stale version. A test checks the pattern against the
+live page so that fails loudly rather than silently.
+
+**Display Driver Uninstaller, because winget has nothing else.** Searching it
 for `nvidia`, `geforce`, `intel driver`, `AMD Adrenalin` and `AMD Radeon` turns
 up CUDA, GeForce NOW and AMD Cloud Edition - nothing that installs a display
 driver. Display Driver Uninstaller

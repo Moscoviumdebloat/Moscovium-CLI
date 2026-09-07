@@ -1620,6 +1620,131 @@ Test-Case 'the real vendor download pages are live' {
     Assert-True ($intel.Url -match '^https://www\.intel\.com/') "Intel's URL is not on intel.com: $($intel.Url)"
 }
 
+Test-Case 'each vendor is reached the only way that vendor allows' {
+    $sources = @(Get-DriverSources)
+    Assert-Equal 4 $sources.Count
+
+    $byId = @{}
+    foreach ($source in $sources) {
+        Assert-True (-not $byId.ContainsKey($source.Id)) "duplicate source id '$($source.Id)'"
+        $byId[$source.Id] = $source
+
+        Assert-True ($source.For -in @('gpu', 'cpu', 'both')) "$($source.Id) has For '$($source.For)'"
+        Assert-True (-not [string]::IsNullOrWhiteSpace($source.Summary)) "$($source.Id) has no summary"
+        # Every source needs somewhere to send someone, download or not.
+        Assert-True ($source.OpenUrl -match '^https://') "$($source.Id) has no vendor page"
+        Assert-Equal $source.Id (Resolve-DriverSource -Id $source.Id).Id
+    }
+
+    # Intel: one stable endpoint, and one tool that covers graphics and chipset,
+    # which is why Intel has no separate CPU entry.
+    Assert-Equal 'https://dsadata.intel.com/installer' $byId['intel-dsa'].DownloadUrl
+    Assert-Equal 'both' $byId['intel-dsa'].For
+
+    # NVIDIA: no stable endpoint, so the link is scraped from their own page
+    # with a pinned fallback for when the page changes shape.
+    Assert-True ($byId['nvidia-app'].PageUrl -match '^https://www\.nvidia\.com/') 'the NVIDIA page URL is wrong'
+    Assert-True (-not [string]::IsNullOrWhiteSpace($byId['nvidia-app'].Pattern)) 'NVIDIA has no scrape pattern'
+    Assert-True ($byId['nvidia-app'].DownloadUrl -match '^https://us\.download\.nvidia\.com/') 'the NVIDIA fallback is wrong'
+
+    # AMD blocks direct downloads: both drivers.amd.com/drivers/
+    # AMDSoftwareInstaller.exe and a full versioned Adrenalin URL redirect to
+    # their Download-Incomplete page, so there is nothing to fetch. An empty
+    # DownloadUrl is the honest answer, not an oversight.
+    Assert-Equal '' $byId['amd-gpu'].DownloadUrl
+    Assert-Equal '' $byId['amd-chipset'].DownloadUrl
+    Assert-True ($byId['amd-gpu'].Summary -match 'blocks direct downloads') 'the AMD entry does not say why it only opens a page'
+
+    Assert-True ($null -eq (Resolve-DriverSource -Id 'no-such-source')) 'a nonsense id resolved'
+}
+
+Test-Case 'the two downloadable vendor installers are really there' {
+    # Live. Intel's endpoint is the whole reason Intel is installable, and
+    # NVIDIA's scrape is the fragile one - if their page changes shape the
+    # resolver silently falls back to a pinned, stale version, so the pattern
+    # is checked against the live page rather than against a saved copy.
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+    $intel = @(Get-DriverSources | Where-Object { $_.Id -eq 'intel-dsa' })[0]
+    $request = [Net.HttpWebRequest]::Create($intel.DownloadUrl)
+    $request.Method = 'HEAD'
+    $request.UserAgent = 'Mozilla/5.0 Moscovium-CLI tests'
+    $request.Timeout = 30000
+    $request.AllowAutoRedirect = $true
+
+    $response = $null
+    try {
+        $response = $request.GetResponse()
+        Assert-Equal 'OK' ([string]$response.StatusCode) "Intel's installer endpoint answered $($response.StatusCode)"
+        Assert-True ($response.ContentLength -gt 1000000) "Intel's installer is only $($response.ContentLength) bytes"
+    }
+    finally { if ($response) { $response.Dispose() } }
+
+    # NVIDIA: the pattern still matches something on their live page.
+    $nvidia = @(Get-DriverSources | Where-Object { $_.Id -eq 'nvidia-app' })[0]
+    $page = Invoke-WebRequest -Uri $nvidia.PageUrl -UseBasicParsing -TimeoutSec 30 -Headers @{
+        'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Moscovium-CLI tests'
+    }
+
+    $match = [regex]::Match($page.Content, $nvidia.Pattern, 'IgnoreCase')
+    Assert-True $match.Success "the NVIDIA page no longer matches the scrape pattern - the fallback would go stale unnoticed"
+    Assert-True ($match.Value -match '\.exe$') "the scrape found '$($match.Value)', which is not an installer"
+}
+
+Test-Case 'only hardware that is actually here gets a driver source' {
+    # A link to a driver for hardware someone does not own is worse than no
+    # link, so every source offered has to match a detected GPU or the CPU.
+    $gpuVendors = @()
+    foreach ($adapter in @(Get-GraphicsAdapter)) {
+        if ($adapter.Vendor -and -not $adapter.Vendor.Virtual) { $gpuVendors += $adapter.Vendor.Id }
+    }
+    $cpuVendor = Get-ProcessorVendor
+
+    foreach ($source in @(Get-RelevantDriverSources)) {
+        $viaGpu = ($source.For -in @('gpu', 'both')) -and ($gpuVendors -contains $source.Vendor)
+        $viaCpu = ($source.For -in @('cpu', 'both')) -and ($cpuVendor -eq $source.Vendor)
+        Assert-True ($viaGpu -or $viaCpu) "$($source.Id) was offered but neither the GPU nor the CPU is $($source.Vendor)"
+    }
+
+    # And the reverse: a vendor that is present must be offered something.
+    foreach ($vendor in @($gpuVendors | Sort-Object -Unique)) {
+        $offered = @(Get-RelevantDriverSources | Where-Object { $_.Vendor -eq $vendor })
+        Assert-True ($offered.Count -ge 1) "a $vendor GPU is present but nothing was offered for it"
+    }
+
+    # The processor vendor is read off the processor, not guessed.
+    Assert-True ($cpuVendor -in @('amd', 'intel', '')) "unexpected processor vendor '$cpuVendor'"
+    if ($cpuVendor) {
+        $reported = [string](@(Get-CimInstance -Query 'SELECT Manufacturer FROM Win32_Processor')[0].Manufacturer)
+        $expected = @{ 'AuthenticAMD' = 'amd'; 'GenuineIntel' = 'intel' }
+        Assert-Equal $expected[$reported] $cpuVendor "Win32_Processor says $reported"
+    }
+}
+
+Test-Case 'a driver source dry run downloads nothing' {
+    $previousDryRun = $Ctx.DryRun
+    $Ctx.DryRun = $true
+    try {
+        foreach ($source in @(Get-DriverSources)) {
+            Assert-True (-not (Install-DriverSource -Id $source.Id)) "$($source.Id) reported an install during a dry run"
+        }
+    }
+    finally { $Ctx.DryRun = $previousDryRun }
+}
+
+Test-Case 'the install record carries every property Install-App reads' {
+    # Install-App runs under Set-StrictMode, so a property it reads and the
+    # record does not define is a runtime error rather than a null.
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/47-Drivers.ps1') -Raw
+    $body = [regex]::Match($source, '(?ms)^function Install-DriverSource \{.*?^\}').Value
+    Assert-True ($body.Length -gt 0) 'Install-DriverSource was not found'
+
+    foreach ($property in @('id', 'name', 'downloadUrl', 'resolvePageUrl', 'resolvePattern',
+                            'zipUrl', 'scriptUrl', 'wingetId', 'source')) {
+        Assert-True ($body -match "(?m)^\s+$property\s+=") "the install record has no '$property'"
+    }
+}
+
 Test-Case 'problem codes read as sentences, not as numbers' {
     # 28 means nothing to anyone; 'the drivers for this device are not
     # installed' is the whole answer.

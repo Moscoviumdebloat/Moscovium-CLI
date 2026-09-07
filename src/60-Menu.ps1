@@ -626,13 +626,12 @@ function Show-DriverMenu {
         $options = [System.Collections.Generic.List[object]]::new()
         $options.Add([pscustomobject]@{ Name = 'Overview'; Hint = 'Adapters, problem devices, driver sources'; Action = 'overview'; Data = $null })
 
-        # One row per adapter that has a real vendor page behind it.
-        foreach ($adapter in $adapters) {
-            if (-not $adapter.Vendor -or $adapter.Vendor.Virtual -or -not $adapter.Vendor.Url) { continue }
+        # Only the vendors whose hardware is actually in this machine.
+        foreach ($source in @(Get-RelevantDriverSources)) {
+            $hint = $source.Summary
+            if (-not $source.DownloadUrl) { $hint = 'Opens the vendor page - ' + $source.Summary }
             $options.Add([pscustomobject]@{
-                Name = "Get $($adapter.Vendor.Name) drivers"
-                Hint = $adapter.Vendor.Url
-                Action = 'vendor'; Data = $adapter.Vendor
+                Name = $source.Name; Hint = $hint; Action = 'source'; Data = $source
             })
         }
 
@@ -652,13 +651,7 @@ function Show-DriverMenu {
         Write-Banner
         switch ($choice.Action) {
             'overview' { Show-DriverOverview }
-            'vendor' {
-                Write-SectionHeading "$($choice.Data.Name) drivers"
-                Write-Info 'Opening the vendor download page in your browser:'
-                Write-Line "      $($choice.Data.Url)" -Color White
-                try { Start-Process $choice.Data.Url | Out-Null }
-                catch { Write-Err "Could not open the browser: $($_.Exception.Message)" }
-            }
+            'source' { Install-DriverSource -Id $choice.Data.Id | Out-Null }
             'backup' {
                 $default = Get-DefaultDriverBackupPath
                 Write-SectionHeading 'Back up drivers'
