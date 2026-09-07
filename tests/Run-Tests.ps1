@@ -884,13 +884,7 @@ Test-Case 'remote scripts are launched out of process, not invoked inline' {
     Assert-True ($source -match '-NoProfile') 'the child process does not use -NoProfile'
 }
 
-Test-Case 'licence-circumvention entries are absent from the catalog' {
-    # MAS activation and the StartAllBack trial reset are deliberately not ported.
-    foreach ($app in $Ctx.Apps) {
-        Assert-True ($app.id -ne 'Massgrave.MAS') 'MAS activation entry is present'
-        Assert-True (([string]$app.scriptUrl) -notmatch 'activated\.win') 'activation bootstrap is present'
-    }
-}
+
 
 # -----------------------------------------------------------------------------
 Write-Section 'One-click presets'

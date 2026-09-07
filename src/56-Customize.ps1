@@ -15,9 +15,9 @@
 # what each vendor currently publishes is also what the desktop app does; it
 # just bundles the file instead of fetching it.
 #
-# Not ported: the StartAllBack trial reset, for the same reason MAS is not in
-# the catalog - it exists to circumvent licensing. Installing StartAllBack is
-# here; its licence terms are its own business after that.
+# The trial reset IS now ported - it lives in src/40-Toolbox.ps1 as the
+# startallback-reset action. Installing StartAllBack is here; its licence
+# terms are its own business after that.
 # =============================================================================
 
 function Get-CustomizationTools {
