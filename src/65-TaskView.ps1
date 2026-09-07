@@ -346,8 +346,8 @@ function New-TaskSystemBox {
 
     if ($Monitor.Memory) {
         $detail = '{0} of {1}   commit {2}' -f `
-            (Format-Bytes $Monitor.Memory.Used), (Format-Bytes $Monitor.Memory.Total),
-            (Format-Bytes $Monitor.Memory.CommitUsed)
+            (Format-CompactBytes $Monitor.Memory.Used), (Format-CompactBytes $Monitor.Memory.Total),
+            (Format-CompactBytes $Monitor.Memory.CommitUsed)
 
         $lines.Add((New-TaskBoxRow -Width $Width -Content (
             @((New-FrameSegment ' mem  ' (Get-Color 'Text')),
@@ -363,7 +363,7 @@ function New-TaskSystemBox {
     if ($disks.Count -gt 0) {
         $worst = @($disks | Sort-Object -Property Percent -Descending)[0]
 
-        $detail = '{0} {1} free of {2}' -f $worst.Name, (Format-Bytes $worst.Free), (Format-Bytes $worst.Total)
+        $detail = '{0} {1} free of {2}' -f $worst.Name, (Format-CompactBytes $worst.Free), (Format-CompactBytes $worst.Total)
         if ($disks.Count -gt 1) { $detail += '   +{0} more' -f ($disks.Count - 1) }
 
         $lines.Add((New-TaskBoxRow -Width $Width -Content (
@@ -453,7 +453,7 @@ function New-TaskProcessRow {
 
     if ($Selected) {
         $text = ' ' + ([string]$Process.Id).PadRight(8) + $name.PadRight($layout.Name) +
-                $cpu.PadLeft(7) + (Format-Bytes $Process.WorkingSet).PadLeft(9)
+                $cpu.PadLeft(7) + (Format-CompactBytes $Process.WorkingSet).PadLeft(9)
         if ($layout.Wide) {
             $text += ([string]$Process.Threads).PadLeft(6) + (Format-CpuTime $Process.CpuSeconds).PadLeft(11)
         }
@@ -471,7 +471,7 @@ function New-TaskProcessRow {
     $segments.Add((New-FrameSegment (' ' + ([string]$Process.Id).PadRight(8)) (Get-Color 'Faint')))
     $segments.Add((New-FrameSegment $name.PadRight($layout.Name) (Get-Color 'Text')))
     $segments.Add((New-FrameSegment $cpu.PadLeft(7) $cpuColor))
-    $segments.Add((New-FrameSegment (Format-Bytes $Process.WorkingSet).PadLeft(9) (Get-Color 'Muted')))
+    $segments.Add((New-FrameSegment (Format-CompactBytes $Process.WorkingSet).PadLeft(9) (Get-Color 'Muted')))
 
     if ($layout.Wide) {
         $segments.Add((New-FrameSegment ([string]$Process.Threads).PadLeft(6) (Get-Color 'Faint')))
@@ -726,14 +726,14 @@ function Show-TaskSnapshot {
 
     if ($monitor.Memory) {
         Write-Line ('  mem    {0,5:N1}%   {1} of {2}   commit {3} of {4}' -f `
-            $monitor.Memory.Percent, (Format-Bytes $monitor.Memory.Used), (Format-Bytes $monitor.Memory.Total),
-            (Format-Bytes $monitor.Memory.CommitUsed), (Format-Bytes $monitor.Memory.CommitTotal)) `
+            $monitor.Memory.Percent, (Format-CompactBytes $monitor.Memory.Used), (Format-CompactBytes $monitor.Memory.Total),
+            (Format-CompactBytes $monitor.Memory.CommitUsed), (Format-CompactBytes $monitor.Memory.CommitTotal)) `
             -Color (Get-LoadColor -Percent $monitor.Memory.Percent)
     }
 
     foreach ($disk in @($monitor.Disks)) {
         Write-Line ('  disk   {0,5:N1}%   {1} {2} free of {3}' -f `
-            $disk.Percent, $disk.Name, (Format-Bytes $disk.Free), (Format-Bytes $disk.Total)) `
+            $disk.Percent, $disk.Name, (Format-CompactBytes $disk.Free), (Format-CompactBytes $disk.Total)) `
             -Color (Get-LoadColor -Percent $disk.Percent)
     }
 
@@ -749,7 +749,7 @@ function Show-TaskSnapshot {
         $cpu = '-'
         if ($proc.CpuKnown) { $cpu = '{0:N1}' -f $proc.Cpu }
         Write-Line ('  {0,-8}{1,-30}{2,7}{3,9}{4,6}' -f `
-            $proc.Id, $proc.Name, $cpu, (Format-Bytes $proc.WorkingSet), $proc.Threads)
+            $proc.Id, $proc.Name, $cpu, (Format-CompactBytes $proc.WorkingSet), $proc.Threads)
     }
 
     Write-Line ''

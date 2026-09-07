@@ -428,6 +428,7 @@
           <ListBoxItem Content="Toolbox"/>
           <ListBoxItem Content="Guides"/>
           <ListBoxItem Content="Personalise"/>
+          <ListBoxItem Content="Customization"/>
           <ListBoxItem Content="Profiles"/>
           <ListBoxItem Content="Settings"/>
         </ListBox>
@@ -912,6 +913,44 @@
                 <Button x:Name="BtnOpenStateFolder" Content="Open data folder"/>
               </StackPanel>
             </StackPanel>
+          </Grid>
+
+          <Grid x:Name="CustomizationPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Customization" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+
+            <TextBlock Grid.Row="1" TextWrapping="Wrap" FontSize="12" Margin="0,0,0,10"
+                       Foreground="{StaticResource Muted}"
+                       Text="Shell replacements. Each installer is fetched from its own vendor's current release and run as that vendor ships it, after Moscovium shows you the link."/>
+
+            <!-- The desktop app also ships a StartAllBack trial reset. It is
+                 not here, for the same reason MAS is not in the catalog. -->
+            <Border Grid.Row="2" Background="{StaticResource Panel2}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="7" Padding="13,9" Margin="0,0,0,12">
+              <StackPanel>
+                <TextBlock Text="Why the vendor's own installer and not winget" FontSize="11.5"
+                           FontWeight="SemiBold" Foreground="{StaticResource Warn}"/>
+                <TextBlock TextWrapping="Wrap" FontSize="11.5" Margin="0,4,0,0" LineHeight="16"
+                           Foreground="{StaticResource Muted}"
+                           Text="ExplorerPatcher is tied to the exact Windows build, and winget's copy has lagged a whole feature release behind GitHub - installing that on a newer Windows is the failure ExplorerPatcher is known for. So every tool here comes from where its vendor publishes it today. StartAllBack is paid software with a 100-day trial; the trial reset the desktop app bundles is deliberately not included."/>
+              </StackPanel>
+            </Border>
+
+            <Border Grid.Row="3" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="8">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="7">
+                <StackPanel x:Name="CustomizationRows"/>
+              </ScrollViewer>
+            </Border>
           </Grid>
 
           <Grid x:Name="ProfilesPanel" Visibility="Collapsed">

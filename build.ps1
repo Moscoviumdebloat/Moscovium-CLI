@@ -188,6 +188,7 @@ param(
     [switch]  `$Gui,
     [switch]  `$Tasks,
     [string]  `$InstallManager,
+    [string]  `$Customize,
     [string[]]`$Guide,
     [string[]]`$SetSetting,
     [string]  `$Toolbox,

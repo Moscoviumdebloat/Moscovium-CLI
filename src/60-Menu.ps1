@@ -540,6 +540,25 @@ function Show-PackageMenu {
     }
 }
 
+function Show-CustomizationMenu {
+    while ($true) {
+        # Rebuilt each pass so an install that just finished shows as installed
+        # without leaving and coming back.
+        $entries = @(Get-CustomizationReport)
+
+        $result = Show-Selector -Items $entries -Title 'Customization' -SingleSelect `
+            -Subtitle 'Shell replacements, each fetched from its own vendor and installed by its own setup' `
+            -Label { param($e) $e.Tool.Name } `
+            -Sublabel { param($e) if ($e.Installed) { 'installed' } else { $e.Tool.Summary } }
+
+        if (-not $result.Confirmed) { return }
+
+        Write-Banner
+        Install-CustomizationTool -Id $result.Selected[0].Tool.Id | Out-Null
+        Wait-ForKey
+    }
+}
+
 function Show-ProfileMenu {
     $options = @(
         [pscustomobject]@{ Name = 'Run a profile';   Action = 'run' }
@@ -621,6 +640,7 @@ function Show-MainMenu {
         [pscustomobject]@{ Name = 'Toolbox';  Hint = 'Debloat scripts, network, boot, control panels';         Action = 'toolbox' }
         [pscustomobject]@{ Name = 'Profiles'; Hint = 'Save or run a setup checklist';                          Action = 'profiles' }
         [pscustomobject]@{ Name = 'Packages'; Hint = 'Install Chocolatey or Scoop';                             Action = 'packages' }
+        [pscustomobject]@{ Name = 'Customize'; Hint = 'Open-Shell, Nilesoft Shell, StartAllBack, ExplorerPatcher';  Action = 'customize' }
         [pscustomobject]@{ Name = 'Tasks';    Hint = 'Live CPU, memory, disk, network and processes';          Action = 'tasks' }
         [pscustomobject]@{ Name = 'Status';   Hint = 'What is currently applied on this machine';              Action = 'status' }
         [pscustomobject]@{ Name = 'GUI';      Hint = 'Open the same thing as a window';                       Action = 'gui' }
@@ -646,6 +666,7 @@ function Show-MainMenu {
             'toolbox'  { Show-ToolboxMenu }
             'profiles' { Show-ProfileMenu }
             'packages' { Show-PackageMenu }
+            'customize' { Show-CustomizationMenu }
             'tasks'    { Show-TaskManager }
             'status'   { Write-Banner; Show-TweakStatus; Wait-ForKey }
             'gui'      { Clear-Host; Show-Gui | Out-Null; Clear-Host }

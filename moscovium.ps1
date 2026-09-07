@@ -5,7 +5,7 @@
 
         irm https://moscovium.win | iex
 
-    Build 064d37156e  (a digest of src/ and data/ - same sources, same id).
+    Build a1f0fc265f  (a digest of src/ and data/ - same sources, same id).
     Check with:  .\moscovium.ps1 -Version
 
     GENERATED FILE - do not edit.
@@ -29,6 +29,7 @@ param(
     [switch]  $Gui,
     [switch]  $Tasks,
     [string]  $InstallManager,
+    [string]  $Customize,
     [string[]]$Guide,
     [string[]]$SetSetting,
     [string]  $Toolbox,
@@ -4394,7 +4395,19 @@ param(
         Write-Info ('{0} -> {1}' -f (Format-Bytes $size), $destination)
 
         Write-Step "Running installer for $($App.name)"
-        $process = Start-Process -FilePath $destination -Wait -PassThru -ErrorAction Stop
+
+        # An .msi is not executable: Start-Process on one goes through the shell
+        # association, and -Wait then returns when the *shell* hands off rather than
+        # when the install finishes, with an exit code that means nothing. msiexec
+        # directly gives a real wait and a real code. Interactive, like the .exe
+        # path - this launches the vendor's installer, it does not silence it.
+        if ([IO.Path]::GetExtension($destination) -ieq '.msi') {
+            $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', ('"' + $destination + '"')) `
+                -Wait -PassThru -ErrorAction Stop
+        }
+        else {
+            $process = Start-Process -FilePath $destination -Wait -PassThru -ErrorAction Stop
+        }
 
         # Vendor installers are inconsistent about exit codes; 3010 is "needs reboot".
         if ($process.ExitCode -notin @(0, 3010)) {
@@ -6398,7 +6411,7 @@ param(
     # -----------------------------------------------------------------------------
 
     # Short enough for a table column: 4 significant characters plus a unit letter.
-    function Format-Bytes {
+    function Format-CompactBytes {
         param([AllowNull()]$Bytes)
 
         $value = 0.0
@@ -6420,7 +6433,7 @@ param(
 
     function Format-Rate {
         param([AllowNull()]$BytesPerSecond)
-        return ((Format-Bytes $BytesPerSecond) + '/s')
+        return ((Format-CompactBytes $BytesPerSecond) + '/s')
     }
 
     # Seconds of CPU time as h:mm:ss, the way a process list shows it.
@@ -7406,6 +7419,351 @@ param(
         Write-Info 'Install one with:  -InstallManager <id>'
     }
 
+# ===== src/56-Customize.ps1 ============================================
+
+    # =============================================================================
+    # Customization: the desktop app's Customization page - shell replacements.
+    #
+    # The desktop app ships four vendor installers as bundled binaries and launches
+    # them. A single script cannot carry binaries, so this fetches each one from its
+    # vendor's *current* channel instead, then hands it to the same Install-App path
+    # the app catalog uses - which is where dry-run, counters and error handling
+    # already live.
+    #
+    # Vendor channel, not winget, and that was measured rather than assumed. All
+    # four have winget packages, but ExplorerPatcher's was 22631.5335.68.2 when
+    # GitHub's latest was 26100.8457.70.3 - and ExplorerPatcher is tied to the
+    # Windows build (22631 is 23H2, 26100 is 24H2). Installing the stale one on a
+    # 24H2 machine is exactly the failure ExplorerPatcher is notorious for. Using
+    # what each vendor currently publishes is also what the desktop app does; it
+    # just bundles the file instead of fetching it.
+    #
+    # Not ported: the StartAllBack trial reset, for the same reason MAS is not in
+    # the catalog - it exists to circumvent licensing. Installing StartAllBack is
+    # here; its licence terms are its own business after that.
+    # =============================================================================
+
+    function Get-CustomizationTools {
+        # ARM64 gets the ARM build where the vendor publishes one; everything else
+        # is x64, which is what the desktop app bundles.
+        $arm = ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') -or ($env:PROCESSOR_ARCHITEW6432 -eq 'ARM64')
+
+        $epAsset = '^ep_setup\.exe$'
+        if ($arm) { $epAsset = '^ep_setup_arm64\.exe$' }
+
+        $shellMsi = 'setup-x64\.msi'
+        if ($arm) { $shellMsi = 'setup-arm64\.msi' }
+
+        @(
+            [pscustomobject]@{
+                Id = 'openshell'
+                Name = 'Open-Shell'
+                Site = 'https://open-shell.github.io/Open-Shell-Menu/'
+                Summary = 'Classic start menu for Windows 10 and 11.'
+                # How the current installer URL is found. 'github' asks the API for
+                # the latest release; 'page' scrapes a download page; 'redirect'
+                # follows the vendor's stable link to wherever it points today.
+                Source = 'github'
+                Repo = 'Open-Shell/Open-Shell-Menu'
+                AssetPattern = '^OpenShellSetup_.*\.exe$'
+                PageUrl = ''
+                LinkPattern = ''
+                BaseUrl = ''
+                RedirectUrl = ''
+                # Installed-detection: an uninstall entry with this DisplayName, or
+                # any of these files.
+                DisplayName = 'Open-Shell'
+                Paths = @((Join-Path $env:ProgramFiles 'Open-Shell\StartMenu.exe'))
+                Note = ''
+            }
+            [pscustomobject]@{
+                Id = 'nilesoft'
+                Name = 'Nilesoft Shell'
+                Site = 'https://nilesoft.org'
+                Summary = 'Context menu customiser and shell extension - rebuild the right-click menu.'
+                # GitHub releases carry no assets; nilesoft.org is the channel, and
+                # its download page links the current version.
+                Source = 'page'
+                Repo = ''
+                AssetPattern = ''
+                PageUrl = 'https://nilesoft.org/download'
+                LinkPattern = 'href="(/download/shell/[^"]+/' + $shellMsi + ')"'
+                BaseUrl = 'https://nilesoft.org'
+                RedirectUrl = ''
+                DisplayName = 'Nilesoft Shell'
+                Paths = @((Join-Path $env:ProgramFiles 'Nilesoft Shell\shell.exe'))
+                Note = ''
+            }
+            [pscustomobject]@{
+                Id = 'startallback'
+                Name = 'StartAllBack'
+                Site = 'https://www.startallback.com'
+                Summary = 'Windows 11 taskbar and start menu fixes. Paid, with a 100-day trial.'
+                # download.php is the vendor's stable link; it redirects to the
+                # versioned setup on their CDN.
+                Source = 'redirect'
+                Repo = ''
+                AssetPattern = ''
+                PageUrl = ''
+                LinkPattern = ''
+                BaseUrl = ''
+                RedirectUrl = 'https://www.startallback.com/download.php'
+                DisplayName = 'StartAllBack'
+                Paths = @((Join-Path $env:ProgramFiles 'StartAllBack\StartAllBackCfg.exe'))
+                Note = 'The trial reset from the desktop app is not included - it circumvents licensing.'
+            }
+            [pscustomobject]@{
+                Id = 'explorerpatcher'
+                Name = 'ExplorerPatcher'
+                Site = 'https://github.com/valinet/ExplorerPatcher'
+                Summary = 'Taskbar and system tray tweaks. Tied to your Windows build - always the latest release.'
+                Source = 'github'
+                Repo = 'valinet/ExplorerPatcher'
+                AssetPattern = $epAsset
+                PageUrl = ''
+                LinkPattern = ''
+                BaseUrl = ''
+                RedirectUrl = ''
+                DisplayName = 'ExplorerPatcher'
+                Paths = @((Join-Path $env:ProgramFiles 'ExplorerPatcher\ep_gui.dll'))
+                Note = ''
+            }
+        )
+    }
+
+    function Resolve-CustomizationTool {
+        param([Parameter(Mandatory)][string]$Id)
+
+        $tools = Get-CustomizationTools
+
+        $exact = @($tools | Where-Object { $_.Id -eq $Id })
+        if ($exact.Count -eq 1) { return $exact[0] }
+
+        $fuzzy = @($tools | Where-Object {
+            (Test-NameMatch -Value $_.Id -Pattern $Id) -or (Test-NameMatch -Value $_.Name -Pattern $Id)
+        })
+        if ($fuzzy.Count -eq 1) { return $fuzzy[0] }
+
+        if ($fuzzy.Count -gt 1) {
+            Write-Err "'$Id' is ambiguous. Did you mean one of these?"
+            foreach ($tool in $fuzzy) { Write-Info $tool.Id }
+            return $null
+        }
+
+        Write-Err "Unknown customization tool '$Id'. Known: $((Get-CustomizationTools | ForEach-Object { $_.Id }) -join ', ')."
+        return $null
+    }
+
+    # -----------------------------------------------------------------------------
+    # Finding the current installer
+    # -----------------------------------------------------------------------------
+
+    # Follows a vendor's stable link to the file it points at today, so the download
+    # gets the real file name (StartAllBack_3.9.25_setup.exe) rather than
+    # 'download.php'. HEAD, so nothing is downloaded twice.
+    function Resolve-RedirectUrl {
+        param([Parameter(Mandatory)][string]$Url)
+
+        try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
+
+        $request = [Net.HttpWebRequest]::Create($Url)
+        $request.Method = 'HEAD'
+        $request.UserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Moscovium-CLI'
+        $request.AllowAutoRedirect = $true
+        $request.Timeout = 30000
+
+        $response = $null
+        try {
+            $response = $request.GetResponse()
+            return [string]$response.ResponseUri.AbsoluteUri
+        }
+        finally {
+            if ($response) { $response.Dispose() }
+        }
+    }
+
+    function Resolve-CustomizationUrl {
+        param([Parameter(Mandatory)]$Tool)
+
+        switch ($Tool.Source) {
+            'github' {
+                $release = Invoke-GitHubApi -Path "/repos/$($Tool.Repo)/releases/latest"
+                $asset = @($release.assets | Where-Object { $_.name -match $Tool.AssetPattern }) | Select-Object -First 1
+                if (-not $asset) {
+                    throw "The latest $($Tool.Name) release ($($release.tag_name)) has no asset matching $($Tool.AssetPattern)."
+                }
+                return [string]$asset.browser_download_url
+            }
+            'page' {
+                try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
+                $response = Invoke-WebRequest -Uri $Tool.PageUrl -UseBasicParsing -TimeoutSec 30 -Headers @{
+                    'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Moscovium-CLI'
+                }
+                $match = [regex]::Match($response.Content, $Tool.LinkPattern, 'IgnoreCase')
+                if (-not $match.Success) {
+                    throw "$($Tool.PageUrl) no longer links an installer where expected."
+                }
+                $link = $match.Groups[1].Value
+                if ($link -match '^https?://') { return $link }
+                return ($Tool.BaseUrl.TrimEnd('/') + '/' + $link.TrimStart('/'))
+            }
+            'redirect' {
+                return (Resolve-RedirectUrl -Url $Tool.RedirectUrl)
+            }
+            default { throw "Tool '$($Tool.Id)' has an unknown source '$($Tool.Source)'." }
+        }
+    }
+
+    # -----------------------------------------------------------------------------
+    # Installed?
+    # -----------------------------------------------------------------------------
+
+    # Uninstall entries under both the 64-bit and 32-bit views plus the per-user
+    # hive, matched on DisplayName. Read with the provider and checked through
+    # PSObject.Properties: under StrictMode, $_.DisplayName on an entry that has no
+    # DisplayName throws, and plenty of them do not.
+    function Test-InstalledProgram {
+        param([Parameter(Mandatory)][string]$DisplayNamePattern)
+
+        $roots = @(
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+            'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+        )
+
+        foreach ($root in $roots) {
+            if (-not (Test-Path -LiteralPath $root)) { continue }
+            foreach ($entry in @(Get-ItemProperty -Path (Join-Path $root '*') -ErrorAction SilentlyContinue)) {
+                $property = $entry.PSObject.Properties['DisplayName']
+                if ($null -eq $property) { continue }
+                if ([string]$property.Value -like "*$DisplayNamePattern*") { return $true }
+            }
+        }
+
+        return $false
+    }
+
+    function Test-CustomizationInstalled {
+        param([Parameter(Mandatory)]$Tool)
+
+        foreach ($path in @($Tool.Paths)) {
+            if ($path -and (Test-Path -LiteralPath $path)) { return $true }
+        }
+        return (Test-InstalledProgram -DisplayNamePattern $Tool.DisplayName)
+    }
+
+    function Get-CustomizationReport {
+        $report = [System.Collections.Generic.List[object]]::new()
+        foreach ($tool in Get-CustomizationTools) {
+            $report.Add([pscustomobject]@{
+                Tool      = $tool
+                Installed = (Test-CustomizationInstalled -Tool $tool)
+            })
+        }
+        return @($report)
+    }
+
+    # -----------------------------------------------------------------------------
+    # Installing
+    # -----------------------------------------------------------------------------
+
+    # Resolves the current installer, shows where it came from, asks, and hands an
+    # app-shaped record to Install-App - so this shares the download, progress bar,
+    # .exe/.msi launch, exit-code handling and counters with the app catalog rather
+    # than growing a second copy of any of it.
+    function Install-CustomizationTool {
+        param([Parameter(Mandatory)][string]$Id)
+
+        $tool = Resolve-CustomizationTool -Id $Id
+        if (-not $tool) { return $false }
+
+        if (Test-CustomizationInstalled -Tool $tool) {
+            Write-Ok "$($tool.Name) is already installed."
+            return $true
+        }
+
+        # No network in a dry run: it says what it would fetch and from where.
+        if ($Ctx.DryRun) {
+            $from = switch ($tool.Source) {
+                'github'   { "the latest release of github.com/$($tool.Repo)" }
+                'page'     { $tool.PageUrl }
+                'redirect' { $tool.RedirectUrl }
+            }
+            Write-Status -Glyph (Get-Glyph 'Info') -Color (Get-Color 'Warn') -Message $tool.Name -MessageColor (Get-Color 'Warn')
+            Write-Info "would download the installer from $from and run it"
+            return $false
+        }
+
+        Write-Step "Finding the current $($tool.Name) installer"
+        $url = $null
+        try { $url = Resolve-CustomizationUrl -Tool $tool }
+        catch {
+            Write-Err "$($tool.Name) - $($_.Exception.Message)"
+            return $false
+        }
+
+        Write-Line ''
+        Write-Warn "$($tool.Name) is published by its own project; Moscovium does not review or pin it:"
+        Write-Line "      $($tool.Site)" -Color White
+        Write-Info 'Installer:'
+        Write-Line "      $url" -Color Gray
+        if ($tool.Note) { Write-Info $tool.Note }
+
+        if (-not (Confirm-Action "Download and run the $($tool.Name) installer?" -DefaultYes)) {
+            Write-Warn "$($tool.Name) - skipped."
+            return $false
+        }
+
+        # Every property Install-App reads has to exist: StrictMode throws on an
+        # absent one, and the catalog entries it normally gets carry all of these.
+        $app = [pscustomobject]@{
+            id             = $tool.Id
+            name           = $tool.Name
+            downloadUrl    = $url
+            resolvePageUrl = $null
+            resolvePattern = $null
+            zipUrl         = $null
+            scriptUrl      = $null
+            wingetId       = $null
+            source         = $null
+        }
+
+        $before = $Ctx.Applied
+        Install-App -App $app
+        return ($Ctx.Applied -gt $before)
+    }
+
+    function Show-CustomizationCatalog {
+        Write-SectionHeading 'Customization'
+
+        foreach ($entry in @(Get-CustomizationReport)) {
+            $tool = $entry.Tool
+
+            $mark = Get-Glyph 'Unchecked'
+            $color = Get-Color 'Muted'
+            $state = 'not installed'
+            if ($entry.Installed) {
+                $mark = Get-Glyph 'Ok'
+                $color = Get-Color 'Ok'
+                $state = 'installed'
+            }
+
+            # Padded: the ASCII glyph set spells these '[ ]' and '+', so an unpadded
+            # mark puts every column after it out of line.
+            Write-Line '  ' -NoNewline
+            Write-Line $mark.PadRight(4) -Color $color -NoNewline
+            Write-Line $tool.Id.PadRight(17) -Color White -NoNewline
+            Write-Line $tool.Name.PadRight(17) -Color Gray -NoNewline
+            Write-Line $state -Color $color
+
+            Write-Info $tool.Summary
+            if ($tool.Note) { Write-Info $tool.Note }
+        }
+
+        Write-Line ''
+        Write-Info 'Install one with:  -Customize <id>'
+    }
+
 # ===== src/60-Menu.ps1 =================================================
 
     # =============================================================================
@@ -7950,6 +8308,25 @@ param(
         }
     }
 
+    function Show-CustomizationMenu {
+        while ($true) {
+            # Rebuilt each pass so an install that just finished shows as installed
+            # without leaving and coming back.
+            $entries = @(Get-CustomizationReport)
+
+            $result = Show-Selector -Items $entries -Title 'Customization' -SingleSelect `
+                -Subtitle 'Shell replacements, each fetched from its own vendor and installed by its own setup' `
+                -Label { param($e) $e.Tool.Name } `
+                -Sublabel { param($e) if ($e.Installed) { 'installed' } else { $e.Tool.Summary } }
+
+            if (-not $result.Confirmed) { return }
+
+            Write-Banner
+            Install-CustomizationTool -Id $result.Selected[0].Tool.Id | Out-Null
+            Wait-ForKey
+        }
+    }
+
     function Show-ProfileMenu {
         $options = @(
             [pscustomobject]@{ Name = 'Run a profile';   Action = 'run' }
@@ -8031,6 +8408,7 @@ param(
             [pscustomobject]@{ Name = 'Toolbox';  Hint = 'Debloat scripts, network, boot, control panels';         Action = 'toolbox' }
             [pscustomobject]@{ Name = 'Profiles'; Hint = 'Save or run a setup checklist';                          Action = 'profiles' }
             [pscustomobject]@{ Name = 'Packages'; Hint = 'Install Chocolatey or Scoop';                             Action = 'packages' }
+            [pscustomobject]@{ Name = 'Customize'; Hint = 'Open-Shell, Nilesoft Shell, StartAllBack, ExplorerPatcher';  Action = 'customize' }
             [pscustomobject]@{ Name = 'Tasks';    Hint = 'Live CPU, memory, disk, network and processes';          Action = 'tasks' }
             [pscustomobject]@{ Name = 'Status';   Hint = 'What is currently applied on this machine';              Action = 'status' }
             [pscustomobject]@{ Name = 'GUI';      Hint = 'Open the same thing as a window';                       Action = 'gui' }
@@ -8056,6 +8434,7 @@ param(
                 'toolbox'  { Show-ToolboxMenu }
                 'profiles' { Show-ProfileMenu }
                 'packages' { Show-PackageMenu }
+                'customize' { Show-CustomizationMenu }
                 'tasks'    { Show-TaskManager }
                 'status'   { Write-Banner; Show-TweakStatus; Wait-ForKey }
                 'gui'      { Clear-Host; Show-Gui | Out-Null; Clear-Host }
@@ -8414,8 +8793,8 @@ param(
 
         if ($Monitor.Memory) {
             $detail = '{0} of {1}   commit {2}' -f `
-                (Format-Bytes $Monitor.Memory.Used), (Format-Bytes $Monitor.Memory.Total),
-                (Format-Bytes $Monitor.Memory.CommitUsed)
+                (Format-CompactBytes $Monitor.Memory.Used), (Format-CompactBytes $Monitor.Memory.Total),
+                (Format-CompactBytes $Monitor.Memory.CommitUsed)
 
             $lines.Add((New-TaskBoxRow -Width $Width -Content (
                 @((New-FrameSegment ' mem  ' (Get-Color 'Text')),
@@ -8431,7 +8810,7 @@ param(
         if ($disks.Count -gt 0) {
             $worst = @($disks | Sort-Object -Property Percent -Descending)[0]
 
-            $detail = '{0} {1} free of {2}' -f $worst.Name, (Format-Bytes $worst.Free), (Format-Bytes $worst.Total)
+            $detail = '{0} {1} free of {2}' -f $worst.Name, (Format-CompactBytes $worst.Free), (Format-CompactBytes $worst.Total)
             if ($disks.Count -gt 1) { $detail += '   +{0} more' -f ($disks.Count - 1) }
 
             $lines.Add((New-TaskBoxRow -Width $Width -Content (
@@ -8521,7 +8900,7 @@ param(
 
         if ($Selected) {
             $text = ' ' + ([string]$Process.Id).PadRight(8) + $name.PadRight($layout.Name) +
-                    $cpu.PadLeft(7) + (Format-Bytes $Process.WorkingSet).PadLeft(9)
+                    $cpu.PadLeft(7) + (Format-CompactBytes $Process.WorkingSet).PadLeft(9)
             if ($layout.Wide) {
                 $text += ([string]$Process.Threads).PadLeft(6) + (Format-CpuTime $Process.CpuSeconds).PadLeft(11)
             }
@@ -8539,7 +8918,7 @@ param(
         $segments.Add((New-FrameSegment (' ' + ([string]$Process.Id).PadRight(8)) (Get-Color 'Faint')))
         $segments.Add((New-FrameSegment $name.PadRight($layout.Name) (Get-Color 'Text')))
         $segments.Add((New-FrameSegment $cpu.PadLeft(7) $cpuColor))
-        $segments.Add((New-FrameSegment (Format-Bytes $Process.WorkingSet).PadLeft(9) (Get-Color 'Muted')))
+        $segments.Add((New-FrameSegment (Format-CompactBytes $Process.WorkingSet).PadLeft(9) (Get-Color 'Muted')))
 
         if ($layout.Wide) {
             $segments.Add((New-FrameSegment ([string]$Process.Threads).PadLeft(6) (Get-Color 'Faint')))
@@ -8794,14 +9173,14 @@ param(
 
         if ($monitor.Memory) {
             Write-Line ('  mem    {0,5:N1}%   {1} of {2}   commit {3} of {4}' -f `
-                $monitor.Memory.Percent, (Format-Bytes $monitor.Memory.Used), (Format-Bytes $monitor.Memory.Total),
-                (Format-Bytes $monitor.Memory.CommitUsed), (Format-Bytes $monitor.Memory.CommitTotal)) `
+                $monitor.Memory.Percent, (Format-CompactBytes $monitor.Memory.Used), (Format-CompactBytes $monitor.Memory.Total),
+                (Format-CompactBytes $monitor.Memory.CommitUsed), (Format-CompactBytes $monitor.Memory.CommitTotal)) `
                 -Color (Get-LoadColor -Percent $monitor.Memory.Percent)
         }
 
         foreach ($disk in @($monitor.Disks)) {
             Write-Line ('  disk   {0,5:N1}%   {1} {2} free of {3}' -f `
-                $disk.Percent, $disk.Name, (Format-Bytes $disk.Free), (Format-Bytes $disk.Total)) `
+                $disk.Percent, $disk.Name, (Format-CompactBytes $disk.Free), (Format-CompactBytes $disk.Total)) `
                 -Color (Get-LoadColor -Percent $disk.Percent)
         }
 
@@ -8817,7 +9196,7 @@ param(
             $cpu = '-'
             if ($proc.CpuKnown) { $cpu = '{0:N1}' -f $proc.Cpu }
             Write-Line ('  {0,-8}{1,-30}{2,7}{3,9}{4,6}' -f `
-                $proc.Id, $proc.Name, $cpu, (Format-Bytes $proc.WorkingSet), $proc.Threads)
+                $proc.Id, $proc.Name, $cpu, (Format-CompactBytes $proc.WorkingSet), $proc.Threads)
         }
 
         Write-Line ''
@@ -9297,6 +9676,7 @@ param(
           <ListBoxItem Content="Toolbox"/>
           <ListBoxItem Content="Guides"/>
           <ListBoxItem Content="Personalise"/>
+          <ListBoxItem Content="Customization"/>
           <ListBoxItem Content="Profiles"/>
           <ListBoxItem Content="Settings"/>
         </ListBox>
@@ -9781,6 +10161,44 @@ param(
                 <Button x:Name="BtnOpenStateFolder" Content="Open data folder"/>
               </StackPanel>
             </StackPanel>
+          </Grid>
+
+          <Grid x:Name="CustomizationPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Customization" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+
+            <TextBlock Grid.Row="1" TextWrapping="Wrap" FontSize="12" Margin="0,0,0,10"
+                       Foreground="{StaticResource Muted}"
+                       Text="Shell replacements. Each installer is fetched from its own vendor's current release and run as that vendor ships it, after Moscovium shows you the link."/>
+
+            <!-- The desktop app also ships a StartAllBack trial reset. It is
+                 not here, for the same reason MAS is not in the catalog. -->
+            <Border Grid.Row="2" Background="{StaticResource Panel2}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="7" Padding="13,9" Margin="0,0,0,12">
+              <StackPanel>
+                <TextBlock Text="Why the vendor's own installer and not winget" FontSize="11.5"
+                           FontWeight="SemiBold" Foreground="{StaticResource Warn}"/>
+                <TextBlock TextWrapping="Wrap" FontSize="11.5" Margin="0,4,0,0" LineHeight="16"
+                           Foreground="{StaticResource Muted}"
+                           Text="ExplorerPatcher is tied to the exact Windows build, and winget's copy has lagged a whole feature release behind GitHub - installing that on a newer Windows is the failure ExplorerPatcher is known for. So every tool here comes from where its vendor publishes it today. StartAllBack is paid software with a 100-day trial; the trial reset the desktop app bundles is deliberately not included."/>
+              </StackPanel>
+            </Border>
+
+            <Border Grid.Row="3" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="8">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="7">
+                <StackPanel x:Name="CustomizationRows"/>
+              </ScrollViewer>
+            </Border>
           </Grid>
 
           <Grid x:Name="ProfilesPanel" Visibility="Collapsed">
@@ -10460,6 +10878,51 @@ param(
         }
     }
 
+    function Update-GuiCustomizationRow {
+        if (-not $Ctx.Gui) { return }
+        $ui = $Ctx.Gui.Ui
+
+        $ui.CustomizationRows.Children.Clear()
+
+        foreach ($entry in @(Get-CustomizationReport)) {
+            $tool = $entry.Tool
+
+            $state = 'not installed'
+            $ink, $fill = '#FF8B81A8', '#FF150F22'
+            if ($entry.Installed) {
+                $state = 'installed'
+                $ink, $fill = '#FF7EE0A6', '#FF102A1E'
+            }
+
+            $secondary = $tool.Summary
+            if ($tool.Note) { $secondary += '   ' + $tool.Note }
+
+            $row = New-GuiRow -Item $tool -Primary "$($tool.Name)   $($tool.Site)" `
+                -Secondary $secondary -Status $state -StatusBrush $ink -StatusFill $fill -NoCheckBox
+
+            if (-not $entry.Installed) {
+                $install = New-Object Windows.Controls.Button
+                $install.Content = 'Install'
+                $install.Padding = New-Object Windows.Thickness 12, 4, 12, 4
+                $install.Margin = New-Object Windows.Thickness 8, 0, 0, 0
+                $install.VerticalAlignment = 'Center'
+                $install.Tag = $tool.Id
+                [Windows.Controls.Grid]::SetColumn($install, 2)
+
+                $install.Add_Click({
+                    param($sender, $e)
+                    $id = [string]$sender.Tag
+                    Invoke-GuiWork -Label "installing $id" -Work { Install-CustomizationTool -Id $id | Out-Null }
+                    Update-GuiCustomizationRow
+                })
+
+                $row.Element.Child.Children.Add($install) | Out-Null
+            }
+
+            $ui.CustomizationRows.Children.Add($row.Element) | Out-Null
+        }
+    }
+
     # -----------------------------------------------------------------------------
     # Task manager page
     #
@@ -10612,8 +11075,8 @@ param(
             $ui.MemBar.Value = [Math]::Max(0.0, [Math]::Min(100.0, $monitor.Memory.Percent))
             $ui.MemBar.Foreground = Get-GuiLoadBrush -Percent $monitor.Memory.Percent
             $ui.MemDetail.Text = '{0} of {1}   commit {2}' -f `
-                (Format-Bytes $monitor.Memory.Used), (Format-Bytes $monitor.Memory.Total),
-                (Format-Bytes $monitor.Memory.CommitUsed)
+                (Format-CompactBytes $monitor.Memory.Used), (Format-CompactBytes $monitor.Memory.Total),
+                (Format-CompactBytes $monitor.Memory.CommitUsed)
         }
 
         # The fullest volume, because that is the one about to cause a problem.
@@ -10627,14 +11090,14 @@ param(
 
             $extra = ''
             if ($disks.Count -gt 1) { $extra = '   +{0} more' -f ($disks.Count - 1) }
-            $ui.DiskDetail.Text = '{0} {1} free{2}' -f $worst.Name, (Format-Bytes $worst.Free), $extra
+            $ui.DiskDetail.Text = '{0} {1} free{2}' -f $worst.Name, (Format-CompactBytes $worst.Free), $extra
         }
 
         # Headline is the combined rate; the split goes underneath, where the other
         # three cards put their detail.
         $ui.NetValue.Text = Format-Rate ($monitor.Network.Received + $monitor.Network.Sent)
         $ui.NetDetail.Text = 'down {0}   up {1}' -f `
-            (Format-Bytes $monitor.Network.Received), (Format-Bytes $monitor.Network.Sent)
+            (Format-CompactBytes $monitor.Network.Received), (Format-CompactBytes $monitor.Network.Sent)
 
         Update-GuiCpuGraph -History @($monitor.CpuHistory)
         Update-GuiCoreStrip -Cores @($monitor.Cpu.Cores)
@@ -10657,7 +11120,7 @@ param(
                 Id         = $proc.Id
                 Name       = $proc.Name
                 CpuText    = $cpuText
-                MemoryText = Format-Bytes $proc.WorkingSet
+                MemoryText = Format-CompactBytes $proc.WorkingSet
                 Threads    = $proc.Threads
                 TimeText   = Format-CpuTime $proc.CpuSeconds
             })
@@ -10901,6 +11364,7 @@ param(
             'NavList', 'OneClickPanel', 'TasksPanel', 'TweaksPanel', 'AppsPanel', 'ToolboxPanel', 'ProfilesPanel',
             'StorePanel', 'GuidesPanel', 'PersonalizePanel', 'SettingsPanel',
             'PackagesPanel', 'PackageRows',
+            'CustomizationPanel', 'CustomizationRows',
             'OneClickSteps', 'OneClickBlurb', 'BtnOneClick', 'BtnOneClickToolbox',
             'TaskSummary', 'CpuValue', 'CpuBar', 'CpuDetail', 'MemValue', 'MemBar', 'MemDetail',
             'DiskValue', 'DiskBar', 'DiskDetail', 'NetValue', 'NetDetail',
@@ -11013,8 +11477,8 @@ param(
 
         # Order has to match the ListBoxItems in the XAML and the $panels array in
         # the SelectionChanged handler. -1 means "no count worth showing".
-        $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Profiles', 'Settings')
-        $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1)
+        $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Customization', 'Profiles', 'Settings')
+        $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, @(Get-CustomizationTools).Count, -1, -1)
 
         # The item Content becomes a DockPanel below, so the labels are no longer
         # readable off the ListBox. Keep them where a handler can still find them.
@@ -11068,7 +11532,7 @@ param(
             $panels = @($Ctx.Gui.Ui.OneClickPanel, $Ctx.Gui.Ui.TasksPanel, $Ctx.Gui.Ui.TweaksPanel,
                         $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.PackagesPanel, $Ctx.Gui.Ui.StorePanel,
                         $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.GuidesPanel, $Ctx.Gui.Ui.PersonalizePanel,
-                        $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
+                        $Ctx.Gui.Ui.CustomizationPanel, $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
             for ($i = 0; $i -lt $panels.Count; $i++) {
                 $panels[$i].Visibility = if ($i -eq $sender.SelectedIndex) { 'Visible' } else { 'Collapsed' }
             }
@@ -11349,6 +11813,7 @@ param(
         # ---- go ----------------------------------------------------------------
         Update-GuiOneClickSteps
         Update-GuiPackageRow
+        Update-GuiCustomizationRow
         Update-GuiTweakRow
         Update-GuiAppRow
         Update-GuiToolboxRow
@@ -11454,6 +11919,7 @@ param(
         Write-Line '    -Tasks             live task manager: CPU, memory, disk, network, processes' -Color Gray
         Write-Line '    -Toolbox <id>      run a toolbox action (see -List toolbox)' -Color Gray
         Write-Line '    -InstallManager <id>  install a package manager: choco or scoop' -Color Gray
+        Write-Line '    -Customize <id>    install Open-Shell, Nilesoft Shell, StartAllBack or ExplorerPatcher' -Color Gray
         Write-Line '    -Profile <path>    run a saved setup profile' -Color Gray
         Write-Line '    -SaveProfile <path>  write the current -Apply/-Install selection as a profile' -Color Gray
         Write-Line '    -List <what>       list tweaks, apps, toolbox, packages, or backups' -Color Gray
@@ -11578,6 +12044,7 @@ param(
                 '^store$'     { Show-StoreCatalog }
                 '^packages?$' { Show-PackageManagerCatalog }
                 '^managers?$' { Show-PackageManagerCatalog }
+                '^custom'     { Show-CustomizationCatalog }
                 '^categor'    {
                     Write-SectionHeading 'Tweak categories'
                     Format-Columns -Items $Ctx.TweakCategories
@@ -11585,7 +12052,7 @@ param(
                     Format-Columns -Items $Ctx.AppCategories
                 }
                 default {
-                    Write-Err "Don't know how to list '$item'. Try: tweaks, apps, toolbox, packages, backups, categories."
+                    Write-Err "Don't know how to list '$item'. Try: tweaks, apps, toolbox, packages, customization, backups, categories."
                 }
             }
         }
@@ -11630,7 +12097,7 @@ param(
         if (-not $Bound.ContainsKey('NoBanner')) { Write-Banner }
 
         # Actions that change the machine; anything else can run unelevated.
-        $mutating = @('Apply', 'Revert', 'Install', 'Toolbox', 'Profile', 'UpgradeAll', 'WindowsUpdate', 'VCRuntimes')
+        $mutating = @('Apply', 'Revert', 'Install', 'Toolbox', 'Customize', 'Profile', 'UpgradeAll', 'WindowsUpdate', 'VCRuntimes')
         $wantsChange = @($mutating | Where-Object { $Bound.ContainsKey($_) }).Count -gt 0
 
         if ((& $has 'Elevate') -or ($wantsChange -and -not $Ctx.IsAdmin -and -not $Ctx.DryRun)) {
@@ -11719,6 +12186,12 @@ param(
             Invoke-PackageManagerInstall -Id $Bound['InstallManager'] | Out-Null
             $didSomething = $true
         }
+        # In $mutating above: these are vendor installers writing to Program Files.
+        if (& $has 'Customize') {
+            Install-CustomizationTool -Id $Bound['Customize'] | Out-Null
+            $didSomething = $true
+        }
+
         if (& $has 'Profile')       { Invoke-SetupProfile -Path $Bound['Profile']; $didSomething = $true }
         if (& $has 'UpgradeAll')    { Invoke-UpgradeAll; $didSomething = $true }
         if (& $has 'WindowsUpdate') { Invoke-WindowsUpdate; $didSomething = $true }
@@ -11777,4 +12250,4 @@ param(
         Restore-ConsoleEncoding -Previous $previousEncoding
     }
 
-} $PSBoundParameters '1.2.0' $SourceUrl '064d37156e'
+} $PSBoundParameters '1.2.0' $SourceUrl 'a1f0fc265f'

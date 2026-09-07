@@ -22,6 +22,7 @@ which ships with Windows, is enough.
 | **One-click debloat box** | The landing page in the window and the first entry in the menu. Six steps behind one prompt: WinUtil preset, Win11Debloat preset, security-only Windows Update, TCP autotuning, CPU priority, dynamic tick. |
 | **Task manager** | btop-shaped: CPU with per-core bars and history, memory, disk, network, and a sortable process list you can end a process from. |
 | **Package managers** | Install Chocolatey or Scoop from their own install scripts, with winget status alongside. |
+| **Customization** | The desktop app's shell replacements - Open-Shell, Nilesoft Shell, StartAllBack, ExplorerPatcher - each fetched from its vendor's current release. |
 | **40 tweaks** | Privacy & telemetry, Explorer & taskbar, gaming & performance, hardware, advanced. Applied, reverted, or reported on. |
 | **127 apps** | The full curated winget catalog, plus direct-download and archive installers, across 8 categories. |
 | **16 toolbox actions** | WinUtil, Win11Debloat, Windows Update policy, TCP autotuning, dynamic tick, CPU priority, and the classic control panels - each on its own, when you do not want the whole box. |
@@ -210,6 +211,32 @@ showing it. winget is listed for its status only: it arrives with App Installer
 from the Microsoft Store, and scripting around the Store is the kind of thing
 that breaks on the next Windows build.
 
+### Customization
+
+```powershell
+.\moscovium.ps1 -List customization
+.\moscovium.ps1 -Customize openshell
+.\moscovium.ps1 -Customize explorerpatcher
+```
+
+The desktop app's Customization page: Open-Shell, Nilesoft Shell, StartAllBack
+and ExplorerPatcher. It bundles their installers as binaries; a single script
+cannot, so each is fetched from where its vendor publishes it *today* - the
+latest GitHub release for Open-Shell and ExplorerPatcher, nilesoft.org's
+download page for Shell, startallback.com's download link for StartAllBack -
+and run as the vendor ships it, after the link is shown and confirmed. In the
+window it is its own sidebar page.
+
+**The vendor channel, not winget, and that was measured.** All four have winget
+packages, but winget's ExplorerPatcher was `22631.5335.68.2` when GitHub's
+latest was `26100.8457.70.3`. ExplorerPatcher is tied to the Windows build -
+22631 is 23H2, 26100 is 24H2 - and installing the stale one on a newer Windows
+is exactly the failure it is notorious for. What each vendor currently
+publishes is also what the desktop app bundles.
+
+The desktop page's fifth button, the StartAllBack trial reset, is not here.
+It circumvents licensing, the same reason MAS is not in the catalog.
+
 ### Toolbox
 
 The individual actions, for when you want fewer than all six.
@@ -309,6 +336,7 @@ src/              function libraries, concatenated in name order
   50-Profile      setup profiles
   52-Tasks        task manager sampling
   54-Packages     package manager detection and install
+  56-Customize    shell replacements from their vendors' release channels
   60-Menu         interactive selectors and screens
   65-TaskView     task manager, console front-end
   70-Gui          the WPF window
@@ -382,7 +410,7 @@ Everything except the parts that cannot live in a single script:
 | Guides, CS2/CS:GO configs, Settings | ported |
 | Cursors | the mechanism, not the packs - point it at a folder of `.cur`/`.ani` files, or restore the Windows defaults. The bundled schemes are several hundred binary files. |
 | Wallpaper | ported |
-| Customization page installers | use the winget entries in the app catalog (ExplorerPatcher, StartAllBack, Open-Shell) rather than bundled `.exe` payloads |
+| Customization page installers | ported - fetched from each vendor's current release channel instead of bundled as binaries. The trial reset is not. |
 
 ## Not ported from the GUI
 
@@ -391,8 +419,8 @@ the **StartAllBack trial reset**. Both exist to circumvent licensing. Everything
 else on the GUI's Optimizations, Toolbox, Customization and Legacy Menus pages is
 here. The exclusion is one list in `tools/Sync-Catalog.ps1` if you disagree.
 
-Also not ported, because they are inherently graphical: the bundled cursor packs,
-wallpaper setting, and the CS2/CS:GO config pages.
+Also not ported: the bundled cursor packs themselves - several hundred binary
+files - though pointing the cursor mechanism at your own folder of them works.
 
 ## Third-party scripts
 

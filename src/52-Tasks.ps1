@@ -38,7 +38,7 @@ $TaskDiskQuery = 'SELECT DeviceID,VolumeName,Size,FreeSpace FROM Win32_LogicalDi
 # -----------------------------------------------------------------------------
 
 # Short enough for a table column: 4 significant characters plus a unit letter.
-function Format-Bytes {
+function Format-CompactBytes {
     param([AllowNull()]$Bytes)
 
     $value = 0.0
@@ -60,7 +60,7 @@ function Format-Bytes {
 
 function Format-Rate {
     param([AllowNull()]$BytesPerSecond)
-    return ((Format-Bytes $BytesPerSecond) + '/s')
+    return ((Format-CompactBytes $BytesPerSecond) + '/s')
 }
 
 # Seconds of CPU time as h:mm:ss, the way a process list shows it.

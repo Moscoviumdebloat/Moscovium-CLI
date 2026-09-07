@@ -32,6 +32,7 @@ function Show-Help {
     Write-Line '    -Tasks             live task manager: CPU, memory, disk, network, processes' -Color Gray
     Write-Line '    -Toolbox <id>      run a toolbox action (see -List toolbox)' -Color Gray
     Write-Line '    -InstallManager <id>  install a package manager: choco or scoop' -Color Gray
+    Write-Line '    -Customize <id>    install Open-Shell, Nilesoft Shell, StartAllBack or ExplorerPatcher' -Color Gray
     Write-Line '    -Profile <path>    run a saved setup profile' -Color Gray
     Write-Line '    -SaveProfile <path>  write the current -Apply/-Install selection as a profile' -Color Gray
     Write-Line '    -List <what>       list tweaks, apps, toolbox, packages, or backups' -Color Gray
@@ -156,6 +157,7 @@ function Invoke-List {
             '^store$'     { Show-StoreCatalog }
             '^packages?$' { Show-PackageManagerCatalog }
             '^managers?$' { Show-PackageManagerCatalog }
+            '^custom'     { Show-CustomizationCatalog }
             '^categor'    {
                 Write-SectionHeading 'Tweak categories'
                 Format-Columns -Items $Ctx.TweakCategories
@@ -163,7 +165,7 @@ function Invoke-List {
                 Format-Columns -Items $Ctx.AppCategories
             }
             default {
-                Write-Err "Don't know how to list '$item'. Try: tweaks, apps, toolbox, packages, backups, categories."
+                Write-Err "Don't know how to list '$item'. Try: tweaks, apps, toolbox, packages, customization, backups, categories."
             }
         }
     }
@@ -208,7 +210,7 @@ function Invoke-Main {
     if (-not $Bound.ContainsKey('NoBanner')) { Write-Banner }
 
     # Actions that change the machine; anything else can run unelevated.
-    $mutating = @('Apply', 'Revert', 'Install', 'Toolbox', 'Profile', 'UpgradeAll', 'WindowsUpdate', 'VCRuntimes')
+    $mutating = @('Apply', 'Revert', 'Install', 'Toolbox', 'Customize', 'Profile', 'UpgradeAll', 'WindowsUpdate', 'VCRuntimes')
     $wantsChange = @($mutating | Where-Object { $Bound.ContainsKey($_) }).Count -gt 0
 
     if ((& $has 'Elevate') -or ($wantsChange -and -not $Ctx.IsAdmin -and -not $Ctx.DryRun)) {
@@ -297,6 +299,12 @@ function Invoke-Main {
         Invoke-PackageManagerInstall -Id $Bound['InstallManager'] | Out-Null
         $didSomething = $true
     }
+    # In $mutating above: these are vendor installers writing to Program Files.
+    if (& $has 'Customize') {
+        Install-CustomizationTool -Id $Bound['Customize'] | Out-Null
+        $didSomething = $true
+    }
+
     if (& $has 'Profile')       { Invoke-SetupProfile -Path $Bound['Profile']; $didSomething = $true }
     if (& $has 'UpgradeAll')    { Invoke-UpgradeAll; $didSomething = $true }
     if (& $has 'WindowsUpdate') { Invoke-WindowsUpdate; $didSomething = $true }

@@ -246,7 +246,19 @@ function Install-FromDownload {
     Write-Info ('{0} -> {1}' -f (Format-Bytes $size), $destination)
 
     Write-Step "Running installer for $($App.name)"
-    $process = Start-Process -FilePath $destination -Wait -PassThru -ErrorAction Stop
+
+    # An .msi is not executable: Start-Process on one goes through the shell
+    # association, and -Wait then returns when the *shell* hands off rather than
+    # when the install finishes, with an exit code that means nothing. msiexec
+    # directly gives a real wait and a real code. Interactive, like the .exe
+    # path - this launches the vendor's installer, it does not silence it.
+    if ([IO.Path]::GetExtension($destination) -ieq '.msi') {
+        $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', ('"' + $destination + '"')) `
+            -Wait -PassThru -ErrorAction Stop
+    }
+    else {
+        $process = Start-Process -FilePath $destination -Wait -PassThru -ErrorAction Stop
+    }
 
     # Vendor installers are inconsistent about exit codes; 3010 is "needs reboot".
     if ($process.ExitCode -notin @(0, 3010)) {

@@ -655,6 +655,51 @@ function Update-GuiPackageRow {
     }
 }
 
+function Update-GuiCustomizationRow {
+    if (-not $Ctx.Gui) { return }
+    $ui = $Ctx.Gui.Ui
+
+    $ui.CustomizationRows.Children.Clear()
+
+    foreach ($entry in @(Get-CustomizationReport)) {
+        $tool = $entry.Tool
+
+        $state = 'not installed'
+        $ink, $fill = '#FF8B81A8', '#FF150F22'
+        if ($entry.Installed) {
+            $state = 'installed'
+            $ink, $fill = '#FF7EE0A6', '#FF102A1E'
+        }
+
+        $secondary = $tool.Summary
+        if ($tool.Note) { $secondary += '   ' + $tool.Note }
+
+        $row = New-GuiRow -Item $tool -Primary "$($tool.Name)   $($tool.Site)" `
+            -Secondary $secondary -Status $state -StatusBrush $ink -StatusFill $fill -NoCheckBox
+
+        if (-not $entry.Installed) {
+            $install = New-Object Windows.Controls.Button
+            $install.Content = 'Install'
+            $install.Padding = New-Object Windows.Thickness 12, 4, 12, 4
+            $install.Margin = New-Object Windows.Thickness 8, 0, 0, 0
+            $install.VerticalAlignment = 'Center'
+            $install.Tag = $tool.Id
+            [Windows.Controls.Grid]::SetColumn($install, 2)
+
+            $install.Add_Click({
+                param($sender, $e)
+                $id = [string]$sender.Tag
+                Invoke-GuiWork -Label "installing $id" -Work { Install-CustomizationTool -Id $id | Out-Null }
+                Update-GuiCustomizationRow
+            })
+
+            $row.Element.Child.Children.Add($install) | Out-Null
+        }
+
+        $ui.CustomizationRows.Children.Add($row.Element) | Out-Null
+    }
+}
+
 # -----------------------------------------------------------------------------
 # Task manager page
 #
@@ -807,8 +852,8 @@ function Update-GuiTaskSample {
         $ui.MemBar.Value = [Math]::Max(0.0, [Math]::Min(100.0, $monitor.Memory.Percent))
         $ui.MemBar.Foreground = Get-GuiLoadBrush -Percent $monitor.Memory.Percent
         $ui.MemDetail.Text = '{0} of {1}   commit {2}' -f `
-            (Format-Bytes $monitor.Memory.Used), (Format-Bytes $monitor.Memory.Total),
-            (Format-Bytes $monitor.Memory.CommitUsed)
+            (Format-CompactBytes $monitor.Memory.Used), (Format-CompactBytes $monitor.Memory.Total),
+            (Format-CompactBytes $monitor.Memory.CommitUsed)
     }
 
     # The fullest volume, because that is the one about to cause a problem.
@@ -822,14 +867,14 @@ function Update-GuiTaskSample {
 
         $extra = ''
         if ($disks.Count -gt 1) { $extra = '   +{0} more' -f ($disks.Count - 1) }
-        $ui.DiskDetail.Text = '{0} {1} free{2}' -f $worst.Name, (Format-Bytes $worst.Free), $extra
+        $ui.DiskDetail.Text = '{0} {1} free{2}' -f $worst.Name, (Format-CompactBytes $worst.Free), $extra
     }
 
     # Headline is the combined rate; the split goes underneath, where the other
     # three cards put their detail.
     $ui.NetValue.Text = Format-Rate ($monitor.Network.Received + $monitor.Network.Sent)
     $ui.NetDetail.Text = 'down {0}   up {1}' -f `
-        (Format-Bytes $monitor.Network.Received), (Format-Bytes $monitor.Network.Sent)
+        (Format-CompactBytes $monitor.Network.Received), (Format-CompactBytes $monitor.Network.Sent)
 
     Update-GuiCpuGraph -History @($monitor.CpuHistory)
     Update-GuiCoreStrip -Cores @($monitor.Cpu.Cores)
@@ -852,7 +897,7 @@ function Update-GuiTaskSample {
             Id         = $proc.Id
             Name       = $proc.Name
             CpuText    = $cpuText
-            MemoryText = Format-Bytes $proc.WorkingSet
+            MemoryText = Format-CompactBytes $proc.WorkingSet
             Threads    = $proc.Threads
             TimeText   = Format-CpuTime $proc.CpuSeconds
         })
@@ -1096,6 +1141,7 @@ function New-GuiWindow {
         'NavList', 'OneClickPanel', 'TasksPanel', 'TweaksPanel', 'AppsPanel', 'ToolboxPanel', 'ProfilesPanel',
         'StorePanel', 'GuidesPanel', 'PersonalizePanel', 'SettingsPanel',
         'PackagesPanel', 'PackageRows',
+        'CustomizationPanel', 'CustomizationRows',
         'OneClickSteps', 'OneClickBlurb', 'BtnOneClick', 'BtnOneClickToolbox',
         'TaskSummary', 'CpuValue', 'CpuBar', 'CpuDetail', 'MemValue', 'MemBar', 'MemDetail',
         'DiskValue', 'DiskBar', 'DiskDetail', 'NetValue', 'NetDetail',
@@ -1208,8 +1254,8 @@ function New-GuiWindow {
 
     # Order has to match the ListBoxItems in the XAML and the $panels array in
     # the SelectionChanged handler. -1 means "no count worth showing".
-    $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Profiles', 'Settings')
-    $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1)
+    $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Customization', 'Profiles', 'Settings')
+    $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, @(Get-CustomizationTools).Count, -1, -1)
 
     # The item Content becomes a DockPanel below, so the labels are no longer
     # readable off the ListBox. Keep them where a handler can still find them.
@@ -1263,7 +1309,7 @@ function New-GuiWindow {
         $panels = @($Ctx.Gui.Ui.OneClickPanel, $Ctx.Gui.Ui.TasksPanel, $Ctx.Gui.Ui.TweaksPanel,
                     $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.PackagesPanel, $Ctx.Gui.Ui.StorePanel,
                     $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.GuidesPanel, $Ctx.Gui.Ui.PersonalizePanel,
-                    $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
+                    $Ctx.Gui.Ui.CustomizationPanel, $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
         for ($i = 0; $i -lt $panels.Count; $i++) {
             $panels[$i].Visibility = if ($i -eq $sender.SelectedIndex) { 'Visible' } else { 'Collapsed' }
         }
@@ -1544,6 +1590,7 @@ function New-GuiWindow {
     # ---- go ----------------------------------------------------------------
     Update-GuiOneClickSteps
     Update-GuiPackageRow
+    Update-GuiCustomizationRow
     Update-GuiTweakRow
     Update-GuiAppRow
     Update-GuiToolboxRow

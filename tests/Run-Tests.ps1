@@ -1121,22 +1121,174 @@ Test-Case 'an unknown manager is reported, not silently ignored' {
 }
 
 # -----------------------------------------------------------------------------
+Write-Section 'Customization'
+
+Test-Case 'every customization tool resolves to itself, by id and by name' {
+    foreach ($tool in Get-CustomizationTools) {
+        $resolved = Resolve-CustomizationTool -Id $tool.Id
+        Assert-True ($null -ne $resolved) "'$($tool.Id)' did not resolve"
+        Assert-Equal $tool.Id $resolved.Id
+    }
+    Assert-Equal 'openshell'       (Resolve-CustomizationTool -Id 'Open-Shell').Id
+    Assert-Equal 'explorerpatcher' (Resolve-CustomizationTool -Id 'ExplorerPatcher').Id
+    Assert-True ($null -eq (Resolve-CustomizationTool -Id 'not-a-tool')) 'a nonsense id resolved'
+}
+
+Test-Case 'the four tools from the desktop page are here, and the trial reset is not' {
+    $ids = @(Get-CustomizationTools | ForEach-Object { $_.Id })
+    foreach ($expected in @('openshell', 'nilesoft', 'startallback', 'explorerpatcher')) {
+        Assert-True ($ids -contains $expected) "$expected is missing"
+    }
+    Assert-Equal 4 $ids.Count
+
+    # The desktop page's fifth button runs StartAllBack.ps1 to reset the trial.
+    # It circumvents licensing, same as MAS, and is deliberately not ported -
+    # not as a tool, not as a hidden switch, not as a bundled script.
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/56-Customize.ps1') -Raw
+    $code = (@($source -split "`r?`n" | Where-Object { $_.TrimStart() -notmatch '^#' }) -join "`n")
+    Assert-True ($code -notmatch 'StartAllBack\.ps1') 'the trial reset script is referenced'
+    # No function, verb or command named reset - the Note *string* that says the
+    # reset is excluded is allowed to say so.
+    Assert-True ($code -notmatch '(?im)^function\s+\S*reset') 'a reset function exists'
+    Assert-True ($code -notmatch '(?i)(Invoke|Start|Reset)-\S*(trial|licen)') 'something invokes a trial or licence reset'
+    Assert-True ($ids -notcontains 'trialreset') 'a trial reset tool exists'
+}
+
+Test-Case 'every tool knows where it comes from and how to tell it is installed' {
+    foreach ($tool in Get-CustomizationTools) {
+        Assert-True ($tool.Site -match '^https://') "$($tool.Id) has no https site"
+        Assert-True (-not [string]::IsNullOrWhiteSpace($tool.Summary)) "$($tool.Id) has no summary"
+        Assert-True ($tool.Source -in @('github', 'page', 'redirect')) "$($tool.Id) has source '$($tool.Source)'"
+        Assert-True (-not [string]::IsNullOrWhiteSpace($tool.DisplayName)) "$($tool.Id) has no DisplayName to detect"
+        Assert-True (@($tool.Paths).Count -ge 1) "$($tool.Id) has no path to detect"
+
+        switch ($tool.Source) {
+            'github'   { Assert-True ($tool.Repo -match '^[^/]+/[^/]+$' -and $tool.AssetPattern) "$($tool.Id) github source is incomplete" }
+            'page'     { Assert-True ($tool.PageUrl -and $tool.LinkPattern -and $tool.BaseUrl) "$($tool.Id) page source is incomplete" }
+            'redirect' { Assert-True ([bool]$tool.RedirectUrl) "$($tool.Id) redirect source is incomplete" }
+        }
+    }
+}
+
+Test-Case 'ExplorerPatcher comes from GitHub, not winget' {
+    # winget's ExplorerPatcher was 22631.5335.68.2 when GitHub's latest was
+    # 26100.8457.70.3. It is tied to the Windows build - 22631 is 23H2, 26100 is
+    # 24H2 - and installing the stale one on newer Windows is the failure it is
+    # notorious for. The vendor's current release is the only safe channel.
+    $ep = Resolve-CustomizationTool -Id 'explorerpatcher'
+    Assert-Equal 'github' $ep.Source
+    Assert-Equal 'valinet/ExplorerPatcher' $ep.Repo
+    Assert-True ('ep_setup.exe' -match $ep.AssetPattern -or 'ep_setup_arm64.exe' -match $ep.AssetPattern) 'the asset pattern matches neither EP installer'
+}
+
+Test-Case 'each vendor channel resolves to a real installer today' {
+    # Live: two GitHub API calls, one page scrape, one HEAD. The point of this
+    # feature is fetching what the vendor publishes *now*, so a pinned fixture
+    # would test nothing. If a vendor moves its files this is the test that says
+    # so.
+    foreach ($tool in Get-CustomizationTools) {
+        $url = Resolve-CustomizationUrl -Tool $tool
+        Assert-True ($url -match '^https://') "$($tool.Id) resolved to '$url'"
+        Assert-True ($url -match '\.(exe|msi)$') "$($tool.Id) resolved to something that is not an installer: $url"
+    }
+
+    # The redirect has to land on the real file name, not 'download.php' - that
+    # is what the download is saved as.
+    $sab = Resolve-CustomizationUrl -Tool (Resolve-CustomizationTool -Id 'startallback')
+    Assert-True ($sab -notmatch 'download\.php') "StartAllBack still points at the redirector: $sab"
+}
+
+Test-Case 'installed detection answers for every tool without throwing' {
+    foreach ($entry in @(Get-CustomizationReport)) {
+        Assert-True ($null -ne $entry.Tool) 'a report row has no tool'
+        Assert-True ($entry.Installed -is [bool]) "$($entry.Tool.Id) Installed is not a boolean"
+    }
+
+    # The uninstall-key scan reads DisplayName through PSObject.Properties, so
+    # an entry without one is skipped rather than thrown on under StrictMode.
+    Assert-True ((Test-InstalledProgram -DisplayNamePattern 'ZZZ-no-such-program-ZZZ') -eq $false) 'a nonsense DisplayName matched'
+}
+
+Test-Case 'a dry run touches no network and installs nothing' {
+    $previousDryRun = $Ctx.DryRun
+    $Ctx.DryRun = $true
+    try {
+        foreach ($tool in Get-CustomizationTools) {
+            # An already-installed tool answers $true before the dry-run branch
+            # is reached - that is "nothing to do", not an install. StartAllBack
+            # is installed on the dev box this was written on, so the test has
+            # to expect whichever is true here rather than assume a clean box.
+            $expected = Test-CustomizationInstalled -Tool $tool
+            $result = Install-CustomizationTool -Id $tool.Id
+            Assert-Equal $expected $result "$($tool.Id): installed=$expected but the dry run returned $result"
+        }
+    }
+    finally { $Ctx.DryRun = $previousDryRun }
+}
+
+Test-Case 'the install record carries every property Install-App reads' {
+    # StrictMode throws on an absent property. Install-App reads all of these
+    # off catalog entries; a hand-built record has to carry the same set.
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/56-Customize.ps1') -Raw
+    foreach ($property in @('scriptUrl', 'zipUrl', 'downloadUrl', 'wingetId', 'source', 'name', 'resolvePageUrl', 'resolvePattern')) {
+        Assert-True ($source -match "\b$property\s*=") "the install record has no '$property'"
+    }
+}
+
+Test-Case '.msi installers run through msiexec, not the shell association' {
+    # Start-Process on an .msi hands off to the shell and returns when *that*
+    # returns, with a meaningless exit code. msiexec waits for the install.
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/30-Apps.ps1') -Raw
+    Assert-True ($source -match "GetExtension\(\`$destination\) -ieq '\.msi'") 'Install-FromDownload does not special-case .msi'
+    Assert-True ($source -match "msiexec\.exe") 'Install-FromDownload never calls msiexec'
+}
+
+Test-Case 'no function is defined twice across src/' {
+    # The bundle concatenates src/ in name order and PowerShell lets a later
+    # definition silently replace an earlier one - which is how the task manager
+    # briefly shipped its own Format-Bytes on top of the download progress one.
+    $names = @{}
+    foreach ($file in Get-ChildItem (Join-Path $RepoRoot 'src') -Filter *.ps1) {
+        foreach ($match in [regex]::Matches((Get-Content -LiteralPath $file.FullName -Raw), '(?m)^function\s+([A-Za-z][\w-]*)')) {
+            $name = $match.Groups[1].Value
+            if ($names.ContainsKey($name)) { Assert-True $false "$name is defined in both $($names[$name]) and $($file.Name)" }
+            $names[$name] = $file.Name
+        }
+    }
+    Assert-True ($names.Count -gt 100) "only $($names.Count) functions found - the scan is broken"
+}
+
+if (Test-StaApartment) {
+    Test-Case 'the window has a Customization page with one row per tool' {
+        Import-WpfAssembly
+        $gui = New-GuiWindow
+        try {
+            Assert-True ($null -ne $gui.Ui.CustomizationPanel) 'no customization panel'
+            Assert-Equal @(Get-CustomizationTools).Count $gui.Ui.CustomizationRows.Children.Count
+            Assert-True ($gui.NavNames -contains 'Customization') 'Customization is not in the sidebar'
+            Assert-Equal 'Collapsed' ([string]$gui.Ui.CustomizationPanel.Visibility)
+        }
+        finally { $gui.Window.Close() }
+    }
+}
+
+# -----------------------------------------------------------------------------
 Write-Section 'Task manager'
 
 Test-Case 'byte and time formatting stays inside a table column' {
-    Assert-Equal '0B'    (Format-Bytes 0)
-    Assert-Equal '512B'  (Format-Bytes 512)
-    Assert-Equal '1.0K'  (Format-Bytes 1024)
-    Assert-Equal '1.5K'  (Format-Bytes 1536)
-    Assert-Equal '1.0M'  (Format-Bytes 1048576)
-    Assert-Equal '1.0G'  (Format-Bytes 1073741824)
+    Assert-Equal '0B'    (Format-CompactBytes 0)
+    Assert-Equal '512B'  (Format-CompactBytes 512)
+    Assert-Equal '1.0K'  (Format-CompactBytes 1024)
+    Assert-Equal '1.5K'  (Format-CompactBytes 1536)
+    Assert-Equal '1.0M'  (Format-CompactBytes 1048576)
+    Assert-Equal '1.0G'  (Format-CompactBytes 1073741824)
 
     # Above 100 the decimal is noise and costs a character.
-    Assert-Equal '500G'  (Format-Bytes (500 * 1GB))
+    Assert-Equal '500G'  (Format-CompactBytes (500 * 1GB))
 
     # Negatives and nulls come from counters that reset; neither should throw.
-    Assert-Equal '0B' (Format-Bytes -5)
-    Assert-Equal '0B' (Format-Bytes $null)
+    Assert-Equal '0B' (Format-CompactBytes -5)
+    Assert-Equal '0B' (Format-CompactBytes $null)
 
     Assert-Equal '1.0K/s' (Format-Rate 1024)
 
