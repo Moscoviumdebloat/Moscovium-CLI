@@ -507,6 +507,40 @@ Test-Case '-Ascii forces the plain theme regardless of the terminal' {
     Assert-Equal '[x]' (New-Theme -Ascii).Glyph.Checked
 }
 
+Test-Case 'the wordmark is one shared block of pure ASCII' {
+    $lines = @(Get-WordmarkLines)
+    Assert-True ($lines.Count -ge 5) 'the wordmark lost lines'
+
+    foreach ($line in $lines) {
+        # conhost on code page 437 would mangle anything outside ASCII.
+        Assert-True ($line.Text -notmatch '[^\x00-\x7F]') "wordmark line is not ASCII: $($line.Text)"
+        Assert-True ($null -ne $line.Color) 'a wordmark line has no colour'
+    }
+
+    # The letterforms use a backtick and an apostrophe; both have to survive
+    # single-quoting into the bundle intact.
+    $joined = ($lines | ForEach-Object { $_.Text }) -join "`n"
+    Assert-True ($joined.Contains('`')) 'the backtick in the letterform was eaten'
+    Assert-True ($joined.Contains("'")) 'the apostrophe in the letterform was eaten'
+
+    Assert-Equal (($lines | ForEach-Object { $_.Text.Length } | Measure-Object -Maximum).Maximum) (Get-WordmarkWidth)
+}
+
+Test-Case 'the wordmark and the accent are purple, not cyan' {
+    $palette = New-Palette
+    foreach ($name in @('Accent', 'AccentDim', 'HighlightBg')) {
+        Assert-True ([string]$palette[$name] -match 'Magenta') "$name is $($palette[$name]), not a purple"
+    }
+
+    # Nothing anywhere should still be reaching for the old cyan.
+    foreach ($value in $palette.Values) {
+        Assert-True ([string]$value -notmatch 'Cyan') "the palette still holds $value"
+    }
+    foreach ($line in @(Get-WordmarkLines)) {
+        Assert-True ([string]$line.Color -match 'Magenta|White') "wordmark line is $($line.Color)"
+    }
+}
+
 Test-Case 'the palette defines every colour the code asks for' {
     $palette = New-Palette
     foreach ($name in @('Accent', 'AccentDim', 'Ok', 'Warn', 'Err', 'Text', 'Bright', 'Muted',

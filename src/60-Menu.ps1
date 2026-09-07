@@ -174,7 +174,10 @@ function Show-Selector {
         [scriptblock]$Sublabel,
         [Parameter(Mandatory)][string]$Title,
         [string]$Subtitle = '',
-        [switch]$SingleSelect
+        [switch]$SingleSelect,
+        # Draw the wordmark instead of the plain title. The main menu is the
+        # front page, so it gets the art; sub-menus want to say where you are.
+        [switch]$Art
     )
 
     if ($Items.Count -eq 0) {
@@ -205,7 +208,17 @@ function Show-Selector {
         # would hand back $null - and .Count on either throws under StrictMode.
         $visible = @(Get-VisibleIndex -Items $Items -Filter $filter -Label $Label -Sublabel $Sublabel)
 
-        $viewport = [Math]::Max(5, (Get-ConsoleHeight) - 10)
+        # Recomputed every frame so a resize is picked up. A window too narrow
+        # for the art falls back to the plain title rather than wrapping it into
+        # nonsense, and the rows it costs come out of the list's viewport so the
+        # frame still fits without scrolling.
+        $wordmark = @()
+        if ($Art -and (Get-ConsoleWidth) -ge ((Get-WordmarkWidth) + 2)) {
+            $wordmark = @(Get-WordmarkLines)
+        }
+        $headerRows = if ($wordmark.Count -gt 0) { $wordmark.Count - 1 } else { 0 }
+
+        $viewport = [Math]::Max(5, (Get-ConsoleHeight) - 10 - $headerRows)
         $view = Get-ScrollWindow -Cursor $cursor -Offset $offset -Count $visible.Count -Viewport $viewport
         $cursor = $view.Cursor
         $offset = $view.Offset
@@ -215,7 +228,12 @@ function Show-Selector {
 
         $lines = [System.Collections.Generic.List[object]]::new()
         $lines.Add((New-FrameLine))
-        $lines.Add((New-FrameLine ('  ' + $Title) (Get-Color 'Accent')))
+        if ($wordmark.Count -gt 0) {
+            foreach ($line in $wordmark) { $lines.Add((New-FrameLine $line.Text $line.Color)) }
+        }
+        else {
+            $lines.Add((New-FrameLine ('  ' + $Title) (Get-Color 'Accent')))
+        }
         if ($Subtitle) { $lines.Add((New-FrameLine ('  ' + $Subtitle) (Get-Color 'Muted'))) }
         $lines.Add((New-FrameLine ('  ' + $rule) (Get-Color 'Muted')))
 
@@ -542,7 +560,7 @@ function Show-MainMenu {
         $subtitle = "Moscovium CLI v$($Ctx.Version)   |   $admin"
         if ($Ctx.DryRun) { $subtitle += '   |   DRY RUN' }
 
-        $result = Show-Selector -Items $options -Title 'Moscovium' -SingleSelect `
+        $result = Show-Selector -Items $options -Title 'Moscovium' -SingleSelect -Art `
             -Subtitle $subtitle `
             -Label { param($o) $o.Name } `
             -Sublabel { param($o) $o.Hint }

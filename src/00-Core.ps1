@@ -179,34 +179,8 @@ function Write-SectionHeading {
 }
 
 function Write-Banner {
-    # Plain ASCII only: this has to render correctly in a legacy conhost window
-    # running code page 437, not just in Windows Terminal. The backtick on the
-    # fourth line is part of the letterform, not a PowerShell escape - these are
-    # single-quoted strings, so it is taken literally.
-    $art = @(
-        '',
-        '   __  __                                   _',
-        '  |  \/  |  ___   ___   ___   ___  __   __ (_) _   _  _ __ ___  ',
-        '  | |\/| | / _ \ / __| / __| / _ \ \ \ / / | || | | || ''_ ` _ \ ',
-        '  | |  | || (_) |\__ \| (__ | (_) | \ V /  | || |_| || | | | | |',
-        '  |_|  |_| \___/ |___/ \___| \___/   \_/   |_| \__,_||_| |_| |_|'
-    )
-
-    # Top-down brightness gradient. Only 16 colours are in play, so the ramp is
-    # White -> Cyan -> DarkCyan rather than anything smoother, but it reads well
-    # and needs no ANSI support.
-    $ramp = @(
-        [ConsoleColor]::White
-        [ConsoleColor]::White
-        [ConsoleColor]::Cyan
-        [ConsoleColor]::Cyan
-        [ConsoleColor]::DarkCyan
-        [ConsoleColor]::DarkCyan
-    )
-
-    for ($i = 0; $i -lt $art.Count; $i++) {
-        Write-Line $art[$i] -Color $ramp[[Math]::Min($i, $ramp.Count - 1)]
-    }
+    Write-Line ''
+    foreach ($line in @(Get-WordmarkLines)) { Write-Line $line.Text -Color $line.Color }
 
     Write-Rule
 

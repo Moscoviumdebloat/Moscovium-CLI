@@ -5,7 +5,7 @@
 
         irm https://moscovium.win | iex
 
-    Build faeff72ff7  (a digest of src/ and data/ - same sources, same id).
+    Build 38fbeac6b7  (a digest of src/ and data/ - same sources, same id).
     Check with:  .\moscovium.ps1 -Version
 
     GENERATED FILE - do not edit.
@@ -261,34 +261,8 @@ param(
     }
 
     function Write-Banner {
-        # Plain ASCII only: this has to render correctly in a legacy conhost window
-        # running code page 437, not just in Windows Terminal. The backtick on the
-        # fourth line is part of the letterform, not a PowerShell escape - these are
-        # single-quoted strings, so it is taken literally.
-        $art = @(
-            '',
-            '   __  __                                   _',
-            '  |  \/  |  ___   ___   ___   ___  __   __ (_) _   _  _ __ ___  ',
-            '  | |\/| | / _ \ / __| / __| / _ \ \ \ / / | || | | || ''_ ` _ \ ',
-            '  | |  | || (_) |\__ \| (__ | (_) | \ V /  | || |_| || | | | | |',
-            '  |_|  |_| \___/ |___/ \___| \___/   \_/   |_| \__,_||_| |_| |_|'
-        )
-
-        # Top-down brightness gradient. Only 16 colours are in play, so the ramp is
-        # White -> Cyan -> DarkCyan rather than anything smoother, but it reads well
-        # and needs no ANSI support.
-        $ramp = @(
-            [ConsoleColor]::White
-            [ConsoleColor]::White
-            [ConsoleColor]::Cyan
-            [ConsoleColor]::Cyan
-            [ConsoleColor]::DarkCyan
-            [ConsoleColor]::DarkCyan
-        )
-
-        for ($i = 0; $i -lt $art.Count; $i++) {
-            Write-Line $art[$i] -Color $ramp[[Math]::Min($i, $ramp.Count - 1)]
-        }
+        Write-Line ''
+        foreach ($line in @(Get-WordmarkLines)) { Write-Line $line.Text -Color $line.Color }
 
         Write-Rule
 
@@ -3287,8 +3261,10 @@ param(
 
     function New-Palette {
         @{
-            Accent      = [ConsoleColor]::Cyan
-            AccentDim   = [ConsoleColor]::DarkCyan
+            # Purple, to match the window. Magenta and DarkMagenta are as close as
+            # the sixteen console colours get; conhost draws both as violet.
+            Accent      = [ConsoleColor]::Magenta
+            AccentDim   = [ConsoleColor]::DarkMagenta
             Ok          = [ConsoleColor]::Green
             Warn        = [ConsoleColor]::Yellow
             Err         = [ConsoleColor]::Red
@@ -3296,7 +3272,7 @@ param(
             Bright      = [ConsoleColor]::White
             Muted       = [ConsoleColor]::DarkGray
             HighlightFg = [ConsoleColor]::White
-            HighlightBg = [ConsoleColor]::DarkCyan
+            HighlightBg = [ConsoleColor]::DarkMagenta
             SelectedFg  = [ConsoleColor]::Green
         }
     }
@@ -3354,6 +3330,53 @@ param(
     # -----------------------------------------------------------------------------
     # Drawing
     # -----------------------------------------------------------------------------
+
+    # The wordmark, as lines already paired with their colour.
+    #
+    # Shared, so the splash and the menu header cannot drift apart - the menu used
+    # to print a plain word where the splash printed this.
+    #
+    # Plain ASCII only: it has to render in a legacy conhost window on code page
+    # 437, not just Windows Terminal. The backtick on the fourth line is part of the
+    # letterform, not a PowerShell escape - these are single-quoted strings, so it
+    # is taken literally.
+    function Get-WordmarkLines {
+        $art = @(
+            '   __  __                                   _',
+            '  |  \/  |  ___   ___   ___   ___  __   __ (_) _   _  _ __ ___  ',
+            '  | |\/| | / _ \ / __| / __| / _ \ \ \ / / | || | | || ''_ ` _ \ ',
+            '  | |  | || (_) |\__ \| (__ | (_) | \ V /  | || |_| || | | | | |',
+            '  |_|  |_| \___/ |___/ \___| \___/   \_/   |_| \__,_||_| |_| |_|'
+        )
+
+        # Top-down gradient. Only sixteen colours are in play and none of them is a
+        # true purple, so the ramp is White -> Magenta -> DarkMagenta: conhost draws
+        # both as violet, and it needs no ANSI support.
+        $ramp = @(
+            [ConsoleColor]::White
+            [ConsoleColor]::Magenta
+            [ConsoleColor]::Magenta
+            [ConsoleColor]::DarkMagenta
+            [ConsoleColor]::DarkMagenta
+        )
+
+        for ($i = 0; $i -lt $art.Count; $i++) {
+            [pscustomobject]@{
+                Text  = $art[$i]
+                Color = $ramp[[Math]::Min($i, $ramp.Count - 1)]
+            }
+        }
+    }
+
+    # The widest line, so a caller can tell whether the window can hold the art
+    # before drawing it into a fixed-height frame.
+    function Get-WordmarkWidth {
+        $widest = 0
+        foreach ($line in @(Get-WordmarkLines)) {
+            if ($line.Text.Length -gt $widest) { $widest = $line.Text.Length }
+        }
+        return $widest
+    }
 
     function Get-RuleWidth {
         $width = 78
@@ -6497,7 +6520,10 @@ param(
             [scriptblock]$Sublabel,
             [Parameter(Mandatory)][string]$Title,
             [string]$Subtitle = '',
-            [switch]$SingleSelect
+            [switch]$SingleSelect,
+            # Draw the wordmark instead of the plain title. The main menu is the
+            # front page, so it gets the art; sub-menus want to say where you are.
+            [switch]$Art
         )
 
         if ($Items.Count -eq 0) {
@@ -6528,7 +6554,17 @@ param(
             # would hand back $null - and .Count on either throws under StrictMode.
             $visible = @(Get-VisibleIndex -Items $Items -Filter $filter -Label $Label -Sublabel $Sublabel)
 
-            $viewport = [Math]::Max(5, (Get-ConsoleHeight) - 10)
+            # Recomputed every frame so a resize is picked up. A window too narrow
+            # for the art falls back to the plain title rather than wrapping it into
+            # nonsense, and the rows it costs come out of the list's viewport so the
+            # frame still fits without scrolling.
+            $wordmark = @()
+            if ($Art -and (Get-ConsoleWidth) -ge ((Get-WordmarkWidth) + 2)) {
+                $wordmark = @(Get-WordmarkLines)
+            }
+            $headerRows = if ($wordmark.Count -gt 0) { $wordmark.Count - 1 } else { 0 }
+
+            $viewport = [Math]::Max(5, (Get-ConsoleHeight) - 10 - $headerRows)
             $view = Get-ScrollWindow -Cursor $cursor -Offset $offset -Count $visible.Count -Viewport $viewport
             $cursor = $view.Cursor
             $offset = $view.Offset
@@ -6538,7 +6574,12 @@ param(
 
             $lines = [System.Collections.Generic.List[object]]::new()
             $lines.Add((New-FrameLine))
-            $lines.Add((New-FrameLine ('  ' + $Title) (Get-Color 'Accent')))
+            if ($wordmark.Count -gt 0) {
+                foreach ($line in $wordmark) { $lines.Add((New-FrameLine $line.Text $line.Color)) }
+            }
+            else {
+                $lines.Add((New-FrameLine ('  ' + $Title) (Get-Color 'Accent')))
+            }
             if ($Subtitle) { $lines.Add((New-FrameLine ('  ' + $Subtitle) (Get-Color 'Muted'))) }
             $lines.Add((New-FrameLine ('  ' + $rule) (Get-Color 'Muted')))
 
@@ -6865,7 +6906,7 @@ param(
             $subtitle = "Moscovium CLI v$($Ctx.Version)   |   $admin"
             if ($Ctx.DryRun) { $subtitle += '   |   DRY RUN' }
 
-            $result = Show-Selector -Items $options -Title 'Moscovium' -SingleSelect `
+            $result = Show-Selector -Items $options -Title 'Moscovium' -SingleSelect -Art `
                 -Subtitle $subtitle `
                 -Label { param($o) $o.Name } `
                 -Sublabel { param($o) $o.Hint }
@@ -9222,4 +9263,4 @@ param(
         Restore-ConsoleEncoding -Previous $previousEncoding
     }
 
-} $PSBoundParameters '1.2.0' $SourceUrl 'faeff72ff7'
+} $PSBoundParameters '1.2.0' $SourceUrl '38fbeac6b7'

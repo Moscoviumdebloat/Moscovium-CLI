@@ -85,8 +85,10 @@ function New-GlyphSet {
 
 function New-Palette {
     @{
-        Accent      = [ConsoleColor]::Cyan
-        AccentDim   = [ConsoleColor]::DarkCyan
+        # Purple, to match the window. Magenta and DarkMagenta are as close as
+        # the sixteen console colours get; conhost draws both as violet.
+        Accent      = [ConsoleColor]::Magenta
+        AccentDim   = [ConsoleColor]::DarkMagenta
         Ok          = [ConsoleColor]::Green
         Warn        = [ConsoleColor]::Yellow
         Err         = [ConsoleColor]::Red
@@ -94,7 +96,7 @@ function New-Palette {
         Bright      = [ConsoleColor]::White
         Muted       = [ConsoleColor]::DarkGray
         HighlightFg = [ConsoleColor]::White
-        HighlightBg = [ConsoleColor]::DarkCyan
+        HighlightBg = [ConsoleColor]::DarkMagenta
         SelectedFg  = [ConsoleColor]::Green
     }
 }
@@ -152,6 +154,53 @@ function Restore-ConsoleEncoding {
 # -----------------------------------------------------------------------------
 # Drawing
 # -----------------------------------------------------------------------------
+
+# The wordmark, as lines already paired with their colour.
+#
+# Shared, so the splash and the menu header cannot drift apart - the menu used
+# to print a plain word where the splash printed this.
+#
+# Plain ASCII only: it has to render in a legacy conhost window on code page
+# 437, not just Windows Terminal. The backtick on the fourth line is part of the
+# letterform, not a PowerShell escape - these are single-quoted strings, so it
+# is taken literally.
+function Get-WordmarkLines {
+    $art = @(
+        '   __  __                                   _',
+        '  |  \/  |  ___   ___   ___   ___  __   __ (_) _   _  _ __ ___  ',
+        '  | |\/| | / _ \ / __| / __| / _ \ \ \ / / | || | | || ''_ ` _ \ ',
+        '  | |  | || (_) |\__ \| (__ | (_) | \ V /  | || |_| || | | | | |',
+        '  |_|  |_| \___/ |___/ \___| \___/   \_/   |_| \__,_||_| |_| |_|'
+    )
+
+    # Top-down gradient. Only sixteen colours are in play and none of them is a
+    # true purple, so the ramp is White -> Magenta -> DarkMagenta: conhost draws
+    # both as violet, and it needs no ANSI support.
+    $ramp = @(
+        [ConsoleColor]::White
+        [ConsoleColor]::Magenta
+        [ConsoleColor]::Magenta
+        [ConsoleColor]::DarkMagenta
+        [ConsoleColor]::DarkMagenta
+    )
+
+    for ($i = 0; $i -lt $art.Count; $i++) {
+        [pscustomobject]@{
+            Text  = $art[$i]
+            Color = $ramp[[Math]::Min($i, $ramp.Count - 1)]
+        }
+    }
+}
+
+# The widest line, so a caller can tell whether the window can hold the art
+# before drawing it into a fixed-height frame.
+function Get-WordmarkWidth {
+    $widest = 0
+    foreach ($line in @(Get-WordmarkLines)) {
+        if ($line.Text.Length -gt $widest) { $widest = $line.Text.Length }
+    }
+    return $widest
+}
 
 function Get-RuleWidth {
     $width = 78
