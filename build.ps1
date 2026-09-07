@@ -173,6 +173,8 @@ param(
 
     # Other actions
     [switch]  `$Gui,
+    [string[]]`$Guide,
+    [string[]]`$SetSetting,
     [string]  `$Toolbox,
     [string]  `$Profile,
     [string]  `$SaveProfile,
@@ -265,6 +267,19 @@ $body = New-Object Text.StringBuilder
 foreach ($file in $sources) {
     $text = (Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8).TrimEnd()
 
+    # No here-strings in src/. Every source line gets indented into the script
+    # block below, and a here-string's terminator must sit at column 0 - so one
+    # here swallows the rest of the bundle and surfaces as a parse error
+    # thousands of lines away. Join an array of strings instead.
+    #
+    # The embedded catalogs are the exception, and they are inserted *after*
+    # indenting for exactly this reason. See Set-EmbeddedLiteral.
+    $hereString = [regex]::Match($text, "(?m)^\s*\S.*=\s*@[""'](?:\s*)$")
+    if ($hereString.Success) {
+        $line = ($text.Substring(0, $hereString.Index) -split "`n").Count
+        throw "$($file.Name) line $line opens a here-string. Use an array joined with -join instead; see the note in build.ps1."
+    }
+
     # Indent into the script block so the generated file reads as one unit.
     $indented = New-Object Text.StringBuilder
     foreach ($line in ($text -split "`r?`n")) {
@@ -280,6 +295,9 @@ foreach ($file in $sources) {
     }
     if ($file.Name -eq '40-Toolbox.ps1') {
         $text = Set-EmbeddedLiteral -Text $text -Name 'EmbeddedWinutilConfigJson' -Content (Read-DataFile 'winutil-debloat.json')
+    }
+    if ($file.Name -eq '44-Guides.ps1') {
+        $text = Set-EmbeddedLiteral -Text $text -Name 'EmbeddedGuidesJson' -Content (Read-DataFile 'guides.json')
     }
     if ($file.Name -eq '70-Gui.ps1') {
         $text = Set-EmbeddedLiteral -Text $text -Name 'EmbeddedGuiXaml' -Content (Read-DataFile 'gui.xaml' -MustBeAscii)

@@ -22,6 +22,9 @@ which ships with Windows, is enough.
 | **40 tweaks** | Privacy & telemetry, Explorer & taskbar, gaming & performance, hardware, advanced. Applied, reverted, or reported on. |
 | **127 apps** | The full curated winget catalog, plus direct-download and archive installers, across 8 categories. |
 | **15 toolbox actions** | WinUtil, Win11Debloat, TCP autotuning, dynamic tick, CPU priority, and the classic control panels. |
+| **6 guides** | The manual walkthroughs - BIOS, GPU control panels, network - that no tool can do for you. |
+| **App store** | Community releases from the Moscovium dev orgs on GitHub. |
+| **Personalise** | Cursor schemes, wallpaper, Counter-Strike configs. |
 | **Profiles** | Setup checklists, interchangeable with the desktop app's. |
 | **Two front-ends** | The same engine drives a terminal UI and a window. `-Gui` opens the window. |
 
@@ -304,6 +307,18 @@ after the GUI's catalogs change:
 ```
 
 The generated files record which GUI commit they came from.
+
+## What came across from the desktop app
+
+Everything except the parts that cannot live in a single script:
+
+| Desktop app | Here |
+|---|---|
+| Tweaks, App Store, Optimizations, Toolbox, Legacy Menus | ported |
+| Guides, CS2/CS:GO configs, Settings | ported |
+| Cursors | the mechanism, not the packs - point it at a folder of `.cur`/`.ani` files, or restore the Windows defaults. The bundled schemes are several hundred binary files. |
+| Wallpaper | ported |
+| Customization page installers | use the winget entries in the app catalog (ExplorerPatcher, StartAllBack, Open-Shell) rather than bundled `.exe` payloads |
 
 ## Not ported from the GUI
 

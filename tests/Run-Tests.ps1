@@ -361,6 +361,95 @@ Test-Case 'reverting a tweak with no backup is a skip, not a failure' {
 }
 
 # -----------------------------------------------------------------------------
+Write-Section 'Guides and settings'
+
+Initialize-GuideCatalog
+
+Test-Case 'guides load with steps and known categories' {
+    Assert-True ($Ctx.Guides.Count -gt 0) 'no guides loaded'
+
+    foreach ($guide in $Ctx.Guides) {
+        Assert-True ([bool]$guide.title) 'guide with no title'
+        Assert-True ([bool]$guide.summary) "'$($guide.title)' has no summary"
+        Assert-True ($Ctx.GuideCategories -contains $guide.category) "unknown category on '$($guide.title)'"
+        Assert-True (@($guide.steps).Count -gt 0) "'$($guide.title)' has no steps"
+    }
+}
+
+Test-Case 'guide text survived the C# source encoding' {
+    # Get-Content defaults to the ANSI code page for a BOM-less file on 5.1,
+    # which turns each UTF-8 arrow into the three characters U+00E2 U+2020 ...
+    # Spelled by code point so this file stays ASCII.
+    $all = ($Ctx.Guides | ForEach-Object { $_.steps }) -join ' '
+
+    $mojibake = @(0x00E2, 0x00C3, 0xFFFD)   # a-circumflex, A-tilde, replacement char
+    foreach ($code in $mojibake) {
+        $char = [string][char][int]$code
+        Assert-True (-not $all.Contains($char)) `
+            ("guide text contains U+{0:X4}; check -Encoding UTF8 in Sync-Catalog" -f $code)
+    }
+
+    # And the real arrow should have made it through intact.
+    Assert-True ($all.Contains([string][char]0x2192)) 'the arrows did not survive the sync'
+}
+
+Test-Case 'guides resolve by title, category and substring' {
+    Assert-Equal 1 (Resolve-Guide -Names @('Network Optimization')).Matched.Count
+    Assert-Equal 2 (Resolve-Guide -Names @('Drivers & GPU')).Matched.Count
+    Assert-Equal $Ctx.Guides.Count (Resolve-Guide -Names @('all')).Matched.Count
+    Assert-Equal 1 (Resolve-Guide -Names @('nothing like this exists')).Unknown.Count
+}
+
+Test-Case 'non-ASCII typography degrades to ASCII when the theme is plain' {
+    $arrow = [string][char]0x2192
+    $unicode = $Ctx.Theme.Unicode
+    try {
+        $Ctx.Theme.Unicode = $false
+        Assert-Equal 'a -> b' (ConvertTo-DisplayText "a $arrow b")
+
+        # Anything unmapped still has to leave the string ASCII.
+        $shrug = [string][char]0x00AF
+        Assert-True ((ConvertTo-DisplayText "x$shrug") -match '^[\x00-\x7F]+$') 'left a non-ASCII character behind'
+
+        # A Unicode-capable console keeps the real character.
+        $Ctx.Theme.Unicode = $true
+        Assert-Equal "a $arrow b" (ConvertTo-DisplayText "a $arrow b")
+    }
+    finally { $Ctx.Theme.Unicode = $unicode }
+}
+
+Test-Case 'wrapping keeps every word and indents continuations' {
+    $text = 'one two three four five six seven eight nine ten eleven twelve'
+    $lines = @(Format-WrappedText -Text $text -Width 20 -Indent 4)
+
+    Assert-True ($lines.Count -gt 1) 'nothing wrapped'
+    Assert-Equal $text (($lines | ForEach-Object { $_.Trim() }) -join ' ')
+    Assert-True (-not $lines[0].StartsWith(' ')) 'first line should not be indented'
+    Assert-True ($lines[1].StartsWith('    ')) 'continuation should be indented'
+}
+
+Test-Case 'settings round-trip, and a token is never echoed' {
+    Set-MoscoviumSetting -Name 'AppsInstallPath' -Value 'C:\Somewhere\Apps'
+    Assert-Equal 'C:\Somewhere\Apps' (Get-MoscoviumSetting -Name 'AppsInstallPath')
+
+    # Case-insensitive, like the profile reader.
+    Assert-Equal 'C:\Somewhere\Apps' (Get-MoscoviumSetting -Name 'appsinstallpath')
+
+    Set-MoscoviumSetting -Name 'AppsInstallPath' -Value ''
+    Assert-True ($null -eq (Get-MoscoviumSetting -Name 'AppsInstallPath')) 'clearing a setting did not remove it'
+
+    Assert-True ($null -eq (Get-MoscoviumSetting -Name 'NeverSetThis')) 'unset setting should be null'
+}
+
+Test-Case 'the cursor role map covers the Windows cursor registry values' {
+    $roles = Get-CursorRoleMap
+    foreach ($required in @('Arrow', 'IBeam', 'Wait', 'AppStarting', 'Hand', 'No', 'SizeAll')) {
+        Assert-True ($roles.Contains($required)) "cursor role '$required' is missing"
+        Assert-True (@($roles[$required]).Count -gt 0) "'$required' has no file-name stems to match"
+    }
+}
+
+# -----------------------------------------------------------------------------
 Write-Section 'Theme'
 
 Test-Case 'both glyph sets define exactly the same names' {

@@ -5,7 +5,7 @@
 
         irm https://moscovium.win | iex
 
-    Build a3be1f6431  (a digest of src/ and data/ - same sources, same id).
+    Build 4274bdbceb  (a digest of src/ and data/ - same sources, same id).
     Check with:  .\moscovium.ps1 -Version
 
     GENERATED FILE - do not edit.
@@ -27,6 +27,8 @@ param(
 
     # Other actions
     [switch]  $Gui,
+    [string[]]$Guide,
+    [string[]]$SetSetting,
     [string]  $Toolbox,
     [string]  $Profile,
     [string]  $SaveProfile,
@@ -148,6 +150,9 @@ param(
             TweakCategories = @()
             Apps       = @()
             AppCategories   = @()
+            Guides     = @()
+            GuideCategories = @()
+            StoreApps  = @()
             Applied    = 0
             Failed     = 0
             Skipped    = 0
@@ -1378,7 +1383,7 @@ param(
     "source":  {
                    "repo":  "https://github.com/Moscoviumdebloat/Moscovium.git",
                    "commit":  "ad56ca1",
-                   "syncedUtc":  "2026-09-06T10:57:32.3675869Z"
+                   "syncedUtc":  "2026-09-07T00:37:01.3039384Z"
                }
 }
 '@
@@ -3050,7 +3055,7 @@ param(
     "source":  {
                    "repo":  "https://github.com/Moscoviumdebloat/Moscovium.git",
                    "commit":  "ad56ca1",
-                   "syncedUtc":  "2026-09-06T10:57:32.3675869Z"
+                   "syncedUtc":  "2026-09-07T00:37:01.3039384Z"
                }
 }
 '@
@@ -4263,7 +4268,10 @@ param(
         param(
             [Parameter(Mandatory)][string]$Url,
             [Parameter(Mandatory)][string]$Destination,
-            [string]$Label = 'downloading'
+            [string]$Label = 'downloading',
+            # Guards against a link that now returns an HTML error page. Config files
+            # are legitimately tiny, so callers can lower it.
+            [int]$MinimumBytes = 1024
         )
 
         # TLS 1.2 is not the default in 5.1 and several vendor CDNs refuse anything older.
@@ -4327,7 +4335,7 @@ param(
         if (-not (Test-Path -LiteralPath $Destination)) { throw "Download produced no file at '$Destination'." }
 
         $size = (Get-Item -LiteralPath $Destination).Length
-        if ($size -lt 1024) { throw "Downloaded file is only $size bytes; the link is probably wrong." }
+        if ($size -lt $MinimumBytes) { throw "Downloaded file is only $size bytes; the link is probably wrong." }
 
         return $size
     }
@@ -4957,6 +4965,771 @@ param(
 
         Write-Line ''
         Write-Info 'Run one with:  -Toolbox <id>'
+    }
+
+# ===== src/44-Guides.ps1 ===============================================
+
+    # =============================================================================
+    # Guides: the manual optimisation walkthroughs from the desktop app.
+    #
+    # These are the things a tool cannot do for you - BIOS settings, driver control
+    # panels, router configuration - so the catalog is pure text and the only job
+    # here is presenting it. Generated from Models/Guides.cs by Sync-Catalog.ps1 and
+    # embedded by build.ps1, exactly like the tweak and app catalogs.
+    # =============================================================================
+
+    $EmbeddedGuidesJson = @'
+{
+    "categories":  [
+                       "Drivers & GPU",
+                       "BIOS",
+                       "Windows",
+                       "Hardware",
+                       "Network"
+                   ],
+    "guides":  [
+                   {
+                       "title":  "NVIDIA GPU Optimization",
+                       "category":  "Drivers & GPU",
+                       "summary":  "Tune the NVIDIA App / Control Panel for maximum gaming performance.",
+                       "steps":  [
+                                     "Install the NVIDIA App via PC Setup Automation (or download it from nvidia.com) and sign in.",
+                                     "Open Settings (gear icon) and make sure 'Driver Updates' is set to Latest and the latest Game Ready driver is installed.",
+                                     "Go to Graphics \u2192 Global Settings.",
+                                     "Power management mode \u2192 Prefer maximum performance (prevents the GPU from downclocking).",
+                                     "Low Latency Mode \u2192 Ultra (reduces input latency in shooters; if you see stutter, try On instead).",
+                                     "Texture filtering - Quality \u2192 High quality.",
+                                     "Vertical sync \u2192 Off (enable in-game only if you get screen tearing).",
+                                     "Threaded optimization \u2192 Auto.",
+                                     "Monitor Technology \u2192 G-SYNC if your monitor supports it (set together with V-Sync On + low latency in games).",
+                                     "In the Games tab, add per-game profiles: for esports titles force 'Prefer maximum performance' and disable any anti-aliasing you don't need.",
+                                     "Optional: enable ReBAR (Resizable BAR) in BIOS for a few extra FPS - see the BIOS guide.",
+                                     "Check temperatures with HWiNFO after changes - anything under 85 C under load is fine."
+                                 ]
+                   },
+                   {
+                       "title":  "AMD GPU Optimization",
+                       "category":  "Drivers & GPU",
+                       "summary":  "Tune Radeon Software / Adrenalin for gaming performance.",
+                       "steps":  [
+                                     "Install AMD Adrenalin Edition via PC Setup Automation (or from amd.com) and open Radeon Software.",
+                                     "Open the Performance tab \u2192 Tuning.",
+                                     "Click 'Tuning Control' \u2192 select the Performance preset (applies balanced overclocks automatically).",
+                                     "Under Graphics: turn Anti-Lag on (only in the game, not globally, for best results).",
+                                     "Radeon Chill \u2192 off for competitive shooters (it caps FPS to save power).",
+                                     "Set 'Power Limit' slider to the max value (+10-20%) if thermals allow.",
+                                     "Enable Smart Access Memory (SAM) in BIOS - see the BIOS guide - for a solid FPS uplift.",
+                                     "Enable FreeSync on your monitor in Display settings if supported.",
+                                     "For 'Radeon Boost', test in-game: it lowers resolution during fast mouse movement for FPS, but can look blurry.",
+                                     "Monitor temps/voltages with HWiNFO; keep junction temp below 95 C."
+                                 ]
+                   },
+                   {
+                       "title":  "BIOS Setup for Performance",
+                       "category":  "BIOS",
+                       "summary":  "Critical firmware settings for CPU, GPU and memory performance.",
+                       "steps":  [
+                                     "Update your BIOS from the motherboard manufacturer's site (ASUS/MSI/Gigabyte/ASRock) - newer AGESA/microcode versions fix bugs and add features. Check your exact board model first (msinfo32 \u2192 System Model).",
+                                     "Reboot and press DEL/F2 to enter BIOS.",
+                                     "Enable XMP (Intel) or EXPO (AMD) in the memory settings to run your RAM at its rated speed.",
+                                     "Enable Resizable BAR / Smart Access Memory (usually under PCIe settings) - pairs with an up-to-date GPU driver.",
+                                     "On AMD: find 'CPPC' / 'CPPC Preferred Cores' and enable it (Windows then schedules threads on your best cores).",
+                                     "For latency-sensitive gaming: set Global C-State Control \u2192 Disabled (costs a bit of idle power).",
+                                     "Enable SVM (AMD virtualization) or Intel VT-x if you use WSL2, Docker or Android emulators.",
+                                     "Set fan curves to a more aggressive profile in the hardware monitor section if temps allow.",
+                                     "Save and exit (F10). On first boot, check in Task Manager that the RAM speed shows your rated MHz."
+                                 ]
+                   },
+                   {
+                       "title":  "Windows Latency & Stability",
+                       "category":  "Windows",
+                       "summary":  "OS-level settings that reduce stutter, latency and background interference.",
+                       "steps":  [
+                                     "Disable Fast Startup: Control Panel \u2192 Power Options \u2192 Choose what the power buttons do \u2192 uncheck 'Turn on fast startup'. Fast startup can cause driver/update issues after shutdown.",
+                                     "Enable Game Mode: Settings \u2192 Gaming \u2192 Game Mode \u2192 On (lets Windows prioritize games).",
+                                     "In the same Gaming page, set Xbox Game Bar to Off if you never use it.",
+                                     "Hardware-accelerated GPU scheduling: apply the matching tweak in the Debloat Tweaks page (on for GTX 10-series+/RX 5000+ and newer).",
+                                     "Per-game Fullscreen Optimizations: right-click the game .exe \u2192 Properties \u2192 Compatibility \u2192 check 'Disable fullscreen optimizations' for older/anticheat-sensitive games.",
+                                     "Set a fixed pagefile: System \u2192 Advanced system settings \u2192 Performance \u2192 Advanced \u2192 Virtual memory \u2192 custom size = 1.5x your RAM (e.g. 24 GB for 16 GB RAM), on the fastest SSD.",
+                                     "Install the latest chipset drivers from the motherboard vendor (this one step fixes more stutter than any tweak).",
+                                     "Close background apps (Discord, browsers, RGB software) while playing competitive titles, or set them to Game Mode aware.",
+                                     "Keep the PC on Balanced power plan if you have a modern CPU with CPPC2/boost handling; only switch to High Performance (available as a tweak) on older hardware."
+                                 ]
+                   },
+                   {
+                       "title":  "Monitoring & Overclocking",
+                       "category":  "Hardware",
+                       "summary":  "Verify performance, temps and stability before pushing any hardware.",
+                       "steps":  [
+                                     "Install HWiNFO (in PC Setup Automation) \u2192 run Sensors-only mode \u2192 enable logging (clock, temps, voltage) before benchmarking.",
+                                     "Install MSI Afterburner (in PC Setup Automation) \u2192 enable the on-screen display (RivaTuner RTSS) for in-game FPS/temps/clock overlay.",
+                                     "Install FanControl (in PC Setup Automation) to build custom fan curves based on GPU or CPU temperature.",
+                                     "Run a baseline: Cinebench (CPU), 3DMark Time Spy (GPU) - note the scores and temperatures.",
+                                     "CPU overclock: only via AMD Ryzen Master / Intel XTU, or BIOS. Increase by small steps (e.g. +50 MHz or per-core), stress test 30 min after every step, stop at the first instability.",
+                                     "GPU overclock: in Afterburner raise core clock +25 MHz steps, then memory +100 MHz steps, stress with 3DMark/Heaven after each step.",
+                                     "Undervolting is often better than overclocking: a -50 to -80 mV curve on the GPU gives the same clocks at lower temps.",
+                                     "If temperatures exceed 85 C (GPU) or 90 C (CPU) at stock settings, fix cooling first - thermal paste, case airflow - before any overclocking.",
+                                     "Use LatencyMon (in PC Setup Automation) to confirm no driver is causing high DPC latency (red bars = problem driver)."
+                                 ]
+                   },
+                   {
+                       "title":  "Network Optimization",
+                       "category":  "Network",
+                       "summary":  "Lower latency and jitter for online gaming.",
+                       "steps":  [
+                                     "Use a wired (Ethernet) connection whenever possible - Wi-Fi adds latency and jitter.",
+                                     "Update the LAN/Wi-Fi driver from the motherboard or adapter vendor (not Windows Update only).",
+                                     "Switch DNS to a fast public resolver: Settings \u2192 Network & Internet \u2192 your connection \u2192 DNS \u2192 manual \u2192 1.1.1.1 and 1.0.0.1 (Cloudflare) or 8.8.8.8/8.8.4.4 (Google).",
+                                     "Apply the 'Prefer IPv4 over IPv6' and 'Disable Teredo' tweaks from the Debloat Tweaks page if your ISP's IPv6 is unreliable.",
+                                     "Disable Delivery Optimization (also a tweak) so Windows never uploads updates on your bandwidth.",
+                                     "In the router: enable QoS and prioritize your PC's MAC address; disable any SQM-unaware traffic shaping if your line is fine.",
+                                     "Check bufferbloat at waveform.com/bufferbloat - if the grade is poor, enable SQM/fQ-CoDel in your router if available.",
+                                     "Close bandwidth hogs while gaming (Steam downloads, cloud sync, Windows Update).",
+                                     "Optional: set the game to high priority once via Task Manager \u2192 Details \u2192 right-click \u2192 Set priority (Windows already handles this via Game Mode)."
+                                 ]
+                   }
+               ]
+}
+'@
+
+    function Initialize-GuideCatalog {
+        # Loaded lazily: a -Status run has no reason to parse them.
+        if ($Ctx.Guides.Count -gt 0) { return }
+
+        $data = Get-CatalogJson -Embedded $EmbeddedGuidesJson -FileName 'guides.json' | ConvertFrom-Json
+
+        $Ctx.Guides = @($data.guides)
+        $Ctx.GuideCategories = @($data.categories)
+    }
+
+    function Resolve-Guide {
+        param([Parameter(Mandatory)][AllowNull()][AllowEmptyCollection()][string[]]$Names)
+
+        Initialize-GuideCatalog
+
+        $matched = [System.Collections.Generic.List[object]]::new()
+        $unknown = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($name in $Names) {
+            $term = $name.Trim()
+            if (-not $term) { continue }
+
+            if ($term -eq 'all' -or $term -eq '*') {
+                foreach ($g in $Ctx.Guides) { $matched.Add($g) }
+                continue
+            }
+
+            $exact = @($Ctx.Guides | Where-Object { $_.title -eq $term })
+            if ($exact.Count -eq 1) { $matched.Add($exact[0]); continue }
+
+            $fuzzy = @($Ctx.Guides | Where-Object {
+                (Test-NameMatch -Value $_.title -Pattern $term) -or
+                (Test-NameMatch -Value $_.category -Pattern $term) -or
+                (Test-NameMatch -Value $_.summary -Pattern $term)
+            })
+
+            if ($fuzzy.Count -gt 0) { foreach ($g in $fuzzy) { $matched.Add($g) } }
+            else { $unknown.Add($term) }
+        }
+
+        [pscustomobject]@{
+            Matched = @($matched | Group-Object -Property title | ForEach-Object { $_.Group[0] })
+            Unknown = @($unknown)
+        }
+    }
+
+    function Show-GuideCatalog {
+        Initialize-GuideCatalog
+
+        foreach ($category in $Ctx.GuideCategories) {
+            $inCategory = @($Ctx.Guides | Where-Object { $_.category -eq $category })
+            if ($inCategory.Count -eq 0) { continue }
+
+            Write-SectionHeading $category -Suffix "$($inCategory.Count)"
+
+            foreach ($guide in $inCategory) {
+                Write-Line '  - ' -Color (Get-Color 'Muted') -NoNewline
+                Write-Line $guide.title -Color (Get-Color 'Bright')
+                Write-Info (ConvertTo-DisplayText $guide.summary)
+                Write-Info "$(@($guide.steps).Count) steps"
+            }
+        }
+
+        Write-Line ''
+        Write-Info 'Read one with:  -Guide "<title>"'
+    }
+
+    function Show-Guide {
+        param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Guides)
+
+        if ($Guides.Count -eq 0) {
+            Write-Warn 'No guide selected.'
+            return
+        }
+
+        foreach ($guide in $Guides) {
+            Write-SectionHeading $guide.title -Suffix $guide.category
+            Write-Line ''
+            Write-Line "  $(ConvertTo-DisplayText $guide.summary)" -Color (Get-Color 'Text')
+            Write-Line ''
+
+            $steps = @($guide.steps)
+            for ($i = 0; $i -lt $steps.Count; $i++) {
+                $number = '{0,3}. ' -f ($i + 1)
+                Write-Line "  $number" -Color (Get-Color 'Accent') -NoNewline
+
+                # Wrap to the rule width, indented under the number so the step reads
+                # as one block rather than running back to the margin.
+                foreach ($line in (Format-WrappedText -Text (ConvertTo-DisplayText $steps[$i]) -Width ((Get-RuleWidth) - 8) -Indent 7)) {
+                    Write-Line $line
+                }
+            }
+        }
+    }
+
+    # The guide text comes from the desktop app and contains real typography -
+    # arrows, en dashes, curly quotes. WPF renders those happily; a console on an OEM
+    # code page turns them into mojibake, so swap them for ASCII when the theme has
+    # already told us Unicode is not safe here.
+    function ConvertTo-DisplayText {
+        param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+
+        if ($Ctx.Theme.Unicode) { return $Text }
+
+        # Pairs, not a hashtable: an OrderedDictionary with integer keys indexes by
+        # position, so $map[0x2192] asks for element 8594 rather than the arrow.
+        $map = @(
+            @(0x2192, '->'), @(0x2190, '<-'), @(0x21D2, '=>')
+            @(0x2013, '-'),  @(0x2014, '-'),  @(0x2212, '-')
+            @(0x2018, "'"),  @(0x2019, "'")
+            @(0x201C, '"'),  @(0x201D, '"')
+            @(0x2026, '...'), @(0x00A0, ' ')
+            @(0x00B0, ' deg'), @(0x00D7, 'x'), @(0x2022, '*')
+        )
+
+        foreach ($pair in $map) { $Text = $Text.Replace([string][char][int]$pair[0], [string]$pair[1]) }
+
+        # Anything still outside ASCII would render as a question mark at best.
+        [regex]::Replace($Text, '[^\x00-\x7F]', '?')
+    }
+
+    # Word-wraps to $Width, indenting every line after the first by $Indent. The
+    # first line is returned without indent because the caller has already written a
+    # step number there.
+    function Format-WrappedText {
+        param(
+            [Parameter(Mandatory)][AllowEmptyString()][string]$Text,
+            [int]$Width = 70,
+            [int]$Indent = 0
+        )
+
+        if ($Width -lt 20) { $Width = 20 }
+
+        $lines = [System.Collections.Generic.List[string]]::new()
+        $current = ''
+
+        foreach ($word in ($Text -split '\s+' | Where-Object { $_ })) {
+            if (-not $current) { $current = $word; continue }
+
+            if (($current.Length + 1 + $word.Length) -le $Width) { $current = "$current $word" }
+            else { $lines.Add($current); $current = $word }
+        }
+        if ($current) { $lines.Add($current) }
+
+        $pad = ' ' * $Indent
+        $out = [System.Collections.Generic.List[string]]::new()
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($i -eq 0) { $out.Add($lines[$i]) } else { $out.Add($pad + $lines[$i]) }
+        }
+
+        @($out)
+    }
+
+# ===== src/46-Store.ps1 ================================================
+
+    # =============================================================================
+    # App store: community apps published as GitHub releases.
+    #
+    # The desktop app lists every public repo in two organisations, takes the newest
+    # release's .exe/.zip/.msi asset, and installs it under a configurable folder.
+    # Same idea here, against the same two orgs.
+    #
+    # Distinct from the winget catalog in 30-Apps.ps1: that one is curated and
+    # pinned, this one is whatever those orgs have published today.
+    # =============================================================================
+
+    $StoreOrganisations = @('Better-Dev-Team', 'Anti-Depressants-Dev-Team')
+
+    function Get-StoreInstallRoot {
+        $configured = Get-MoscoviumSetting -Name 'AppsInstallPath'
+        if ($configured) { return $configured }
+        Join-Path $Ctx.StateDir 'Apps'
+    }
+
+    function Invoke-GitHubApi {
+        param([Parameter(Mandatory)][string]$Path)
+
+        try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
+
+        $headers = @{
+            'User-Agent' = 'Moscovium-CLI'
+            'Accept'     = 'application/vnd.github+json'
+        }
+
+        # An optional token only raises the rate limit - 60/hour unauthenticated is
+        # easy to hit when every repo costs a second request for its release.
+        $token = Get-MoscoviumSetting -Name 'GitHubToken'
+        if ($token) { $headers['Authorization'] = "Bearer $token" }
+
+        Invoke-RestMethod -Uri "https://api.github.com$Path" -Headers $headers -TimeoutSec 45
+    }
+
+    # One catalog entry per public, non-archived repo that has a release with an
+    # installable asset.
+    function Get-StoreApp {
+        param([switch]$Refresh)
+
+        if (-not $Refresh -and $Ctx.StoreApps.Count -gt 0) { return $Ctx.StoreApps }
+
+        $found = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($org in $StoreOrganisations) {
+            Write-Step "Listing $org"
+
+            $repos = $null
+            try { $repos = Invoke-GitHubApi -Path "/orgs/$org/repos?type=public&per_page=100" }
+            catch {
+                Write-Warn "Could not list $org - $($_.Exception.Message)"
+                continue
+            }
+
+            foreach ($repo in @($repos)) {
+                if ($repo.archived) { continue }
+                if ($repo.name -eq '.github') { continue }
+
+                $release = $null
+                try { $release = Invoke-GitHubApi -Path "/repos/$($repo.full_name)/releases/latest" }
+                catch { }   # no releases yet is normal, not an error
+
+                $asset = $null
+                if ($release -and $release.assets) {
+                    $asset = @($release.assets | Where-Object { $_.name -match '\.(exe|zip|msi)$' }) | Select-Object -First 1
+                }
+
+                $found.Add([pscustomobject]@{
+                    Name        = $repo.name
+                    Description = if ($repo.description) { [string]$repo.description } else { 'No description available.' }
+                    Author      = $repo.owner.login
+                    Version     = if ($release) { [string]$release.tag_name } else { 'no release' }
+                    DownloadUrl = if ($asset) { [string]$asset.browser_download_url } else { '' }
+                    AssetName   = if ($asset) { [string]$asset.name } else { '' }
+                    RepoUrl     = [string]$repo.html_url
+                })
+            }
+        }
+
+        $Ctx.StoreApps = @($found | Sort-Object -Property Name)
+        return $Ctx.StoreApps
+    }
+
+    function Install-StoreApp {
+        param([Parameter(Mandatory)]$App)
+
+        if (-not $App.DownloadUrl) {
+            Write-Warn "$($App.Name) - no installable release asset. See $($App.RepoUrl)"
+            $Ctx.Skipped++
+            return
+        }
+
+        if ($Ctx.DryRun) {
+            Write-Status -Glyph (Get-Glyph 'Info') -Color (Get-Color 'Warn') -Message $App.Name -MessageColor (Get-Color 'Warn')
+            Write-Info "would download $($App.DownloadUrl)"
+            $Ctx.Skipped++
+            return
+        }
+
+        $root = Get-StoreInstallRoot
+        $target = Join-Path $root $App.Name
+
+        try {
+            if (-not (Test-Path -LiteralPath $target)) { New-Item -ItemType Directory -Path $target -Force | Out-Null }
+
+            $file = Join-Path $target $App.AssetName
+            Write-Step "Downloading $($App.Name) $($App.Version)"
+            Write-Info $App.DownloadUrl
+            Save-RemoteFile -Url $App.DownloadUrl -Destination $file -Label $App.Name | Out-Null
+
+            if ($App.AssetName -match '\.zip$') {
+                # A zip is the app itself here, not an installer wrapper: extract and
+                # leave it in place rather than hunting for a setup.exe.
+                Write-Step "Extracting to $target"
+                Expand-Archive -LiteralPath $file -DestinationPath $target -Force
+                Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+                Write-Ok "$($App.Name) - extracted to $target"
+            }
+            else {
+                Write-Step "Running $($App.AssetName)"
+                $process = Start-Process -FilePath $file -Wait -PassThru -ErrorAction Stop
+                if ($process.ExitCode -notin @(0, 3010)) { throw "Installer exited with code $($process.ExitCode)." }
+                Write-Ok $App.Name
+            }
+
+            $Ctx.Applied++
+        }
+        catch {
+            Write-Err "$($App.Name) - $($_.Exception.Message)"
+            $Ctx.Failed++
+        }
+    }
+
+    function Invoke-StoreInstall {
+        param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Apps)
+
+        if ($Apps.Count -eq 0) {
+            Write-Warn 'No store apps selected.'
+            return
+        }
+
+        Write-SectionHeading "Installing $($Apps.Count) store app$(if ($Apps.Count -ne 1) { 's' })"
+        Write-Info "into $(Get-StoreInstallRoot)"
+
+        foreach ($app in $Apps) { Install-StoreApp -App $app }
+        Write-RunSummary
+    }
+
+    function Show-StoreCatalog {
+        $apps = @(Get-StoreApp)
+
+        if ($apps.Count -eq 0) {
+            Write-Warn 'No store apps found. GitHub may be rate-limiting; set a token with -SetSetting GitHubToken=<token>.'
+            return
+        }
+
+        Write-SectionHeading 'App store' -Suffix "$($apps.Count)"
+
+        foreach ($app in $apps) {
+            Write-Line '  - ' -Color (Get-Color 'Muted') -NoNewline
+            Write-Line $app.Name.PadRight(32) -Color (Get-Color 'Bright') -NoNewline
+            Write-Line $app.Version -Color $(if ($app.DownloadUrl) { Get-Color 'Ok' } else { Get-Color 'Muted' })
+            Write-Info $app.Description
+        }
+    }
+
+# ===== src/48-Personalize.ps1 ==========================================
+
+    # =============================================================================
+    # Personalisation and per-game config, ported from the desktop app's Cursors,
+    # Customization and CS2/CS:GO pages.
+    #
+    # The cursor *packs* the desktop app bundles (four schemes, several hundred .cur
+    # and .ani files) cannot travel in a single script, so what is here is the
+    # mechanism: point it at a folder of cursor files and it installs them, or put
+    # the Windows defaults back. Wallpaper and the CS2 config helpers port whole.
+    #
+    # Settings live alongside, because the app store needs an install path and a
+    # GitHub token and there was nowhere else to put them.
+    # =============================================================================
+
+    # -----------------------------------------------------------------------------
+    # Settings
+    # -----------------------------------------------------------------------------
+
+    function Get-SettingsPath { Join-Path $Ctx.StateDir 'settings.json' }
+
+    function Get-MoscoviumSetting {
+        param([Parameter(Mandatory)][string]$Name)
+
+        $path = Get-SettingsPath
+        if (-not (Test-Path -LiteralPath $path)) { return $null }
+
+        try {
+            $settings = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+            $property = $settings.PSObject.Properties | Where-Object { $_.Name -ieq $Name } | Select-Object -First 1
+            if ($property -and $property.Value) { return $property.Value }
+        }
+        catch { Write-Log "Unreadable settings file: $($_.Exception.Message)" 'WARN' }
+
+        return $null
+    }
+
+    function Set-MoscoviumSetting {
+        param(
+            [Parameter(Mandatory)][string]$Name,
+            [AllowEmptyString()][string]$Value
+        )
+
+        Initialize-State
+        $path = Get-SettingsPath
+
+        $settings = [ordered]@{}
+        if (Test-Path -LiteralPath $path) {
+            try {
+                $existing = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+                foreach ($property in $existing.PSObject.Properties) { $settings[$property.Name] = $property.Value }
+            }
+            catch { }
+        }
+
+        if ([string]::IsNullOrEmpty($Value)) { $settings.Remove($Name) | Out-Null }
+        else { $settings[$Name] = $Value }
+
+        $json = ([pscustomobject]$settings | ConvertTo-Json -Depth 5) -replace "`r`n", "`n"
+        [IO.File]::WriteAllText($path, $json + "`n", (New-Object Text.UTF8Encoding $false))
+
+        # A token in a log or on screen is a token leaked.
+        $shown = if ($Name -match 'Token|Secret|Password') { '<hidden>' } else { $Value }
+        Write-Ok "$Name = $shown"
+    }
+
+    # -----------------------------------------------------------------------------
+    # Cursors
+    # -----------------------------------------------------------------------------
+
+    # The value names under HKCU\Control Panel\Cursors, and the file-name stems each
+    # one is matched against when installing a folder of cursors.
+    function Get-CursorRoleMap {
+        [ordered]@{
+            'Arrow'       = @('arrow', 'normal', 'pointer', 'default')
+            'Help'        = @('help')
+            'AppStarting' = @('appstarting', 'working', 'busy_arrow')
+            'Wait'        = @('wait', 'busy')
+            'Crosshair'   = @('crosshair', 'precision')
+            'IBeam'       = @('ibeam', 'text', 'beam')
+            'NWPen'       = @('nwpen', 'handwriting', 'pen')
+            'No'          = @('no', 'unavailable')
+            'SizeNS'      = @('sizens', 'vertical')
+            'SizeWE'      = @('sizewe', 'horizontal')
+            'SizeNWSE'    = @('sizenwse', 'diagonal1', 'diagonal 1')
+            'SizeNESW'    = @('sizenesw', 'diagonal2', 'diagonal 2')
+            'SizeAll'     = @('sizeall', 'move')
+            'UpArrow'     = @('uparrow', 'alternate')
+            'Hand'        = @('hand', 'link')
+            'Person'      = @('person')
+            'Pin'         = @('pin')
+        }
+    }
+
+    function Update-CursorScheme {
+        # Tells Windows to re-read the cursor registry values immediately.
+        # Built by joining lines rather than a here-string: build.ps1 indents every
+        # source line into the bundle's script block, and a here-string terminator
+        # must sit at column 0.
+        $signature = @(
+            '[DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]',
+            'public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, System.IntPtr pvParam, uint fWinIni);'
+        ) -join [Environment]::NewLine
+        try {
+            if (-not ('Moscovium.Native' -as [type])) {
+                Add-Type -MemberDefinition $signature -Name 'Native' -Namespace 'Moscovium' -PassThru | Out-Null
+            }
+            # SPI_SETCURSORS = 0x0057, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE = 3
+            [Moscovium.Native]::SystemParametersInfo(0x0057, 0, [IntPtr]::Zero, 3) | Out-Null
+        }
+        catch {
+            Write-Warn "Cursors are set but Windows was not told to reload them - sign out and back in. ($($_.Exception.Message))"
+        }
+    }
+
+    function Install-CursorScheme {
+        param(
+            [Parameter(Mandatory)][string]$Path,
+            [string]$SchemeName = 'Moscovium Custom'
+        )
+
+        if (-not (Test-Path -LiteralPath $Path)) { throw "No such folder: $Path" }
+
+        $files = @(Get-ChildItem -LiteralPath $Path -Include '*.cur', '*.ani' -File -Recurse -ErrorAction SilentlyContinue)
+        if ($files.Count -eq 0) { throw "No .cur or .ani files under '$Path'." }
+
+        if ($Ctx.DryRun) {
+            Write-Warn "Dry run: would install $($files.Count) cursor file(s) as '$SchemeName'."
+            return
+        }
+
+        # Copy out of the source folder first: the registry points at these paths for
+        # as long as the scheme is active, so they must not be somewhere temporary.
+        $destination = Join-Path (Join-Path $Ctx.StateDir 'Cursors') $SchemeName
+        New-Item -ItemType Directory -Path $destination -Force | Out-Null
+
+        $roles = Get-CursorRoleMap
+        $assigned = [ordered]@{}
+
+        foreach ($role in $roles.Keys) {
+            foreach ($stem in $roles[$role]) {
+                $match = @($files | Where-Object { [IO.Path]::GetFileNameWithoutExtension($_.Name).ToLowerInvariant() -eq $stem }) |
+                    Select-Object -First 1
+                if ($match) {
+                    $copy = Join-Path $destination $match.Name
+                    Copy-Item -LiteralPath $match.FullName -Destination $copy -Force
+                    $assigned[$role] = $copy
+                    break
+                }
+            }
+        }
+
+        if ($assigned.Count -eq 0) {
+            throw "Found $($files.Count) cursor file(s) but none had a recognisable name (arrow, ibeam, wait, ...)."
+        }
+
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('CurrentUser', 'Registry64')
+        try {
+            $key = $base.CreateSubKey('Control Panel\Cursors', $true)
+            try {
+                $key.SetValue('', $SchemeName, [Microsoft.Win32.RegistryValueKind]::String)
+                foreach ($role in $assigned.Keys) {
+                    $key.SetValue($role, $assigned[$role], [Microsoft.Win32.RegistryValueKind]::ExpandString)
+                }
+            }
+            finally { $key.Dispose() }
+        }
+        finally { $base.Dispose() }
+
+        Update-CursorScheme
+        Write-Ok "Cursor scheme '$SchemeName' applied - $($assigned.Count) of $($roles.Count) roles matched."
+        foreach ($role in $roles.Keys) {
+            if (-not $assigned.Contains($role)) { Write-Info "unmatched: $role" }
+        }
+    }
+
+    function Restore-DefaultCursor {
+        if ($Ctx.DryRun) {
+            Write-Warn 'Dry run: would restore the Windows default cursors.'
+            return
+        }
+
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey('CurrentUser', 'Registry64')
+        try {
+            $key = $base.CreateSubKey('Control Panel\Cursors', $true)
+            try {
+                $key.SetValue('', 'Windows Default', [Microsoft.Win32.RegistryValueKind]::String)
+                # An empty value is what "use the built-in one" looks like here.
+                foreach ($role in (Get-CursorRoleMap).Keys) {
+                    $key.SetValue($role, '', [Microsoft.Win32.RegistryValueKind]::ExpandString)
+                }
+            }
+            finally { $key.Dispose() }
+        }
+        finally { $base.Dispose() }
+
+        Update-CursorScheme
+        Write-Ok 'Windows default cursors restored.'
+    }
+
+    # -----------------------------------------------------------------------------
+    # Wallpaper
+    # -----------------------------------------------------------------------------
+
+    function Set-Wallpaper {
+        param(
+            [Parameter(Mandatory)][string]$Path,
+            [ValidateSet('Fill', 'Fit', 'Stretch', 'Tile', 'Center', 'Span')][string]$Style = 'Fill'
+        )
+
+        if (-not (Test-Path -LiteralPath $Path)) { throw "No such image: $Path" }
+
+        if ($Ctx.DryRun) {
+            Write-Warn "Dry run: would set the wallpaper to $Path ($Style)."
+            return
+        }
+
+        $styleValue, $tile = switch ($Style) {
+            'Fill'    { '10', '0' }
+            'Fit'     { '6',  '0' }
+            'Stretch' { '2',  '0' }
+            'Tile'    { '0',  '1' }
+            'Center'  { '0',  '0' }
+            'Span'    { '22', '0' }
+        }
+
+        Set-RegistryValue -Path 'HKEY_CURRENT_USER\Control Panel\Desktop' -Name 'WallpaperStyle' -Type 'String' -Value $styleValue
+        Set-RegistryValue -Path 'HKEY_CURRENT_USER\Control Panel\Desktop' -Name 'TileWallpaper' -Type 'String' -Value $tile
+
+        $signature = @(
+            '[DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]',
+            'public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);'
+        ) -join [Environment]::NewLine
+        if (-not ('Moscovium.Wallpaper' -as [type])) {
+            Add-Type -MemberDefinition $signature -Name 'Wallpaper' -Namespace 'Moscovium' -PassThru | Out-Null
+        }
+
+        # SPI_SETDESKWALLPAPER = 20, SPIF_UPDATEINIFILE | SPIF_SENDWININICHANGE = 3
+        [Moscovium.Wallpaper]::SystemParametersInfo(20, 0, (Resolve-Path -LiteralPath $Path).Path, 3) | Out-Null
+        Write-Ok "Wallpaper set ($Style)."
+    }
+
+    # -----------------------------------------------------------------------------
+    # CS2 / CS:GO configs
+    # -----------------------------------------------------------------------------
+
+    # Steam can live on any drive, and a library folder can hold the game without
+    # Steam itself being there, so every ready drive gets checked.
+    function Find-CsConfigFolder {
+        $relative = 'steamapps\common\Counter-Strike Global Offensive\game\csgo\cfg'
+        $found = [System.Collections.Generic.List[string]]::new()
+
+        $candidates = @(
+            (Join-Path ${env:ProgramFiles(x86)} "Steam\$relative")
+            (Join-Path $env:ProgramFiles "Steam\$relative")
+        )
+
+        foreach ($drive in ([IO.DriveInfo]::GetDrives() | Where-Object { $_.IsReady })) {
+            foreach ($stem in @('Steam', 'SteamLibrary', 'Games\Steam')) {
+                $candidates += (Join-Path $drive.RootDirectory.FullName "$stem\$relative")
+            }
+        }
+
+        foreach ($candidate in $candidates) {
+            if ((Test-Path -LiteralPath $candidate) -and -not $found.Contains($candidate)) { $found.Add($candidate) }
+        }
+
+        @($found)
+    }
+
+    function Get-CsLaunchOption { '-high -novid -allow_third_party_software -tickrate 128 -noaafonts' }
+
+    function Install-CsConfig {
+        param(
+            [string]$Url = 'https://raw.githubusercontent.com/Yabosen/YabosenCFG/main/yabosen.cfg',
+            [string]$FileName = 'yabosen.cfg',
+            [string]$LocalPath
+        )
+
+        $folders = @(Find-CsConfigFolder)
+        if ($folders.Count -eq 0) {
+            Write-Err 'No CS2 cfg folder found. Is Counter-Strike installed through Steam?'
+            return
+        }
+
+        if ($Ctx.DryRun) {
+            Write-Warn "Dry run: would install $FileName into $($folders.Count) folder(s)."
+            foreach ($folder in $folders) { Write-Info $folder }
+            return
+        }
+
+        try {
+            if ($LocalPath) {
+                if (-not (Test-Path -LiteralPath $LocalPath)) { throw "No such file: $LocalPath" }
+                $FileName = Split-Path -Leaf $LocalPath
+                $source = $LocalPath
+            }
+            else {
+                Write-Step "Downloading $FileName"
+                Write-Info $Url
+                $source = Join-Path $Ctx.StateDir $FileName
+                Save-RemoteFile -Url $Url -Destination $source -Label $FileName -MinimumBytes 16 | Out-Null
+            }
+
+            foreach ($folder in $folders) {
+                Copy-Item -LiteralPath $source -Destination (Join-Path $folder $FileName) -Force
+                Write-Ok $folder
+            }
+
+            Write-Line ''
+            Write-Info "In game: exec $([IO.Path]::GetFileNameWithoutExtension($FileName))"
+        }
+        catch {
+            Write-Err "Config install failed: $($_.Exception.Message)"
+        }
     }
 
 # ===== src/50-Profile.ps1 ==============================================
@@ -6166,8 +6939,12 @@ param(
                  ItemContainerStyle="{StaticResource NavItem}">
           <ListBoxItem Content="Tweaks" IsSelected="True"/>
           <ListBoxItem Content="Apps"/>
+          <ListBoxItem Content="Store"/>
           <ListBoxItem Content="Toolbox"/>
+          <ListBoxItem Content="Guides"/>
+          <ListBoxItem Content="Personalise"/>
           <ListBoxItem Content="Profiles"/>
+          <ListBoxItem Content="Settings"/>
         </ListBox>
       </Border>
 
@@ -6274,6 +7051,135 @@ param(
                 <StackPanel x:Name="ToolboxRows"/>
               </ScrollViewer>
             </Border>
+          </Grid>
+
+          <Grid x:Name="StorePanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="App store" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+            <DockPanel Grid.Row="1" Margin="0,0,0,12" LastChildFill="False">
+              <TextBlock DockPanel.Dock="Left" VerticalAlignment="Center" Foreground="{StaticResource Muted}"
+                         FontSize="12" Margin="0,0,12,0"
+                         Text="Community releases from the Moscovium dev organisations on GitHub."/>
+              <Button x:Name="BtnStoreInstall" Content="Install selected" DockPanel.Dock="Right" Style="{StaticResource Primary}"/>
+              <Button x:Name="BtnStoreRefresh" Content="Load" DockPanel.Dock="Right" Margin="8,0,0,0"/>
+            </DockPanel>
+            <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="8">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="7">
+                <StackPanel x:Name="StoreRows"/>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+
+          <Grid x:Name="GuidesPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Guides" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+            <TextBlock Grid.Row="1" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,0,0,12" TextWrapping="Wrap"
+                       Text="The parts no tool can do for you - BIOS, driver control panels, your router. Click a guide to open it."/>
+            <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="8">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="7">
+                <StackPanel x:Name="GuideRows"/>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+
+          <Grid x:Name="PersonalizePanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Personalise" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+              <StackPanel>
+
+                <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                        CornerRadius="8" Padding="16" Margin="0,0,0,12">
+                  <StackPanel>
+                    <TextBlock Text="Mouse cursors" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                    <TextBlock Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"
+                               Text="Point this at a folder of .cur / .ani files and it matches them to Windows cursor roles by file name. The desktop app's bundled packs are hundreds of binary files and cannot travel in a single script."/>
+                    <StackPanel Orientation="Horizontal">
+                      <Button x:Name="BtnCursorInstall" Content="Install from folder" Style="{StaticResource Primary}"/>
+                      <Button x:Name="BtnCursorRestore" Content="Restore Windows defaults"/>
+                    </StackPanel>
+                  </StackPanel>
+                </Border>
+
+                <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                        CornerRadius="8" Padding="16" Margin="0,0,0,12">
+                  <StackPanel>
+                    <TextBlock Text="Wallpaper" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                    <StackPanel Orientation="Horizontal">
+                      <ComboBox x:Name="WallpaperStyle" Width="150" Margin="0,0,8,0"/>
+                      <Button x:Name="BtnWallpaper" Content="Choose image" Style="{StaticResource Primary}"/>
+                    </StackPanel>
+                  </StackPanel>
+                </Border>
+
+                <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                        CornerRadius="8" Padding="16">
+                  <StackPanel>
+                    <TextBlock Text="Counter-Strike configs" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                    <TextBlock x:Name="CsFolderText" Foreground="{StaticResource Muted}" FontSize="12"
+                               TextWrapping="Wrap" Margin="0,0,0,12" Text="Looking for a cfg folder..."/>
+                    <StackPanel Orientation="Horizontal">
+                      <Button x:Name="BtnCsDefault" Content="Install yabosen.cfg" Style="{StaticResource Primary}"/>
+                      <Button x:Name="BtnCsFile" Content="Install a .cfg"/>
+                      <Button x:Name="BtnCsLaunch" Content="Copy launch options"/>
+                    </StackPanel>
+                  </StackPanel>
+                </Border>
+
+              </StackPanel>
+            </ScrollViewer>
+          </Grid>
+
+          <Grid x:Name="SettingsPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Settings" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+            <StackPanel Grid.Row="1">
+              <TextBlock Text="Store install folder" Foreground="{StaticResource Faint}" FontSize="11" Margin="0,0,0,7"/>
+              <DockPanel LastChildFill="True" Margin="0,0,0,16">
+                <Button x:Name="BtnBrowseInstallPath" Content="Browse" DockPanel.Dock="Right" Margin="8,0,0,0"/>
+                <TextBox x:Name="InstallPath"/>
+              </DockPanel>
+
+              <TextBlock Text="GitHub token (optional)" Foreground="{StaticResource Faint}" FontSize="11" Margin="0,0,0,7"/>
+              <TextBlock Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,7"
+                         Text="Only raises the API rate limit when loading the store. Unauthenticated GitHub allows 60 requests an hour, and each repo costs two."/>
+              <PasswordBox x:Name="GitHubToken" Margin="0,0,0,16" Background="{StaticResource Panel2}"
+                           Foreground="{StaticResource Text}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                           Padding="8,6" FontFamily="Segoe UI"/>
+
+              <StackPanel Orientation="Horizontal">
+                <Button x:Name="BtnSaveSettings" Content="Save" Style="{StaticResource Primary}"/>
+                <Button x:Name="BtnOpenStateFolder" Content="Open data folder"/>
+              </StackPanel>
+            </StackPanel>
           </Grid>
 
           <Grid x:Name="ProfilesPanel" Visibility="Collapsed">
@@ -6559,6 +7465,10 @@ param(
 
         $ui.BtnInstall.Content = if ($apps) { "Install $apps" } else { 'Install selected' }
         $ui.BtnInstall.IsEnabled = ($apps -gt 0)
+
+        $store = @(Get-CheckedItem -Rows $Ctx.Gui.Rows.Store).Count
+        $ui.BtnStoreInstall.Content = if ($store) { "Install $store" } else { 'Install selected' }
+        $ui.BtnStoreInstall.IsEnabled = ($store -gt 0)
     }
 
     # One row: a checkbox, a primary label, a secondary line, and a status chip.
@@ -6876,6 +7786,150 @@ param(
         return $bitmap
     }
 
+
+    # -----------------------------------------------------------------------------
+    # Store, Guides, Personalise and Settings pages
+    # -----------------------------------------------------------------------------
+
+    function Update-GuiStoreRow {
+        if (-not $Ctx.Gui) { return }
+        $ui = $Ctx.Gui.Ui
+
+        $ui.StoreRows.Children.Clear()
+        $built = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($app in @($Ctx.StoreApps)) {
+            $installable = [bool]$app.DownloadUrl
+            $ink, $fill = if ($installable) { '#FF7EE0A6', '#FF102A1E' } else { '#FF8B81A8', '#FF150F22' }
+
+            $row = New-GuiRow -Item $app -Primary "$($app.Name)  $($app.Author)" `
+                -Secondary $app.Description -Status $app.Version -StatusBrush $ink -StatusFill $fill
+            # Nothing to install means nothing to tick.
+            if (-not $installable) { $row.CheckBox.IsEnabled = $false }
+
+            $ui.StoreRows.Children.Add($row.Element) | Out-Null
+            $built.Add($row)
+        }
+
+        $Ctx.Gui.Rows.Store = @($built)
+        Update-GuiActionState
+    }
+
+    function Update-GuiGuideRow {
+        if (-not $Ctx.Gui) { return }
+        $ui = $Ctx.Gui.Ui
+
+        Initialize-GuideCatalog
+        $ui.GuideRows.Children.Clear()
+
+        $first = $true
+        foreach ($category in $Ctx.GuideCategories) {
+            $inCategory = @($Ctx.Guides | Where-Object { $_.category -eq $category })
+            if ($inCategory.Count -eq 0) { continue }
+
+            $ui.GuideRows.Children.Add((New-GuiGroupHeader -Title $category -Count $inCategory.Count -First:$first)) | Out-Null
+            $first = $false
+
+            foreach ($guide in $inCategory) {
+                $ui.GuideRows.Children.Add((New-GuiGuideCard -Guide $guide)) | Out-Null
+            }
+        }
+    }
+
+    # One collapsible guide: a clickable header, and the numbered steps underneath.
+    function New-GuiGuideCard {
+        param([Parameter(Mandatory)]$Guide)
+
+        $outer = New-Object Windows.Controls.StackPanel
+        $outer.Margin = New-Object Windows.Thickness 0, 0, 0, 3
+
+        $header = New-Object Windows.Controls.Border
+        $header.Padding = New-Object Windows.Thickness 10, 8, 10, 8
+        $header.CornerRadius = New-Object Windows.CornerRadius 5
+        $header.Cursor = 'Hand'
+        $header.Background = [Windows.Media.Brushes]::Transparent
+
+        $headerStack = New-Object Windows.Controls.StackPanel
+
+        $title = New-Object Windows.Controls.TextBlock
+        $title.Text = $Guide.title
+        $title.FontSize = 13
+        $title.Foreground = New-HexBrush '#FFEDE8F7'
+        $headerStack.Children.Add($title) | Out-Null
+
+        $summary = New-Object Windows.Controls.TextBlock
+        $summary.Text = "$($Guide.summary)   -   $(@($Guide.steps).Count) steps"
+        $summary.FontSize = 11
+        $summary.TextWrapping = 'Wrap'
+        $summary.Foreground = New-HexBrush '#FF8B81A8'
+        $summary.Margin = New-Object Windows.Thickness 0, 1, 0, 0
+        $headerStack.Children.Add($summary) | Out-Null
+
+        $header.Child = $headerStack
+        $outer.Children.Add($header) | Out-Null
+
+        $steps = New-Object Windows.Controls.StackPanel
+        $steps.Margin = New-Object Windows.Thickness 14, 4, 10, 12
+        $steps.Visibility = 'Collapsed'
+
+        $list = @($Guide.steps)
+        for ($i = 0; $i -lt $list.Count; $i++) {
+            $line = New-Object Windows.Controls.Grid
+            foreach ($unit in @([Windows.GridUnitType]::Auto, [Windows.GridUnitType]::Star)) {
+                $column = New-Object Windows.Controls.ColumnDefinition
+                $column.Width = New-Object Windows.GridLength 1, $unit
+                $line.ColumnDefinitions.Add($column)
+            }
+
+            $number = New-Object Windows.Controls.TextBlock
+            $number.Text = '{0}.' -f ($i + 1)
+            $number.FontSize = 12
+            $number.MinWidth = 24
+            $number.Foreground = New-HexBrush '#FFB388FF'
+            $number.VerticalAlignment = 'Top'
+            [Windows.Controls.Grid]::SetColumn($number, 0)
+            $line.Children.Add($number) | Out-Null
+
+            $text = New-Object Windows.Controls.TextBlock
+            # WPF renders the source typography fine, so no transliteration here.
+            $text.Text = [string]$list[$i]
+            $text.FontSize = 12
+            $text.TextWrapping = 'Wrap'
+            $text.Foreground = New-HexBrush '#FFC5BDDC'
+            $text.Margin = New-Object Windows.Thickness 6, 0, 0, 6
+            [Windows.Controls.Grid]::SetColumn($text, 1)
+            $line.Children.Add($text) | Out-Null
+
+            $steps.Children.Add($line) | Out-Null
+        }
+
+        $outer.Children.Add($steps) | Out-Null
+
+        # The steps panel is the sibling after the header, reached from $sender.
+        $header.Add_MouseLeftButtonUp({
+            param($sender, $e)
+            $panel = $sender.Parent
+            $body = $panel.Children[1]
+            $body.Visibility = if ($body.Visibility -eq 'Visible') { 'Collapsed' } else { 'Visible' }
+        })
+        $header.Add_MouseEnter({ param($sender, $e) $sender.Background = New-HexBrush '#FF120C1E' })
+        $header.Add_MouseLeave({ param($sender, $e) $sender.Background = [Windows.Media.Brushes]::Transparent })
+
+        return $outer
+    }
+
+    function Update-GuiCsFolderText {
+        if (-not $Ctx.Gui) { return }
+
+        $folders = @(Find-CsConfigFolder)
+        $Ctx.Gui.Ui.CsFolderText.Text = if ($folders.Count -eq 0) {
+            'No Counter-Strike cfg folder found. Is it installed through Steam?'
+        }
+        else {
+            "Found $($folders.Count) cfg folder(s):" + [Environment]::NewLine + ($folders -join [Environment]::NewLine)
+        }
+    }
+
     # -----------------------------------------------------------------------------
     # The window
     # -----------------------------------------------------------------------------
@@ -6894,6 +7948,11 @@ param(
         foreach ($name in @(
             'VersionText', 'CatalogChip', 'DryRunBadge',
             'NavList', 'TweaksPanel', 'AppsPanel', 'ToolboxPanel', 'ProfilesPanel',
+            'StorePanel', 'GuidesPanel', 'PersonalizePanel', 'SettingsPanel',
+            'StoreRows', 'BtnStoreRefresh', 'BtnStoreInstall', 'GuideRows',
+            'BtnCursorInstall', 'BtnCursorRestore', 'WallpaperStyle', 'BtnWallpaper',
+            'CsFolderText', 'BtnCsDefault', 'BtnCsFile', 'BtnCsLaunch',
+            'InstallPath', 'BtnBrowseInstallPath', 'GitHubToken', 'BtnSaveSettings', 'BtnOpenStateFolder',
             'TweakSearch', 'TweakCategory', 'TweakRows', 'BtnApply', 'BtnRevert', 'BtnTweakAll', 'BtnTweakNone',
             'AppSearch', 'AppCategory', 'AppRows', 'BtnInstall', 'BtnAppNone',
             'ToolboxRows',
@@ -6920,7 +7979,7 @@ param(
             Window    = $window
             Ui        = $ui
             Paragraph = $paragraph
-            Rows      = [pscustomobject]@{ Tweaks = @(); Apps = @(); Toolbox = @() }
+            Rows      = [pscustomobject]@{ Tweaks = @(); Apps = @(); Toolbox = @(); Store = @() }
             Bound     = $BoundParameters
             Glyphs    = $Ctx.Theme.Glyph
         }
@@ -6984,8 +8043,17 @@ param(
         try { $window.Icon = New-GuiIcon } catch { Write-Log "Window icon failed: $($_.Exception.Message)" 'WARN' }
 
         # ---- navigation labels -------------------------------------------------
-        $navCounts = @($Ctx.Tweaks.Count, $Ctx.Apps.Count, @(Get-ToolboxActions).Count, -1)
-        $navNames = @('Tweaks', 'Apps', 'Toolbox', 'Profiles')
+        Initialize-GuideCatalog
+
+        # Order has to match the ListBoxItems in the XAML and the $panels array in
+        # the SelectionChanged handler. -1 means "no count worth showing".
+        $navNames  = @('Tweaks', 'Apps', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Profiles', 'Settings')
+        $navCounts = @($Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-ToolboxActions).Count, $Ctx.Guides.Count, -1, -1, -1)
+
+        if ($ui.NavList.Items.Count -ne $navNames.Count) {
+            Write-Log "Nav has $($ui.NavList.Items.Count) items but $($navNames.Count) names." 'WARN'
+        }
+
         for ($i = 0; $i -lt $ui.NavList.Items.Count -and $i -lt $navNames.Count; $i++) {
             Set-GuiNavContent -Item $ui.NavList.Items[$i] -Text $navNames[$i] -Count $navCounts[$i]
         }
@@ -7027,7 +8095,9 @@ param(
             param($sender, $e)
             if (-not $Ctx.Gui) { return }
 
-            $panels = @($Ctx.Gui.Ui.TweaksPanel, $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.ProfilesPanel)
+            $panels = @($Ctx.Gui.Ui.TweaksPanel, $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.StorePanel,
+                        $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.GuidesPanel, $Ctx.Gui.Ui.PersonalizePanel,
+                        $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
             for ($i = 0; $i -lt $panels.Count; $i++) {
                 $panels[$i].Visibility = if ($i -eq $sender.SelectedIndex) { 'Visible' } else { 'Collapsed' }
             }
@@ -7075,6 +8145,103 @@ param(
             Invoke-GuiWork -Label 'installing apps' -Work { Invoke-AppInstall -Apps $selected }
         })
 
+        # ---- store -------------------------------------------------------------
+        # Loaded on demand: listing two orgs and every repo's latest release is a
+        # few dozen API calls, which has no business happening at window-open.
+        $ui.BtnStoreRefresh.Add_Click({
+            Invoke-GuiWork -Label 'loading store' -Work { Get-StoreApp -Refresh | Out-Null }
+            Update-GuiStoreRow
+            $Ctx.Gui.Ui.BtnStoreRefresh.Content = 'Reload'
+        })
+
+        $ui.BtnStoreInstall.Add_Click({
+            $selected = Get-CheckedItem -Rows $Ctx.Gui.Rows.Store
+            if ($selected.Count -eq 0) { $Ctx.Gui.Ui.StatusText.Text = 'Nothing selected.'; return }
+            Invoke-GuiWork -Label 'installing store apps' -Work { Invoke-StoreInstall -Apps $selected }
+        })
+
+        # ---- personalise -------------------------------------------------------
+        $ui.BtnCursorInstall.Add_Click({
+            $dialog = New-Object Windows.Forms.FolderBrowserDialog
+            $dialog.Description = 'Pick a folder containing .cur / .ani files'
+            if ($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { return }
+
+            $folder = $dialog.SelectedPath
+            Invoke-GuiWork -Label 'installing cursors' -Work {
+                Install-CursorScheme -Path $folder -SchemeName (Split-Path -Leaf $folder)
+            }
+        })
+
+        $ui.BtnCursorRestore.Add_Click({
+            Invoke-GuiWork -Label 'restoring cursors' -Work { Restore-DefaultCursor }
+        })
+
+        foreach ($style in @('Fill', 'Fit', 'Stretch', 'Tile', 'Center', 'Span')) {
+            $ui.WallpaperStyle.Items.Add($style) | Out-Null
+        }
+        $ui.WallpaperStyle.SelectedIndex = 0
+
+        $ui.BtnWallpaper.Add_Click({
+            $dialog = New-Object Windows.Forms.OpenFileDialog
+            $dialog.Filter = 'Images|*.jpg;*.jpeg;*.png;*.bmp;*.gif|All files (*.*)|*.*'
+            if ($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { return }
+
+            $image = $dialog.FileName
+            $style = [string]$Ctx.Gui.Ui.WallpaperStyle.SelectedItem
+            Invoke-GuiWork -Label 'setting wallpaper' -Work { Set-Wallpaper -Path $image -Style $style }
+        })
+
+        $ui.BtnCsDefault.Add_Click({
+            Invoke-GuiWork -Label 'installing config' -Work { Install-CsConfig }
+            Update-GuiCsFolderText
+        })
+
+        $ui.BtnCsFile.Add_Click({
+            $dialog = New-Object Windows.Forms.OpenFileDialog
+            $dialog.Filter = 'Counter-Strike config (*.cfg)|*.cfg'
+            if ($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { return }
+
+            $cfg = $dialog.FileName
+            Invoke-GuiWork -Label 'installing config' -Work { Install-CsConfig -LocalPath $cfg }
+        })
+
+        $ui.BtnCsLaunch.Add_Click({
+            $options = Get-CsLaunchOption
+            [Windows.Clipboard]::SetText($options)
+            $Ctx.Gui.Ui.StatusText.Text = "Copied: $options"
+            Write-Ok "Launch options copied to the clipboard: $options"
+        })
+
+        # ---- settings ----------------------------------------------------------
+        $ui.InstallPath.Text = Get-StoreInstallRoot
+        if (Get-MoscoviumSetting -Name 'GitHubToken') { $ui.GitHubToken.Password = '' }
+
+        $ui.BtnBrowseInstallPath.Add_Click({
+            $dialog = New-Object Windows.Forms.FolderBrowserDialog
+            $dialog.Description = 'Where store apps should be installed'
+            if ($dialog.ShowDialog() -eq [Windows.Forms.DialogResult]::OK) { $Ctx.Gui.Ui.InstallPath.Text = $dialog.SelectedPath }
+        })
+
+        $ui.BtnSaveSettings.Add_Click({
+            $ui = $Ctx.Gui.Ui
+            Set-MoscoviumSetting -Name 'AppsInstallPath' -Value ([string]$ui.InstallPath.Text)
+
+            # An empty box means "leave the stored token alone", not "clear it" - the
+            # box is never pre-filled with a secret, so blank is the normal state.
+            $token = [string]$ui.GitHubToken.Password
+            if ($token) {
+                Set-MoscoviumSetting -Name 'GitHubToken' -Value $token
+                $ui.GitHubToken.Password = ''
+            }
+
+            $ui.StatusText.Text = 'Settings saved.'
+        })
+
+        $ui.BtnOpenStateFolder.Add_Click({
+            Initialize-State
+            Start-Process -FilePath 'explorer.exe' -ArgumentList $Ctx.StateDir | Out-Null
+        })
+
         # ---- profiles ----------------------------------------------------------
         $ui.BtnBrowseProfile.Add_Click({
             $dialog = New-Object Windows.Forms.OpenFileDialog
@@ -7119,6 +8286,8 @@ param(
         Update-GuiTweakRow
         Update-GuiAppRow
         Update-GuiToolboxRow
+        Update-GuiGuideRow
+        Update-GuiCsFolderText
 
         $ui.StatusText.Text = 'Ready'
 
@@ -7163,7 +8332,7 @@ param(
         if (-not $Ctx.Gui) { & $Work; return }
 
         $ui = $Ctx.Gui.Ui
-        $buttons = @('BtnApply', 'BtnRevert', 'BtnInstall', 'BtnRunProfile', 'BtnSaveProfile')
+        $buttons = @('BtnApply', 'BtnRevert', 'BtnInstall', 'BtnStoreInstall', 'BtnStoreRefresh', 'BtnRunProfile', 'BtnSaveProfile')
         foreach ($name in $buttons) { $ui[$name].IsEnabled = $false }
 
         $ui.StatusText.Text = $Label
@@ -7336,6 +8505,8 @@ param(
                 '^apps?$'     { Show-AppCatalog }
                 '^toolbox$'   { Show-ToolboxCatalog }
                 '^backups?$'  { Show-Backups }
+                '^guides?$'   { Show-GuideCatalog }
+                '^store$'     { Show-StoreCatalog }
                 '^categor'    {
                     Write-SectionHeading 'Tweak categories'
                     Format-Columns -Items $Ctx.TweakCategories
@@ -7446,6 +8617,22 @@ param(
             $didSomething = $true
         }
 
+        if (& $has 'Guide') {
+            $resolved = Resolve-Guide -Names $Bound['Guide']
+            Write-UnknownNames -Unknown $resolved.Unknown -Kind 'guide'
+            Show-Guide -Guides $resolved.Matched
+            $didSomething = $true
+        }
+
+        if (& $has 'SetSetting') {
+            foreach ($pair in @($Bound['SetSetting'])) {
+                $split = ([string]$pair).Split('=', 2)
+                if ($split.Count -ne 2) { Write-Err "Expected Name=Value, got '$pair'."; continue }
+                Set-MoscoviumSetting -Name $split[0].Trim() -Value $split[1].Trim()
+            }
+            $didSomething = $true
+        }
+
         if (& $has 'Toolbox')       { Invoke-ToolboxAction -Id $Bound['Toolbox']; $didSomething = $true }
         if (& $has 'Profile')       { Invoke-SetupProfile -Path $Bound['Profile']; $didSomething = $true }
         if (& $has 'UpgradeAll')    { Invoke-UpgradeAll; $didSomething = $true }
@@ -7505,4 +8692,4 @@ param(
         Restore-ConsoleEncoding -Previous $previousEncoding
     }
 
-} $PSBoundParameters '1.2.0' $SourceUrl 'a3be1f6431'
+} $PSBoundParameters '1.2.0' $SourceUrl '4274bdbceb'

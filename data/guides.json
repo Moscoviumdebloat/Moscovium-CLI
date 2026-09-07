@@ -1,0 +1,111 @@
+{
+    "categories":  [
+                       "Drivers & GPU",
+                       "BIOS",
+                       "Windows",
+                       "Hardware",
+                       "Network"
+                   ],
+    "guides":  [
+                   {
+                       "title":  "NVIDIA GPU Optimization",
+                       "category":  "Drivers & GPU",
+                       "summary":  "Tune the NVIDIA App / Control Panel for maximum gaming performance.",
+                       "steps":  [
+                                     "Install the NVIDIA App via PC Setup Automation (or download it from nvidia.com) and sign in.",
+                                     "Open Settings (gear icon) and make sure 'Driver Updates' is set to Latest and the latest Game Ready driver is installed.",
+                                     "Go to Graphics → Global Settings.",
+                                     "Power management mode → Prefer maximum performance (prevents the GPU from downclocking).",
+                                     "Low Latency Mode → Ultra (reduces input latency in shooters; if you see stutter, try On instead).",
+                                     "Texture filtering - Quality → High quality.",
+                                     "Vertical sync → Off (enable in-game only if you get screen tearing).",
+                                     "Threaded optimization → Auto.",
+                                     "Monitor Technology → G-SYNC if your monitor supports it (set together with V-Sync On + low latency in games).",
+                                     "In the Games tab, add per-game profiles: for esports titles force 'Prefer maximum performance' and disable any anti-aliasing you don't need.",
+                                     "Optional: enable ReBAR (Resizable BAR) in BIOS for a few extra FPS - see the BIOS guide.",
+                                     "Check temperatures with HWiNFO after changes - anything under 85 C under load is fine."
+                                 ]
+                   },
+                   {
+                       "title":  "AMD GPU Optimization",
+                       "category":  "Drivers & GPU",
+                       "summary":  "Tune Radeon Software / Adrenalin for gaming performance.",
+                       "steps":  [
+                                     "Install AMD Adrenalin Edition via PC Setup Automation (or from amd.com) and open Radeon Software.",
+                                     "Open the Performance tab → Tuning.",
+                                     "Click 'Tuning Control' → select the Performance preset (applies balanced overclocks automatically).",
+                                     "Under Graphics: turn Anti-Lag on (only in the game, not globally, for best results).",
+                                     "Radeon Chill → off for competitive shooters (it caps FPS to save power).",
+                                     "Set 'Power Limit' slider to the max value (+10-20%) if thermals allow.",
+                                     "Enable Smart Access Memory (SAM) in BIOS - see the BIOS guide - for a solid FPS uplift.",
+                                     "Enable FreeSync on your monitor in Display settings if supported.",
+                                     "For 'Radeon Boost', test in-game: it lowers resolution during fast mouse movement for FPS, but can look blurry.",
+                                     "Monitor temps/voltages with HWiNFO; keep junction temp below 95 C."
+                                 ]
+                   },
+                   {
+                       "title":  "BIOS Setup for Performance",
+                       "category":  "BIOS",
+                       "summary":  "Critical firmware settings for CPU, GPU and memory performance.",
+                       "steps":  [
+                                     "Update your BIOS from the motherboard manufacturer's site (ASUS/MSI/Gigabyte/ASRock) - newer AGESA/microcode versions fix bugs and add features. Check your exact board model first (msinfo32 → System Model).",
+                                     "Reboot and press DEL/F2 to enter BIOS.",
+                                     "Enable XMP (Intel) or EXPO (AMD) in the memory settings to run your RAM at its rated speed.",
+                                     "Enable Resizable BAR / Smart Access Memory (usually under PCIe settings) - pairs with an up-to-date GPU driver.",
+                                     "On AMD: find 'CPPC' / 'CPPC Preferred Cores' and enable it (Windows then schedules threads on your best cores).",
+                                     "For latency-sensitive gaming: set Global C-State Control → Disabled (costs a bit of idle power).",
+                                     "Enable SVM (AMD virtualization) or Intel VT-x if you use WSL2, Docker or Android emulators.",
+                                     "Set fan curves to a more aggressive profile in the hardware monitor section if temps allow.",
+                                     "Save and exit (F10). On first boot, check in Task Manager that the RAM speed shows your rated MHz."
+                                 ]
+                   },
+                   {
+                       "title":  "Windows Latency & Stability",
+                       "category":  "Windows",
+                       "summary":  "OS-level settings that reduce stutter, latency and background interference.",
+                       "steps":  [
+                                     "Disable Fast Startup: Control Panel → Power Options → Choose what the power buttons do → uncheck 'Turn on fast startup'. Fast startup can cause driver/update issues after shutdown.",
+                                     "Enable Game Mode: Settings → Gaming → Game Mode → On (lets Windows prioritize games).",
+                                     "In the same Gaming page, set Xbox Game Bar to Off if you never use it.",
+                                     "Hardware-accelerated GPU scheduling: apply the matching tweak in the Debloat Tweaks page (on for GTX 10-series+/RX 5000+ and newer).",
+                                     "Per-game Fullscreen Optimizations: right-click the game .exe → Properties → Compatibility → check 'Disable fullscreen optimizations' for older/anticheat-sensitive games.",
+                                     "Set a fixed pagefile: System → Advanced system settings → Performance → Advanced → Virtual memory → custom size = 1.5x your RAM (e.g. 24 GB for 16 GB RAM), on the fastest SSD.",
+                                     "Install the latest chipset drivers from the motherboard vendor (this one step fixes more stutter than any tweak).",
+                                     "Close background apps (Discord, browsers, RGB software) while playing competitive titles, or set them to Game Mode aware.",
+                                     "Keep the PC on Balanced power plan if you have a modern CPU with CPPC2/boost handling; only switch to High Performance (available as a tweak) on older hardware."
+                                 ]
+                   },
+                   {
+                       "title":  "Monitoring & Overclocking",
+                       "category":  "Hardware",
+                       "summary":  "Verify performance, temps and stability before pushing any hardware.",
+                       "steps":  [
+                                     "Install HWiNFO (in PC Setup Automation) → run Sensors-only mode → enable logging (clock, temps, voltage) before benchmarking.",
+                                     "Install MSI Afterburner (in PC Setup Automation) → enable the on-screen display (RivaTuner RTSS) for in-game FPS/temps/clock overlay.",
+                                     "Install FanControl (in PC Setup Automation) to build custom fan curves based on GPU or CPU temperature.",
+                                     "Run a baseline: Cinebench (CPU), 3DMark Time Spy (GPU) - note the scores and temperatures.",
+                                     "CPU overclock: only via AMD Ryzen Master / Intel XTU, or BIOS. Increase by small steps (e.g. +50 MHz or per-core), stress test 30 min after every step, stop at the first instability.",
+                                     "GPU overclock: in Afterburner raise core clock +25 MHz steps, then memory +100 MHz steps, stress with 3DMark/Heaven after each step.",
+                                     "Undervolting is often better than overclocking: a -50 to -80 mV curve on the GPU gives the same clocks at lower temps.",
+                                     "If temperatures exceed 85 C (GPU) or 90 C (CPU) at stock settings, fix cooling first - thermal paste, case airflow - before any overclocking.",
+                                     "Use LatencyMon (in PC Setup Automation) to confirm no driver is causing high DPC latency (red bars = problem driver)."
+                                 ]
+                   },
+                   {
+                       "title":  "Network Optimization",
+                       "category":  "Network",
+                       "summary":  "Lower latency and jitter for online gaming.",
+                       "steps":  [
+                                     "Use a wired (Ethernet) connection whenever possible - Wi-Fi adds latency and jitter.",
+                                     "Update the LAN/Wi-Fi driver from the motherboard or adapter vendor (not Windows Update only).",
+                                     "Switch DNS to a fast public resolver: Settings → Network & Internet → your connection → DNS → manual → 1.1.1.1 and 1.0.0.1 (Cloudflare) or 8.8.8.8/8.8.4.4 (Google).",
+                                     "Apply the 'Prefer IPv4 over IPv6' and 'Disable Teredo' tweaks from the Debloat Tweaks page if your ISP's IPv6 is unreliable.",
+                                     "Disable Delivery Optimization (also a tweak) so Windows never uploads updates on your bandwidth.",
+                                     "In the router: enable QoS and prioritize your PC's MAC address; disable any SQM-unaware traffic shaping if your line is fine.",
+                                     "Check bufferbloat at waveform.com/bufferbloat - if the grade is poor, enable SQM/fQ-CoDel in your router if available.",
+                                     "Close bandwidth hogs while gaming (Steam downloads, cloud sync, Windows Update).",
+                                     "Optional: set the game to high priority once via Task Manager → Details → right-click → Set priority (Windows already handles this via Game Mode)."
+                                 ]
+                   }
+               ]
+}

@@ -150,6 +150,8 @@ function Invoke-List {
             '^apps?$'     { Show-AppCatalog }
             '^toolbox$'   { Show-ToolboxCatalog }
             '^backups?$'  { Show-Backups }
+            '^guides?$'   { Show-GuideCatalog }
+            '^store$'     { Show-StoreCatalog }
             '^categor'    {
                 Write-SectionHeading 'Tweak categories'
                 Format-Columns -Items $Ctx.TweakCategories
@@ -256,6 +258,22 @@ function Invoke-Main {
             $proceed = $Ctx.DryRun -or $Ctx.AssumeYes -or
                 (Confirm-Action "Install $($resolved.Matched.Count) app(s)?" -DefaultYes)
             if ($proceed) { Invoke-AppInstall -Apps $resolved.Matched }
+        }
+        $didSomething = $true
+    }
+
+    if (& $has 'Guide') {
+        $resolved = Resolve-Guide -Names $Bound['Guide']
+        Write-UnknownNames -Unknown $resolved.Unknown -Kind 'guide'
+        Show-Guide -Guides $resolved.Matched
+        $didSomething = $true
+    }
+
+    if (& $has 'SetSetting') {
+        foreach ($pair in @($Bound['SetSetting'])) {
+            $split = ([string]$pair).Split('=', 2)
+            if ($split.Count -ne 2) { Write-Err "Expected Name=Value, got '$pair'."; continue }
+            Set-MoscoviumSetting -Name $split[0].Trim() -Value $split[1].Trim()
         }
         $didSomething = $true
     }

@@ -157,7 +157,10 @@ function Save-RemoteFile {
     param(
         [Parameter(Mandatory)][string]$Url,
         [Parameter(Mandatory)][string]$Destination,
-        [string]$Label = 'downloading'
+        [string]$Label = 'downloading',
+        # Guards against a link that now returns an HTML error page. Config files
+        # are legitimately tiny, so callers can lower it.
+        [int]$MinimumBytes = 1024
     )
 
     # TLS 1.2 is not the default in 5.1 and several vendor CDNs refuse anything older.
@@ -221,7 +224,7 @@ function Save-RemoteFile {
     if (-not (Test-Path -LiteralPath $Destination)) { throw "Download produced no file at '$Destination'." }
 
     $size = (Get-Item -LiteralPath $Destination).Length
-    if ($size -lt 1024) { throw "Downloaded file is only $size bytes; the link is probably wrong." }
+    if ($size -lt $MinimumBytes) { throw "Downloaded file is only $size bytes; the link is probably wrong." }
 
     return $size
 }

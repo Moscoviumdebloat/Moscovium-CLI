@@ -68,6 +68,9 @@ function New-MoscoviumContext {
         TweakCategories = @()
         Apps       = @()
         AppCategories   = @()
+        Guides     = @()
+        GuideCategories = @()
+        StoreApps  = @()
         Applied    = 0
         Failed     = 0
         Skipped    = 0

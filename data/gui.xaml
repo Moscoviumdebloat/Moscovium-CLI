@@ -369,8 +369,12 @@
                  ItemContainerStyle="{StaticResource NavItem}">
           <ListBoxItem Content="Tweaks" IsSelected="True"/>
           <ListBoxItem Content="Apps"/>
+          <ListBoxItem Content="Store"/>
           <ListBoxItem Content="Toolbox"/>
+          <ListBoxItem Content="Guides"/>
+          <ListBoxItem Content="Personalise"/>
           <ListBoxItem Content="Profiles"/>
+          <ListBoxItem Content="Settings"/>
         </ListBox>
       </Border>
 
@@ -477,6 +481,135 @@
                 <StackPanel x:Name="ToolboxRows"/>
               </ScrollViewer>
             </Border>
+          </Grid>
+
+          <Grid x:Name="StorePanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="App store" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+            <DockPanel Grid.Row="1" Margin="0,0,0,12" LastChildFill="False">
+              <TextBlock DockPanel.Dock="Left" VerticalAlignment="Center" Foreground="{StaticResource Muted}"
+                         FontSize="12" Margin="0,0,12,0"
+                         Text="Community releases from the Moscovium dev organisations on GitHub."/>
+              <Button x:Name="BtnStoreInstall" Content="Install selected" DockPanel.Dock="Right" Style="{StaticResource Primary}"/>
+              <Button x:Name="BtnStoreRefresh" Content="Load" DockPanel.Dock="Right" Margin="8,0,0,0"/>
+            </DockPanel>
+            <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="8">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="7">
+                <StackPanel x:Name="StoreRows"/>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+
+          <Grid x:Name="GuidesPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Guides" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+            <TextBlock Grid.Row="1" Foreground="{StaticResource Muted}" FontSize="12" Margin="0,0,0,12" TextWrapping="Wrap"
+                       Text="The parts no tool can do for you - BIOS, driver control panels, your router. Click a guide to open it."/>
+            <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="8">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="7">
+                <StackPanel x:Name="GuideRows"/>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+
+          <Grid x:Name="PersonalizePanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Personalise" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+              <StackPanel>
+
+                <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                        CornerRadius="8" Padding="16" Margin="0,0,0,12">
+                  <StackPanel>
+                    <TextBlock Text="Mouse cursors" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                    <TextBlock Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"
+                               Text="Point this at a folder of .cur / .ani files and it matches them to Windows cursor roles by file name. The desktop app's bundled packs are hundreds of binary files and cannot travel in a single script."/>
+                    <StackPanel Orientation="Horizontal">
+                      <Button x:Name="BtnCursorInstall" Content="Install from folder" Style="{StaticResource Primary}"/>
+                      <Button x:Name="BtnCursorRestore" Content="Restore Windows defaults"/>
+                    </StackPanel>
+                  </StackPanel>
+                </Border>
+
+                <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                        CornerRadius="8" Padding="16" Margin="0,0,0,12">
+                  <StackPanel>
+                    <TextBlock Text="Wallpaper" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,12"/>
+                    <StackPanel Orientation="Horizontal">
+                      <ComboBox x:Name="WallpaperStyle" Width="150" Margin="0,0,8,0"/>
+                      <Button x:Name="BtnWallpaper" Content="Choose image" Style="{StaticResource Primary}"/>
+                    </StackPanel>
+                  </StackPanel>
+                </Border>
+
+                <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                        CornerRadius="8" Padding="16">
+                  <StackPanel>
+                    <TextBlock Text="Counter-Strike configs" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                    <TextBlock x:Name="CsFolderText" Foreground="{StaticResource Muted}" FontSize="12"
+                               TextWrapping="Wrap" Margin="0,0,0,12" Text="Looking for a cfg folder..."/>
+                    <StackPanel Orientation="Horizontal">
+                      <Button x:Name="BtnCsDefault" Content="Install yabosen.cfg" Style="{StaticResource Primary}"/>
+                      <Button x:Name="BtnCsFile" Content="Install a .cfg"/>
+                      <Button x:Name="BtnCsLaunch" Content="Copy launch options"/>
+                    </StackPanel>
+                  </StackPanel>
+                </Border>
+
+              </StackPanel>
+            </ScrollViewer>
+          </Grid>
+
+          <Grid x:Name="SettingsPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Settings" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+            <StackPanel Grid.Row="1">
+              <TextBlock Text="Store install folder" Foreground="{StaticResource Faint}" FontSize="11" Margin="0,0,0,7"/>
+              <DockPanel LastChildFill="True" Margin="0,0,0,16">
+                <Button x:Name="BtnBrowseInstallPath" Content="Browse" DockPanel.Dock="Right" Margin="8,0,0,0"/>
+                <TextBox x:Name="InstallPath"/>
+              </DockPanel>
+
+              <TextBlock Text="GitHub token (optional)" Foreground="{StaticResource Faint}" FontSize="11" Margin="0,0,0,7"/>
+              <TextBlock Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,7"
+                         Text="Only raises the API rate limit when loading the store. Unauthenticated GitHub allows 60 requests an hour, and each repo costs two."/>
+              <PasswordBox x:Name="GitHubToken" Margin="0,0,0,16" Background="{StaticResource Panel2}"
+                           Foreground="{StaticResource Text}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                           Padding="8,6" FontFamily="Segoe UI"/>
+
+              <StackPanel Orientation="Horizontal">
+                <Button x:Name="BtnSaveSettings" Content="Save" Style="{StaticResource Primary}"/>
+                <Button x:Name="BtnOpenStateFolder" Content="Open data folder"/>
+              </StackPanel>
+            </StackPanel>
           </Grid>
 
           <Grid x:Name="ProfilesPanel" Visibility="Collapsed">

@@ -90,7 +90,9 @@ function ConvertTo-RegValue {
 function Read-TweakCatalog {
     param([Parameter(Mandatory)][string]$SourceFile)
 
-    $text = Get-Content -LiteralPath $SourceFile -Raw
+    # -Encoding UTF8 matters: without it, 5.1 reads a BOM-less file as ANSI and
+    # every arrow and en dash in the source becomes mojibake.
+    $text = Get-Content -LiteralPath $SourceFile -Raw -Encoding UTF8
 
     $tweakBlock = Get-CsInitializer -Text $text -AnchorPattern 'List<AppTweak>\s+Tweaks\s*=\s*new\(\)'
     $catBlock   = Get-CsInitializer -Text $text -AnchorPattern 'List<string>\s+Categories\s*=\s*new\(\)'
@@ -153,10 +155,48 @@ function Read-TweakCatalog {
     }
 }
 
+function Read-GuideCatalog {
+    param([Parameter(Mandatory)][string]$SourceFile)
+
+    # -Encoding UTF8 matters: without it, 5.1 reads a BOM-less file as ANSI and
+    # every arrow and en dash in the source becomes mojibake.
+    $text = Get-Content -LiteralPath $SourceFile -Raw -Encoding UTF8
+
+    $guideBlock = Get-CsInitializer -Text $text -AnchorPattern 'List<Guide>\s+Guides\s*=\s*new\(\)'
+    $catBlock   = Get-CsInitializer -Text $text -AnchorPattern 'List<string>\s+Categories\s*=\s*new\(\)'
+
+    $categories = @(Split-CsList -Text $catBlock | ForEach-Object { ConvertFrom-CsString -Token $_ })
+
+    # record Guide(string Title, string Category, string Summary, List<string> Steps)
+    $guides = foreach ($entry in Split-CsList -Text $guideBlock) {
+        $ctor = ConvertFrom-CsCtor -Entry $entry.Trim()
+        $p = $ctor.Positional
+
+        if ($p.Count -lt 4) { throw "Guide entry has too few arguments: $($entry.Trim())" }
+
+        $stepsBlock = (Get-CsBlock -Text $p[3] -From 0).Content
+        $steps = @(Split-CsList -Text $stepsBlock | ForEach-Object { ConvertFrom-CsString -Token $_ })
+
+        [ordered]@{
+            title    = ConvertFrom-CsString -Token $p[0]
+            category = ConvertFrom-CsString -Token $p[1]
+            summary  = ConvertFrom-CsString -Token $p[2]
+            steps    = $steps
+        }
+    }
+
+    [ordered]@{
+        categories = $categories
+        guides     = @($guides)
+    }
+}
+
 function Read-AppCatalog {
     param([Parameter(Mandatory)][string]$SourceFile)
 
-    $text = Get-Content -LiteralPath $SourceFile -Raw
+    # -Encoding UTF8 matters: without it, 5.1 reads a BOM-less file as ANSI and
+    # every arrow and en dash in the source becomes mojibake.
+    $text = Get-Content -LiteralPath $SourceFile -Raw -Encoding UTF8
 
     $appBlock = Get-CsInitializer -Text $text -AnchorPattern 'List<SetupApp>\s+Apps\s*=\s*new\(\)'
     $catBlock = Get-CsInitializer -Text $text -AnchorPattern 'List<string>\s+Categories\s*=\s*new\(\)'
@@ -258,6 +298,7 @@ try {
 
     $tweaks = Read-TweakCatalog -SourceFile (Join-Path $source.Path 'Models/AppTweak.cs')
     $apps   = Read-AppCatalog   -SourceFile (Join-Path $source.Path 'Models/SetupProfile.cs')
+    $guides = Read-GuideCatalog -SourceFile (Join-Path $source.Path 'Models/Guides.cs')
 
     $provenance = [ordered]@{
         repo      = $RepoUrl
@@ -269,8 +310,9 @@ try {
 
     Save-Catalog -Catalog $tweaks -Path (Join-Path $OutputPath 'tweaks.json') -Label 'tweaks.json'
     Save-Catalog -Catalog $apps   -Path (Join-Path $OutputPath 'apps.json')   -Label 'apps.json'
+    Save-Catalog -Catalog $guides -Path (Join-Path $OutputPath 'guides.json') -Label 'guides.json'
 
-    Write-Host ("Done: {0} tweaks in {1} categories, {2} apps in {3} categories." -f $tweaks.tweaks.Count, $tweaks.categories.Count, $apps.apps.Count, $apps.categories.Count) -ForegroundColor Green
+    Write-Host ("Done: {0} tweaks, {1} apps, {2} guides." -f $tweaks.tweaks.Count, $apps.apps.Count, $guides.guides.Count) -ForegroundColor Green
 }
 finally {
     if ($source.Temporary -and (Test-Path $source.Path)) {

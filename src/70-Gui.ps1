@@ -261,6 +261,10 @@ function Update-GuiActionState {
 
     $ui.BtnInstall.Content = if ($apps) { "Install $apps" } else { 'Install selected' }
     $ui.BtnInstall.IsEnabled = ($apps -gt 0)
+
+    $store = @(Get-CheckedItem -Rows $Ctx.Gui.Rows.Store).Count
+    $ui.BtnStoreInstall.Content = if ($store) { "Install $store" } else { 'Install selected' }
+    $ui.BtnStoreInstall.IsEnabled = ($store -gt 0)
 }
 
 # One row: a checkbox, a primary label, a secondary line, and a status chip.
@@ -578,6 +582,150 @@ function New-GuiIcon {
     return $bitmap
 }
 
+
+# -----------------------------------------------------------------------------
+# Store, Guides, Personalise and Settings pages
+# -----------------------------------------------------------------------------
+
+function Update-GuiStoreRow {
+    if (-not $Ctx.Gui) { return }
+    $ui = $Ctx.Gui.Ui
+
+    $ui.StoreRows.Children.Clear()
+    $built = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($app in @($Ctx.StoreApps)) {
+        $installable = [bool]$app.DownloadUrl
+        $ink, $fill = if ($installable) { '#FF7EE0A6', '#FF102A1E' } else { '#FF8B81A8', '#FF150F22' }
+
+        $row = New-GuiRow -Item $app -Primary "$($app.Name)  $($app.Author)" `
+            -Secondary $app.Description -Status $app.Version -StatusBrush $ink -StatusFill $fill
+        # Nothing to install means nothing to tick.
+        if (-not $installable) { $row.CheckBox.IsEnabled = $false }
+
+        $ui.StoreRows.Children.Add($row.Element) | Out-Null
+        $built.Add($row)
+    }
+
+    $Ctx.Gui.Rows.Store = @($built)
+    Update-GuiActionState
+}
+
+function Update-GuiGuideRow {
+    if (-not $Ctx.Gui) { return }
+    $ui = $Ctx.Gui.Ui
+
+    Initialize-GuideCatalog
+    $ui.GuideRows.Children.Clear()
+
+    $first = $true
+    foreach ($category in $Ctx.GuideCategories) {
+        $inCategory = @($Ctx.Guides | Where-Object { $_.category -eq $category })
+        if ($inCategory.Count -eq 0) { continue }
+
+        $ui.GuideRows.Children.Add((New-GuiGroupHeader -Title $category -Count $inCategory.Count -First:$first)) | Out-Null
+        $first = $false
+
+        foreach ($guide in $inCategory) {
+            $ui.GuideRows.Children.Add((New-GuiGuideCard -Guide $guide)) | Out-Null
+        }
+    }
+}
+
+# One collapsible guide: a clickable header, and the numbered steps underneath.
+function New-GuiGuideCard {
+    param([Parameter(Mandatory)]$Guide)
+
+    $outer = New-Object Windows.Controls.StackPanel
+    $outer.Margin = New-Object Windows.Thickness 0, 0, 0, 3
+
+    $header = New-Object Windows.Controls.Border
+    $header.Padding = New-Object Windows.Thickness 10, 8, 10, 8
+    $header.CornerRadius = New-Object Windows.CornerRadius 5
+    $header.Cursor = 'Hand'
+    $header.Background = [Windows.Media.Brushes]::Transparent
+
+    $headerStack = New-Object Windows.Controls.StackPanel
+
+    $title = New-Object Windows.Controls.TextBlock
+    $title.Text = $Guide.title
+    $title.FontSize = 13
+    $title.Foreground = New-HexBrush '#FFEDE8F7'
+    $headerStack.Children.Add($title) | Out-Null
+
+    $summary = New-Object Windows.Controls.TextBlock
+    $summary.Text = "$($Guide.summary)   -   $(@($Guide.steps).Count) steps"
+    $summary.FontSize = 11
+    $summary.TextWrapping = 'Wrap'
+    $summary.Foreground = New-HexBrush '#FF8B81A8'
+    $summary.Margin = New-Object Windows.Thickness 0, 1, 0, 0
+    $headerStack.Children.Add($summary) | Out-Null
+
+    $header.Child = $headerStack
+    $outer.Children.Add($header) | Out-Null
+
+    $steps = New-Object Windows.Controls.StackPanel
+    $steps.Margin = New-Object Windows.Thickness 14, 4, 10, 12
+    $steps.Visibility = 'Collapsed'
+
+    $list = @($Guide.steps)
+    for ($i = 0; $i -lt $list.Count; $i++) {
+        $line = New-Object Windows.Controls.Grid
+        foreach ($unit in @([Windows.GridUnitType]::Auto, [Windows.GridUnitType]::Star)) {
+            $column = New-Object Windows.Controls.ColumnDefinition
+            $column.Width = New-Object Windows.GridLength 1, $unit
+            $line.ColumnDefinitions.Add($column)
+        }
+
+        $number = New-Object Windows.Controls.TextBlock
+        $number.Text = '{0}.' -f ($i + 1)
+        $number.FontSize = 12
+        $number.MinWidth = 24
+        $number.Foreground = New-HexBrush '#FFB388FF'
+        $number.VerticalAlignment = 'Top'
+        [Windows.Controls.Grid]::SetColumn($number, 0)
+        $line.Children.Add($number) | Out-Null
+
+        $text = New-Object Windows.Controls.TextBlock
+        # WPF renders the source typography fine, so no transliteration here.
+        $text.Text = [string]$list[$i]
+        $text.FontSize = 12
+        $text.TextWrapping = 'Wrap'
+        $text.Foreground = New-HexBrush '#FFC5BDDC'
+        $text.Margin = New-Object Windows.Thickness 6, 0, 0, 6
+        [Windows.Controls.Grid]::SetColumn($text, 1)
+        $line.Children.Add($text) | Out-Null
+
+        $steps.Children.Add($line) | Out-Null
+    }
+
+    $outer.Children.Add($steps) | Out-Null
+
+    # The steps panel is the sibling after the header, reached from $sender.
+    $header.Add_MouseLeftButtonUp({
+        param($sender, $e)
+        $panel = $sender.Parent
+        $body = $panel.Children[1]
+        $body.Visibility = if ($body.Visibility -eq 'Visible') { 'Collapsed' } else { 'Visible' }
+    })
+    $header.Add_MouseEnter({ param($sender, $e) $sender.Background = New-HexBrush '#FF120C1E' })
+    $header.Add_MouseLeave({ param($sender, $e) $sender.Background = [Windows.Media.Brushes]::Transparent })
+
+    return $outer
+}
+
+function Update-GuiCsFolderText {
+    if (-not $Ctx.Gui) { return }
+
+    $folders = @(Find-CsConfigFolder)
+    $Ctx.Gui.Ui.CsFolderText.Text = if ($folders.Count -eq 0) {
+        'No Counter-Strike cfg folder found. Is it installed through Steam?'
+    }
+    else {
+        "Found $($folders.Count) cfg folder(s):" + [Environment]::NewLine + ($folders -join [Environment]::NewLine)
+    }
+}
+
 # -----------------------------------------------------------------------------
 # The window
 # -----------------------------------------------------------------------------
@@ -596,6 +744,11 @@ function New-GuiWindow {
     foreach ($name in @(
         'VersionText', 'CatalogChip', 'DryRunBadge',
         'NavList', 'TweaksPanel', 'AppsPanel', 'ToolboxPanel', 'ProfilesPanel',
+        'StorePanel', 'GuidesPanel', 'PersonalizePanel', 'SettingsPanel',
+        'StoreRows', 'BtnStoreRefresh', 'BtnStoreInstall', 'GuideRows',
+        'BtnCursorInstall', 'BtnCursorRestore', 'WallpaperStyle', 'BtnWallpaper',
+        'CsFolderText', 'BtnCsDefault', 'BtnCsFile', 'BtnCsLaunch',
+        'InstallPath', 'BtnBrowseInstallPath', 'GitHubToken', 'BtnSaveSettings', 'BtnOpenStateFolder',
         'TweakSearch', 'TweakCategory', 'TweakRows', 'BtnApply', 'BtnRevert', 'BtnTweakAll', 'BtnTweakNone',
         'AppSearch', 'AppCategory', 'AppRows', 'BtnInstall', 'BtnAppNone',
         'ToolboxRows',
@@ -622,7 +775,7 @@ function New-GuiWindow {
         Window    = $window
         Ui        = $ui
         Paragraph = $paragraph
-        Rows      = [pscustomobject]@{ Tweaks = @(); Apps = @(); Toolbox = @() }
+        Rows      = [pscustomobject]@{ Tweaks = @(); Apps = @(); Toolbox = @(); Store = @() }
         Bound     = $BoundParameters
         Glyphs    = $Ctx.Theme.Glyph
     }
@@ -686,8 +839,17 @@ function New-GuiWindow {
     try { $window.Icon = New-GuiIcon } catch { Write-Log "Window icon failed: $($_.Exception.Message)" 'WARN' }
 
     # ---- navigation labels -------------------------------------------------
-    $navCounts = @($Ctx.Tweaks.Count, $Ctx.Apps.Count, @(Get-ToolboxActions).Count, -1)
-    $navNames = @('Tweaks', 'Apps', 'Toolbox', 'Profiles')
+    Initialize-GuideCatalog
+
+    # Order has to match the ListBoxItems in the XAML and the $panels array in
+    # the SelectionChanged handler. -1 means "no count worth showing".
+    $navNames  = @('Tweaks', 'Apps', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Profiles', 'Settings')
+    $navCounts = @($Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-ToolboxActions).Count, $Ctx.Guides.Count, -1, -1, -1)
+
+    if ($ui.NavList.Items.Count -ne $navNames.Count) {
+        Write-Log "Nav has $($ui.NavList.Items.Count) items but $($navNames.Count) names." 'WARN'
+    }
+
     for ($i = 0; $i -lt $ui.NavList.Items.Count -and $i -lt $navNames.Count; $i++) {
         Set-GuiNavContent -Item $ui.NavList.Items[$i] -Text $navNames[$i] -Count $navCounts[$i]
     }
@@ -729,7 +891,9 @@ function New-GuiWindow {
         param($sender, $e)
         if (-not $Ctx.Gui) { return }
 
-        $panels = @($Ctx.Gui.Ui.TweaksPanel, $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.ProfilesPanel)
+        $panels = @($Ctx.Gui.Ui.TweaksPanel, $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.StorePanel,
+                    $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.GuidesPanel, $Ctx.Gui.Ui.PersonalizePanel,
+                    $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
         for ($i = 0; $i -lt $panels.Count; $i++) {
             $panels[$i].Visibility = if ($i -eq $sender.SelectedIndex) { 'Visible' } else { 'Collapsed' }
         }
@@ -777,6 +941,103 @@ function New-GuiWindow {
         Invoke-GuiWork -Label 'installing apps' -Work { Invoke-AppInstall -Apps $selected }
     })
 
+    # ---- store -------------------------------------------------------------
+    # Loaded on demand: listing two orgs and every repo's latest release is a
+    # few dozen API calls, which has no business happening at window-open.
+    $ui.BtnStoreRefresh.Add_Click({
+        Invoke-GuiWork -Label 'loading store' -Work { Get-StoreApp -Refresh | Out-Null }
+        Update-GuiStoreRow
+        $Ctx.Gui.Ui.BtnStoreRefresh.Content = 'Reload'
+    })
+
+    $ui.BtnStoreInstall.Add_Click({
+        $selected = Get-CheckedItem -Rows $Ctx.Gui.Rows.Store
+        if ($selected.Count -eq 0) { $Ctx.Gui.Ui.StatusText.Text = 'Nothing selected.'; return }
+        Invoke-GuiWork -Label 'installing store apps' -Work { Invoke-StoreInstall -Apps $selected }
+    })
+
+    # ---- personalise -------------------------------------------------------
+    $ui.BtnCursorInstall.Add_Click({
+        $dialog = New-Object Windows.Forms.FolderBrowserDialog
+        $dialog.Description = 'Pick a folder containing .cur / .ani files'
+        if ($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { return }
+
+        $folder = $dialog.SelectedPath
+        Invoke-GuiWork -Label 'installing cursors' -Work {
+            Install-CursorScheme -Path $folder -SchemeName (Split-Path -Leaf $folder)
+        }
+    })
+
+    $ui.BtnCursorRestore.Add_Click({
+        Invoke-GuiWork -Label 'restoring cursors' -Work { Restore-DefaultCursor }
+    })
+
+    foreach ($style in @('Fill', 'Fit', 'Stretch', 'Tile', 'Center', 'Span')) {
+        $ui.WallpaperStyle.Items.Add($style) | Out-Null
+    }
+    $ui.WallpaperStyle.SelectedIndex = 0
+
+    $ui.BtnWallpaper.Add_Click({
+        $dialog = New-Object Windows.Forms.OpenFileDialog
+        $dialog.Filter = 'Images|*.jpg;*.jpeg;*.png;*.bmp;*.gif|All files (*.*)|*.*'
+        if ($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { return }
+
+        $image = $dialog.FileName
+        $style = [string]$Ctx.Gui.Ui.WallpaperStyle.SelectedItem
+        Invoke-GuiWork -Label 'setting wallpaper' -Work { Set-Wallpaper -Path $image -Style $style }
+    })
+
+    $ui.BtnCsDefault.Add_Click({
+        Invoke-GuiWork -Label 'installing config' -Work { Install-CsConfig }
+        Update-GuiCsFolderText
+    })
+
+    $ui.BtnCsFile.Add_Click({
+        $dialog = New-Object Windows.Forms.OpenFileDialog
+        $dialog.Filter = 'Counter-Strike config (*.cfg)|*.cfg'
+        if ($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { return }
+
+        $cfg = $dialog.FileName
+        Invoke-GuiWork -Label 'installing config' -Work { Install-CsConfig -LocalPath $cfg }
+    })
+
+    $ui.BtnCsLaunch.Add_Click({
+        $options = Get-CsLaunchOption
+        [Windows.Clipboard]::SetText($options)
+        $Ctx.Gui.Ui.StatusText.Text = "Copied: $options"
+        Write-Ok "Launch options copied to the clipboard: $options"
+    })
+
+    # ---- settings ----------------------------------------------------------
+    $ui.InstallPath.Text = Get-StoreInstallRoot
+    if (Get-MoscoviumSetting -Name 'GitHubToken') { $ui.GitHubToken.Password = '' }
+
+    $ui.BtnBrowseInstallPath.Add_Click({
+        $dialog = New-Object Windows.Forms.FolderBrowserDialog
+        $dialog.Description = 'Where store apps should be installed'
+        if ($dialog.ShowDialog() -eq [Windows.Forms.DialogResult]::OK) { $Ctx.Gui.Ui.InstallPath.Text = $dialog.SelectedPath }
+    })
+
+    $ui.BtnSaveSettings.Add_Click({
+        $ui = $Ctx.Gui.Ui
+        Set-MoscoviumSetting -Name 'AppsInstallPath' -Value ([string]$ui.InstallPath.Text)
+
+        # An empty box means "leave the stored token alone", not "clear it" - the
+        # box is never pre-filled with a secret, so blank is the normal state.
+        $token = [string]$ui.GitHubToken.Password
+        if ($token) {
+            Set-MoscoviumSetting -Name 'GitHubToken' -Value $token
+            $ui.GitHubToken.Password = ''
+        }
+
+        $ui.StatusText.Text = 'Settings saved.'
+    })
+
+    $ui.BtnOpenStateFolder.Add_Click({
+        Initialize-State
+        Start-Process -FilePath 'explorer.exe' -ArgumentList $Ctx.StateDir | Out-Null
+    })
+
     # ---- profiles ----------------------------------------------------------
     $ui.BtnBrowseProfile.Add_Click({
         $dialog = New-Object Windows.Forms.OpenFileDialog
@@ -821,6 +1082,8 @@ function New-GuiWindow {
     Update-GuiTweakRow
     Update-GuiAppRow
     Update-GuiToolboxRow
+    Update-GuiGuideRow
+    Update-GuiCsFolderText
 
     $ui.StatusText.Text = 'Ready'
 
@@ -865,7 +1128,7 @@ function Invoke-GuiWork {
     if (-not $Ctx.Gui) { & $Work; return }
 
     $ui = $Ctx.Gui.Ui
-    $buttons = @('BtnApply', 'BtnRevert', 'BtnInstall', 'BtnRunProfile', 'BtnSaveProfile')
+    $buttons = @('BtnApply', 'BtnRevert', 'BtnInstall', 'BtnStoreInstall', 'BtnStoreRefresh', 'BtnRunProfile', 'BtnSaveProfile')
     foreach ($name in $buttons) { $ui[$name].IsEnabled = $false }
 
     $ui.StatusText.Text = $Label
