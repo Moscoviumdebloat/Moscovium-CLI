@@ -1,11 +1,11 @@
 <#
-    Moscovium CLI v1.2.0
+    Moscovium CLI v2.1.0
     Windows debloat and setup toolbox - the command line companion to
     https://github.com/Moscoviumdebloat/Moscovium
 
         irm https://moscovium.win | iex
 
-    Build b28b534c9e  (a digest of src/ and data/ - same sources, same id).
+    Build 1bee281ca0  (a digest of src/ and data/ - same sources, same id).
     Check with:  .\moscovium.ps1 -Version
 
     GENERATED FILE - do not edit.
@@ -15131,4 +15131,4 @@ param(
         Restore-ConsoleEncoding -Previous $previousEncoding
     }
 
-} $PSBoundParameters '1.2.0' $SourceUrl 'b28b534c9e'
+} $PSBoundParameters '2.1.0' $SourceUrl '1bee281ca0'
