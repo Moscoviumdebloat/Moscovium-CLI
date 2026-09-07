@@ -66,6 +66,11 @@ irm <url> | iex                                    # menu, then pick GUI
 .\moscovium.ps1 -Gui
 ```
 
+Rows are grouped by category with a count per group, ticking one tints the whole
+row, the action buttons say how many are selected and disable when none are, and
+the sidebar carries the size of each page. Ctrl+F jumps to the search box on the
+current page; Escape clears it.
+
 Every button calls the function the CLI calls: `Invoke-Tweaks`,
 `Invoke-AppInstall`, `Invoke-ToolboxAction`, `Invoke-SetupProfile`. What makes
 that possible is three optional sinks on the shared context - `Sink`,
@@ -180,7 +185,7 @@ saved in the GUI runs here and vice versa.
   |_|  |_| \___/ |___/ \___| \___/   \_/   |_| \__,_||_| |_| |_|
 
   ──────────────────────────────────────────────────────────────────────────────
-  v1.0.0   ·   40 tweaks   ·   127 apps   ·   ● elevated
+  v1.2.0   ·   40 tweaks   ·   127 apps   ·   ● elevated
   ──────────────────────────────────────────────────────────────────────────────
 
   ─── Privacy & Telemetry ────────────────────────────────────────────────── 6/7

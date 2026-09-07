@@ -870,6 +870,51 @@ if (Test-StaApartment) {
         finally { $gui.Window.Close() }
     }
 
+    Test-Case 'lists are grouped by category, with a header per group' {
+        Import-WpfAssembly
+        $gui = New-GuiWindow
+
+        try {
+            # Every row, plus one header per category that has any rows.
+            $populated = 0
+            foreach ($category in $Ctx.TweakCategories) {
+                if (@($Ctx.Tweaks | Where-Object { $_.category -eq $category }).Count -gt 0) { $populated++ }
+            }
+
+            Assert-Equal ($Ctx.Tweaks.Count + $populated) $gui.Ui.TweakRows.Children.Count `
+                'children should be one header per non-empty category plus every row'
+
+            # Headers are DockPanels; rows are Borders.
+            $headers = @($gui.Ui.TweakRows.Children | Where-Object { $_ -is [Windows.Controls.DockPanel] })
+            Assert-Equal $Ctx.TweakCategories.Count $headers.Count
+        }
+        finally { $gui.Window.Close() }
+    }
+
+    Test-Case 'action buttons track the selection' {
+        Import-WpfAssembly
+        $gui = New-GuiWindow
+
+        try {
+            Assert-Equal $false $gui.Ui.BtnApply.IsEnabled 'Apply is enabled with nothing selected'
+            Assert-Equal 'Apply selected' $gui.Ui.BtnApply.Content
+
+            $gui.Rows.Tweaks[0].CheckBox.IsChecked = $true
+            $gui.Rows.Tweaks[1].CheckBox.IsChecked = $true
+
+            Assert-Equal $true $gui.Ui.BtnApply.IsEnabled
+            Assert-Equal 'Apply 2' $gui.Ui.BtnApply.Content
+            Assert-Equal 'Revert 2' $gui.Ui.BtnRevert.Content
+
+            $gui.Rows.Tweaks[0].CheckBox.IsChecked = $false
+            Assert-Equal 'Apply 1' $gui.Ui.BtnApply.Content
+
+            $gui.Rows.Tweaks[1].CheckBox.IsChecked = $false
+            Assert-Equal $false $gui.Ui.BtnApply.IsEnabled
+        }
+        finally { $gui.Window.Close() }
+    }
+
     Test-Case 'closing the window puts the console sinks back' {
         Import-WpfAssembly
         $gui = New-GuiWindow

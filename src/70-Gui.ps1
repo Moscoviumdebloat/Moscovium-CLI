@@ -138,20 +138,99 @@ function Invoke-UiEvents {
     [Windows.Threading.Dispatcher]::PushFrame($frame)
 }
 
-# Tints a row while its checkbox is ticked. Reached from $sender rather than a
-# captured $border: CheckBox -> Grid -> Border.
-function Set-GuiRowTint {
-    param([Parameter(Mandatory)]$CheckBox)
+function New-HexBrush {
+    param([Parameter(Mandatory)][string]$Hex)
+    New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($Hex))
+}
 
-    $border = $CheckBox.Parent.Parent
-    if (-not $border) { return }
+# Row background, decided from ticked + hovered together so neither clobbers the
+# other. Reached from $sender rather than a captured $border, because handlers
+# outlive the function that built the row: CheckBox -> Grid -> Border.
+function Set-GuiRowVisual {
+    param([Parameter(Mandatory)]$Border, [switch]$Hover)
 
-    if ($CheckBox.IsChecked -eq $true) {
-        $border.Background = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString('#FF17323C'))
-    }
-    else {
-        $border.Background = [Windows.Media.Brushes]::Transparent
-    }
+    $box = $Border.Child.Children[0]
+
+    if ($box.IsChecked -eq $true) { $Border.Background = New-HexBrush '#FF16323E' }
+    elseif ($Hover)               { $Border.Background = New-HexBrush '#FF212129' }
+    else                          { $Border.Background = [Windows.Media.Brushes]::Transparent }
+}
+
+# A tinted pill for a row's status, instead of loose coloured text.
+function New-GuiPill {
+    param(
+        [Parameter(Mandatory)][string]$Text,
+        [Parameter(Mandatory)][string]$Foreground,
+        [Parameter(Mandatory)][string]$Background
+    )
+
+    $pill = New-Object Windows.Controls.Border
+    $pill.CornerRadius = New-Object Windows.CornerRadius 9
+    $pill.Padding = New-Object Windows.Thickness 9, 2, 9, 2
+    $pill.Margin = New-Object Windows.Thickness 10, 0, 2, 0
+    $pill.VerticalAlignment = 'Center'
+    $pill.Background = New-HexBrush $Background
+
+    $label = New-Object Windows.Controls.TextBlock
+    $label.Text = $Text
+    $label.FontSize = 10.5
+    $label.Foreground = New-HexBrush $Foreground
+    $pill.Child = $label
+
+    return $pill
+}
+
+# A category divider inside a list, so 40 tweaks read as five groups.
+function New-GuiGroupHeader {
+    param([Parameter(Mandatory)][string]$Title, [Parameter(Mandatory)][int]$Count, [switch]$First)
+
+    $panel = New-Object Windows.Controls.DockPanel
+    $panel.Margin = New-Object Windows.Thickness 4, $(if ($First) { 2 } else { 14 }), 4, 5
+    $panel.LastChildFill = $true
+
+    # Not $count: parameter variables keep their declared type, so assigning a
+    # TextBlock to it fails the [int] conversion.
+    $badge = New-Object Windows.Controls.TextBlock
+    $badge.Text = [string]$Count
+    $badge.FontSize = 11
+    $badge.Foreground = New-HexBrush '#FF6E6E7E'
+    [Windows.Controls.DockPanel]::SetDock($badge, 'Right')
+    $panel.Children.Add($badge) | Out-Null
+
+    $label = New-Object Windows.Controls.TextBlock
+    $label.Text = $Title.ToUpperInvariant()
+    $label.FontSize = 10.5
+    $label.FontWeight = 'SemiBold'
+    $label.Foreground = New-HexBrush '#FF8E8E9C'
+    [Windows.Controls.DockPanel]::SetDock($label, 'Left')
+    $panel.Children.Add($label) | Out-Null
+
+    $rule = New-Object Windows.Controls.Border
+    $rule.Height = 1
+    $rule.Background = New-HexBrush '#FF2C2C36'
+    $rule.VerticalAlignment = 'Center'
+    $rule.Margin = New-Object Windows.Thickness 10, 1, 10, 0
+    $panel.Children.Add($rule) | Out-Null
+
+    return $panel
+}
+
+# Keeps the action buttons honest about how much is selected, and disabled when
+# nothing is.
+function Update-GuiActionState {
+    if (-not $Ctx.Gui) { return }
+
+    $ui = $Ctx.Gui.Ui
+    $tweaks = @(Get-CheckedItem -Rows $Ctx.Gui.Rows.Tweaks).Count
+    $apps = @(Get-CheckedItem -Rows $Ctx.Gui.Rows.Apps).Count
+
+    $ui.BtnApply.Content  = if ($tweaks) { "Apply $tweaks" } else { 'Apply selected' }
+    $ui.BtnRevert.Content = if ($tweaks) { "Revert $tweaks" } else { 'Revert selected' }
+    $ui.BtnApply.IsEnabled = ($tweaks -gt 0)
+    $ui.BtnRevert.IsEnabled = ($tweaks -gt 0)
+
+    $ui.BtnInstall.Content = if ($apps) { "Install $apps" } else { 'Install selected' }
+    $ui.BtnInstall.IsEnabled = ($apps -gt 0)
 }
 
 # One row: a checkbox, a primary label, a secondary line, and a status chip.
@@ -162,7 +241,8 @@ function New-GuiRow {
         [Parameter(Mandatory)][string]$Primary,
         [AllowEmptyString()][string]$Secondary = '',
         [AllowEmptyString()][string]$Status = '',
-        [string]$StatusBrush = '#FF8E8E9C',
+        [string]$StatusBrush = '#FF9C9CAC',
+        [string]$StatusFill = '#FF262630',
         [switch]$NoCheckBox
     )
 
@@ -184,11 +264,20 @@ function New-GuiRow {
     $check.Margin = New-Object Windows.Thickness 0, 0, 10, 0
     $check.Foreground = ConvertTo-Brush 'Gray'
     $check.Tag = $Item
-    if ($NoCheckBox) { $check.Visibility = 'Hidden' }
+    if ($NoCheckBox) { $check.Visibility = 'Collapsed' }
 
-    # A tick is easy to lose in a list of 127, so tint the whole row.
-    $check.Add_Checked({   param($sender, $e) Set-GuiRowTint -CheckBox $sender })
-    $check.Add_Unchecked({ param($sender, $e) Set-GuiRowTint -CheckBox $sender })
+    # A tick is easy to lose in a list of 127, so tint the whole row - and keep
+    # the action buttons' counts in step.
+    $check.Add_Checked({
+        param($sender, $e)
+        Set-GuiRowVisual -Border $sender.Parent.Parent
+        Update-GuiActionState
+    })
+    $check.Add_Unchecked({
+        param($sender, $e)
+        Set-GuiRowVisual -Border $sender.Parent.Parent
+        Update-GuiActionState
+    })
 
     [Windows.Controls.Grid]::SetColumn($check, 0)
     $grid.Children.Add($check) | Out-Null
@@ -215,24 +304,22 @@ function New-GuiRow {
     $grid.Children.Add($stack) | Out-Null
 
     if ($Status) {
-        $chip = New-Object Windows.Controls.TextBlock
-        $chip.Text = $Status
-        $chip.FontSize = 11
-        $chip.VerticalAlignment = 'Center'
-        $chip.Margin = New-Object Windows.Thickness 10, 0, 4, 0
-        $chip.Foreground = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($StatusBrush))
-        [Windows.Controls.Grid]::SetColumn($chip, 2)
-        $grid.Children.Add($chip) | Out-Null
+        $pill = New-GuiPill -Text $Status -Foreground $StatusBrush -Background $StatusFill
+        [Windows.Controls.Grid]::SetColumn($pill, 2)
+        $grid.Children.Add($pill) | Out-Null
     }
 
     $border.Child = $grid
 
-    # Clicking anywhere on the row toggles it, not just the 13px checkbox.
+    # Clicking anywhere on the row toggles it, not just the 18px checkbox.
     $border.Add_MouseLeftButtonUp({
         param($sender, $e)
         $box = $sender.Child.Children[0]
         if ($box.Visibility -eq 'Visible') { $box.IsChecked = -not $box.IsChecked }
     })
+
+    $border.Add_MouseEnter({ param($sender, $e) Set-GuiRowVisual -Border $sender -Hover })
+    $border.Add_MouseLeave({ param($sender, $e) Set-GuiRowVisual -Border $sender })
 
     [pscustomobject]@{ Element = $border; CheckBox = $check; Item = $Item }
 }
@@ -258,28 +345,43 @@ function Update-GuiTweakRow {
 
     $search = [string]$ui.TweakSearch.Text
     $category = [string]$ui.TweakCategory.SelectedItem
+    $first = $true
 
-    foreach ($tweak in $Ctx.Tweaks) {
-        if ($category -and $category -ne 'All categories' -and $tweak.category -ne $category) { continue }
-        if ($search -and -not (
-            (Test-NameMatch -Value $tweak.name -Pattern $search) -or
-            (Test-NameMatch -Value $tweak.description -Pattern $search) -or
-            (Test-NameMatch -Value $tweak.category -Pattern $search))) { continue }
+    # Walk categories rather than the flat list, so the rows arrive grouped.
+    foreach ($group in $Ctx.TweakCategories) {
+        if ($category -and $category -ne 'All categories' -and $group -ne $category) { continue }
 
-        $status = Get-TweakStatus -Tweak $tweak
-        $label, $brush = switch ($status) {
-            'Applied' { 'applied', '#FF7BD88F' }
-            'Partial' { 'partial', '#FFF0C674' }
-            'Action'  { 'action',  '#FF4FC3F7' }
-            default   { '',        '#FF8E8E9C' }
+        $matching = @($Ctx.Tweaks | Where-Object {
+            $_.category -eq $group -and (
+                -not $search -or
+                (Test-NameMatch -Value $_.name -Pattern $search) -or
+                (Test-NameMatch -Value $_.description -Pattern $search) -or
+                (Test-NameMatch -Value $_.category -Pattern $search))
+        })
+
+        if ($matching.Count -eq 0) { continue }
+
+        $ui.TweakRows.Children.Add((New-GuiGroupHeader -Title $group -Count $matching.Count -First:$first)) | Out-Null
+        $first = $false
+
+        foreach ($tweak in $matching) {
+            $status = Get-TweakStatus -Tweak $tweak
+            $label, $ink, $fill = switch ($status) {
+                'Applied' { 'applied', '#FF7BD88F', '#FF1B3226' }
+                'Partial' { 'partial', '#FFF0C674', '#FF332C18' }
+                'Action'  { 'action',  '#FF4FC3F7', '#FF16303C' }
+                default   { '',        '#FF9C9CAC', '#FF262630' }
+            }
+
+            $row = New-GuiRow -Item $tweak -Primary $tweak.name -Secondary $tweak.description `
+                -Status $label -StatusBrush $ink -StatusFill $fill
+            $ui.TweakRows.Children.Add($row.Element) | Out-Null
+            $built.Add($row)
         }
-
-        $row = New-GuiRow -Item $tweak -Primary $tweak.name -Secondary $tweak.description -Status $label -StatusBrush $brush
-        $ui.TweakRows.Children.Add($row.Element) | Out-Null
-        $built.Add($row)
     }
 
     $Ctx.Gui.Rows.Tweaks = @($built)
+    Update-GuiActionState
 }
 
 function Update-GuiAppRow {
@@ -291,25 +393,41 @@ function Update-GuiAppRow {
 
     $search = [string]$ui.AppSearch.Text
     $category = [string]$ui.AppCategory.SelectedItem
+    $first = $true
 
-    foreach ($app in $Ctx.Apps) {
-        if ($category -and $category -ne 'All categories' -and $app.category -ne $category) { continue }
-        if ($search -and -not (
-            (Test-NameMatch -Value $app.name -Pattern $search) -or
-            (Test-NameMatch -Value $app.id -Pattern $search) -or
-            (Test-NameMatch -Value ([string]$app.description) -Pattern $search))) { continue }
+    foreach ($group in $Ctx.AppCategories) {
+        if ($category -and $category -ne 'All categories' -and $group -ne $category) { continue }
 
-        $how = if ($app.scriptUrl) { 'script' }
-               elseif ($app.zipUrl) { 'archive' }
-               elseif ($app.downloadUrl) { 'download' }
-               else { 'winget' }
+        $matching = @($Ctx.Apps | Where-Object {
+            $_.category -eq $group -and (
+                -not $search -or
+                (Test-NameMatch -Value $_.name -Pattern $search) -or
+                (Test-NameMatch -Value $_.id -Pattern $search) -or
+                (Test-NameMatch -Value ([string]$_.description) -Pattern $search))
+        })
 
-        $row = New-GuiRow -Item $app -Primary $app.name -Secondary ([string]$app.description) -Status $how -StatusBrush '#FF8E8E9C'
-        $ui.AppRows.Children.Add($row.Element) | Out-Null
-        $built.Add($row)
+        if ($matching.Count -eq 0) { continue }
+
+        $ui.AppRows.Children.Add((New-GuiGroupHeader -Title $group -Count $matching.Count -First:$first)) | Out-Null
+        $first = $false
+
+        foreach ($app in $matching) {
+            # Anything but winget is worth flagging: it means a vendor download
+            # or, for a script, remote code.
+            $how, $ink, $fill = if ($app.scriptUrl)      { 'script',   '#FFF0C674', '#FF332C18' }
+                                elseif ($app.zipUrl)     { 'archive',  '#FF9C9CAC', '#FF262630' }
+                                elseif ($app.downloadUrl){ 'download', '#FF9C9CAC', '#FF262630' }
+                                else                     { 'winget',   '#FF6E7E8C', '#FF20262C' }
+
+            $row = New-GuiRow -Item $app -Primary $app.name -Secondary ([string]$app.description) `
+                -Status $how -StatusBrush $ink -StatusFill $fill
+            $ui.AppRows.Children.Add($row.Element) | Out-Null
+            $built.Add($row)
+        }
     }
 
     $Ctx.Gui.Rows.Apps = @($built)
+    Update-GuiActionState
 }
 
 function Update-GuiToolboxRow {
@@ -319,31 +437,115 @@ function Update-GuiToolboxRow {
     $ui.ToolboxRows.Children.Clear()
     $built = [System.Collections.Generic.List[object]]::new()
 
-    foreach ($action in Get-ToolboxActions) {
-        $row = New-GuiRow -Item $action -Primary $action.Name -Secondary $action.Description -NoCheckBox
+    # Group by what the action actually does, so "runs a third-party script" is
+    # never mistaken for "opens a control panel".
+    $groups = @(
+        @{ Title = 'Third-party debloat scripts'; Ids = @('winutil', 'winutil-preset', 'raphi', 'raphi-auto') }
+        @{ Title = 'System tuning';               Ids = @('network-better', 'network-default', 'dynamictick-off', 'dynamictick-on', 'priority-22', 'priority-default') }
+        @{ Title = 'Classic control panels';      Ids = @('control-panel', 'services', 'mouse', 'keyboard', 'sound') }
+    )
 
-        # One click runs it; a checkbox would imply batching, which these are not.
-        $run = New-Object Windows.Controls.Button
-        $run.Content = 'Run'
-        $run.Padding = New-Object Windows.Thickness 12, 4, 12, 4
-        $run.Margin = New-Object Windows.Thickness 8, 0, 0, 0
-        $run.VerticalAlignment = 'Center'
-        $run.Tag = $action.Id
-        [Windows.Controls.Grid]::SetColumn($run, 2)
+    $all = @(Get-ToolboxActions)
 
-        $run.Add_Click({
-            param($sender, $e)
-            $id = [string]$sender.Tag
-            Invoke-GuiWork -Label "toolbox: $id" -Work { Invoke-ToolboxAction -Id $id }
-        })
+    # Anything a future catalog adds that the grouping above does not know about
+    # still gets shown, under Other.
+    $known = @($groups | ForEach-Object { $_.Ids })
+    $rest = @($all | Where-Object { $known -notcontains $_.Id })
+    if ($rest.Count -gt 0) { $groups += @{ Title = 'Other'; Ids = @($rest | ForEach-Object { $_.Id }) } }
 
-        $row.Element.Child.Children.Add($run) | Out-Null
+    $first = $true
 
-        $ui.ToolboxRows.Children.Add($row.Element) | Out-Null
-        $built.Add($row)
+    foreach ($group in $groups) {
+        $members = @($all | Where-Object { $group.Ids -contains $_.Id })
+        if ($members.Count -eq 0) { continue }
+
+        $ui.ToolboxRows.Children.Add((New-GuiGroupHeader -Title $group.Title -Count $members.Count -First:$first)) | Out-Null
+        $first = $false
+
+        foreach ($action in $members) {
+            $row = New-GuiRow -Item $action -Primary $action.Name -Secondary $action.Description -NoCheckBox
+
+            # One click runs it; a checkbox would imply batching, which these are not.
+            $run = New-Object Windows.Controls.Button
+            $run.Content = 'Run'
+            $run.Padding = New-Object Windows.Thickness 12, 4, 12, 4
+            $run.Margin = New-Object Windows.Thickness 8, 0, 0, 0
+            $run.VerticalAlignment = 'Center'
+            $run.Tag = $action.Id
+            [Windows.Controls.Grid]::SetColumn($run, 2)
+
+            $run.Add_Click({
+                param($sender, $e)
+                $id = [string]$sender.Tag
+                Invoke-GuiWork -Label "toolbox: $id" -Work { Invoke-ToolboxAction -Id $id }
+            })
+
+            $row.Element.Child.Children.Add($run) | Out-Null
+
+            $ui.ToolboxRows.Children.Add($row.Element) | Out-Null
+            $built.Add($row)
+        }
     }
 
     $Ctx.Gui.Rows.Toolbox = @($built)
+}
+
+# Nav rows carry a count on the right, so the sidebar says how much is behind
+# each page without opening it.
+function Set-GuiNavContent {
+    param([Parameter(Mandatory)]$Item, [Parameter(Mandatory)][string]$Text, [int]$Count = -1)
+
+    $panel = New-Object Windows.Controls.DockPanel
+    $panel.LastChildFill = $true
+
+    if ($Count -ge 0) {
+        $badge = New-Object Windows.Controls.TextBlock
+        $badge.Text = [string]$Count
+        $badge.FontSize = 11
+        $badge.Foreground = New-HexBrush '#FF6E6E7E'
+        $badge.VerticalAlignment = 'Center'
+        [Windows.Controls.DockPanel]::SetDock($badge, 'Right')
+        $panel.Children.Add($badge) | Out-Null
+    }
+
+    $label = New-Object Windows.Controls.TextBlock
+    $label.Text = $Text
+    $label.FontSize = 14
+
+    # The global TextBlock style pins a Foreground, which would break the
+    # inheritance the nav's selected/unselected colours rely on. Bind to the
+    # owning ListBoxItem so the label tracks selection.
+    $binding = New-Object Windows.Data.Binding 'Foreground'
+    $source = New-Object Windows.Data.RelativeSource ([Windows.Data.RelativeSourceMode]::FindAncestor)
+    $source.AncestorType = [Windows.Controls.ListBoxItem]
+    $binding.RelativeSource = $source
+    [void]$label.SetBinding([Windows.Controls.TextBlock]::ForegroundProperty, $binding)
+
+    $panel.Children.Add($label) | Out-Null
+
+    $Item.Content = $panel
+}
+
+# A drawn window icon, so the title bar and taskbar are not the generic
+# PowerShell one. Cheaper than shipping an .ico through the single-file bundle.
+function New-GuiIcon {
+    $visual = New-Object Windows.Media.DrawingVisual
+    $dc = $visual.RenderOpen()
+    try {
+        $accent = New-HexBrush '#FF4FC3F7'
+        $dc.DrawRoundedRectangle($accent, $null, (New-Object Windows.Rect 0, 0, 32, 32), 7, 7)
+
+        # A stylised M, stroked rather than typeset, so no font is involved.
+        $pen = New-Object Windows.Media.Pen ((New-HexBrush '#FF0B1218'), 3.4)
+        $pen.StartLineCap = 'Round'; $pen.EndLineCap = 'Round'; $pen.LineJoin = 'Round'
+        $geometry = [Windows.Media.Geometry]::Parse('M 8,23 L 8,9 L 16,18 L 24,9 L 24,23')
+        $dc.DrawGeometry($null, $pen, $geometry)
+    }
+    finally { $dc.Close() }
+
+    $bitmap = New-Object Windows.Media.Imaging.RenderTargetBitmap(32, 32, 96, 96, [Windows.Media.PixelFormats]::Pbgra32)
+    $bitmap.Render($visual)
+    return $bitmap
 }
 
 # -----------------------------------------------------------------------------
@@ -450,6 +652,36 @@ function New-GuiWindow {
 
         return ($answer -eq [Windows.MessageBoxResult]::Yes)
     }
+
+    try { $window.Icon = New-GuiIcon } catch { Write-Log "Window icon failed: $($_.Exception.Message)" 'WARN' }
+
+    # ---- navigation labels -------------------------------------------------
+    $navCounts = @($Ctx.Tweaks.Count, $Ctx.Apps.Count, @(Get-ToolboxActions).Count, -1)
+    $navNames = @('Tweaks', 'Apps', 'Toolbox', 'Profiles')
+    for ($i = 0; $i -lt $ui.NavList.Items.Count -and $i -lt $navNames.Count; $i++) {
+        Set-GuiNavContent -Item $ui.NavList.Items[$i] -Text $navNames[$i] -Count $navCounts[$i]
+    }
+
+    # ---- keyboard ----------------------------------------------------------
+    $window.Add_PreviewKeyDown({
+        param($sender, $e)
+        if (-not $Ctx.Gui) { return }
+        $ui = $Ctx.Gui.Ui
+
+        $box = if ($ui.AppsPanel.Visibility -eq 'Visible') { $ui.AppSearch }
+               elseif ($ui.TweaksPanel.Visibility -eq 'Visible') { $ui.TweakSearch }
+               else { $null }
+
+        $ctrl = [Windows.Input.Keyboard]::Modifiers -band [Windows.Input.ModifierKeys]::Control
+
+        if ($ctrl -and $e.Key -eq [Windows.Input.Key]::F) {
+            if ($box) { [void]$box.Focus(); $box.SelectAll() }
+            $e.Handled = $true
+        }
+        elseif ($e.Key -eq [Windows.Input.Key]::Escape) {
+            if ($box -and $box.Text) { $box.Text = ''; $e.Handled = $true }
+        }
+    })
 
     # ---- header ------------------------------------------------------------
     $ui.VersionText.Text = "v$($Ctx.Version)"
