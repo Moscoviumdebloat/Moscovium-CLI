@@ -474,14 +474,13 @@ function Update-GuiToolboxRow {
     # Group by what the action actually does, so "runs a third-party script" is
     # never mistaken for "opens a control panel".
     $groups = @(
-        # First, and on its own, because it is the one that runs everything else.
-        @{ Title = 'Everything at once';          Ids = @('oneclick') }
         @{ Title = 'Third-party debloat scripts'; Ids = @('winutil', 'winutil-preset', 'raphi', 'raphi-auto') }
         @{ Title = 'System tuning';               Ids = @('updates-security', 'network-better', 'network-default', 'dynamictick-off', 'dynamictick-on', 'priority-22', 'priority-default') }
         @{ Title = 'Classic control panels';      Ids = @('control-panel', 'services', 'mouse', 'keyboard', 'sound') }
     )
 
-    $all = @(Get-ToolboxActions)
+    # The one-click box is not here: it has the landing page to itself.
+    $all = @(Get-ToolboxListActions)
 
     # Anything a future catalog adds that the grouping above does not know about
     # still gets shown, under Other.
@@ -524,6 +523,83 @@ function Update-GuiToolboxRow {
     }
 
     $Ctx.Gui.Rows.Toolbox = @($built)
+}
+
+# The landing page's step list. Built from the real presets rather than written
+# into the XAML, so the counts cannot drift from what the box actually runs.
+function Update-GuiOneClickSteps {
+    if (-not $Ctx.Gui) { return }
+    $ui = $Ctx.Gui.Ui
+
+    $ui.OneClickSteps.Children.Clear()
+
+    # A preset that failed to load is worth saying out loud, not worth crashing
+    # the page over - the other eight nav pages still work.
+    $steps = $null
+    try { $steps = @(Get-OneClickSteps) }
+    catch {
+        $ui.OneClickBlurb.Text = "The presets could not be read: $($_.Exception.Message)"
+        $ui.BtnOneClick.IsEnabled = $false
+        return
+    }
+
+    $number = 0
+    foreach ($step in $steps) {
+        $number++
+
+        $line = New-Object Windows.Controls.Grid
+        $line.Margin = New-Object Windows.Thickness 0, 0, 0, 7
+        foreach ($unit in @([Windows.GridUnitType]::Auto, [Windows.GridUnitType]::Star)) {
+            $column = New-Object Windows.Controls.ColumnDefinition
+            $column.Width = New-Object Windows.GridLength 1, $unit
+            $line.ColumnDefinitions.Add($column)
+        }
+
+        $chip = New-Object Windows.Controls.Border
+        $chip.Width = 24
+        $chip.Height = 24
+        $chip.CornerRadius = New-Object Windows.CornerRadius 12
+        $chip.Background = New-HexBrush '#FF1C1430'
+        $chip.BorderBrush = New-HexBrush '#FF261B3D'
+        $chip.BorderThickness = New-Object Windows.Thickness 1
+        $chip.VerticalAlignment = 'Top'
+
+        $index = New-Object Windows.Controls.TextBlock
+        $index.Text = [string]$number
+        $index.FontSize = 11.5
+        $index.Foreground = New-HexBrush '#FFB388FF'
+        $index.HorizontalAlignment = 'Center'
+        $index.VerticalAlignment = 'Center'
+        $chip.Child = $index
+
+        [Windows.Controls.Grid]::SetColumn($chip, 0)
+        $line.Children.Add($chip) | Out-Null
+
+        $text = New-Object Windows.Controls.StackPanel
+        $text.Margin = New-Object Windows.Thickness 11, 1, 0, 0
+
+        $title = New-Object Windows.Controls.TextBlock
+        $title.Text = $step.Title
+        $title.FontSize = 13
+        $title.TextWrapping = 'Wrap'
+        $title.Foreground = New-HexBrush '#FFEDE8F7'
+        $text.Children.Add($title) | Out-Null
+
+        if ($step.Detail) {
+            $detail = New-Object Windows.Controls.TextBlock
+            $detail.Text = $step.Detail
+            $detail.FontSize = 11.5
+            $detail.TextWrapping = 'Wrap'
+            $detail.Foreground = New-HexBrush '#FF8B81A8'
+            $detail.Margin = New-Object Windows.Thickness 0, 2, 0, 0
+            $text.Children.Add($detail) | Out-Null
+        }
+
+        [Windows.Controls.Grid]::SetColumn($text, 1)
+        $line.Children.Add($text) | Out-Null
+
+        $ui.OneClickSteps.Children.Add($line) | Out-Null
+    }
 }
 
 # Nav rows carry a count on the right, so the sidebar says how much is behind
@@ -745,8 +821,9 @@ function New-GuiWindow {
     $ui = @{}
     foreach ($name in @(
         'VersionText', 'CatalogChip', 'DryRunBadge',
-        'NavList', 'TweaksPanel', 'AppsPanel', 'ToolboxPanel', 'ProfilesPanel',
+        'NavList', 'OneClickPanel', 'TweaksPanel', 'AppsPanel', 'ToolboxPanel', 'ProfilesPanel',
         'StorePanel', 'GuidesPanel', 'PersonalizePanel', 'SettingsPanel',
+        'OneClickSteps', 'OneClickBlurb', 'BtnOneClick', 'BtnOneClickToolbox',
         'StoreRows', 'BtnStoreRefresh', 'BtnStoreInstall', 'GuideRows',
         'BtnCursorInstall', 'BtnCursorRestore', 'WallpaperStyle', 'BtnWallpaper',
         'CsFolderText', 'BtnCsDefault', 'BtnCsFile', 'BtnCsLaunch',
@@ -778,6 +855,9 @@ function New-GuiWindow {
         Ui        = $ui
         Paragraph = $paragraph
         Rows      = [pscustomobject]@{ Tweaks = @(); Apps = @(); Toolbox = @(); Store = @() }
+        # Filled in below. Lets a handler say which page it wants by name
+        # instead of hard-coding an index into the sidebar.
+        NavNames  = @()
         Bound     = $BoundParameters
         Glyphs    = $Ctx.Theme.Glyph
     }
@@ -845,8 +925,12 @@ function New-GuiWindow {
 
     # Order has to match the ListBoxItems in the XAML and the $panels array in
     # the SelectionChanged handler. -1 means "no count worth showing".
-    $navNames  = @('Tweaks', 'Apps', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Profiles', 'Settings')
-    $navCounts = @($Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-ToolboxActions).Count, $Ctx.Guides.Count, -1, -1, -1)
+    $navNames  = @('One click', 'Tweaks', 'Apps', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Profiles', 'Settings')
+    $navCounts = @(-1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1)
+
+    # The item Content becomes a DockPanel below, so the labels are no longer
+    # readable off the ListBox. Keep them where a handler can still find them.
+    $Ctx.Gui.NavNames = $navNames
 
     if ($ui.NavList.Items.Count -ne $navNames.Count) {
         Write-Log "Nav has $($ui.NavList.Items.Count) items but $($navNames.Count) names." 'WARN'
@@ -893,9 +977,9 @@ function New-GuiWindow {
         param($sender, $e)
         if (-not $Ctx.Gui) { return }
 
-        $panels = @($Ctx.Gui.Ui.TweaksPanel, $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.StorePanel,
-                    $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.GuidesPanel, $Ctx.Gui.Ui.PersonalizePanel,
-                    $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
+        $panels = @($Ctx.Gui.Ui.OneClickPanel, $Ctx.Gui.Ui.TweaksPanel, $Ctx.Gui.Ui.AppsPanel,
+                    $Ctx.Gui.Ui.StorePanel, $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.GuidesPanel,
+                    $Ctx.Gui.Ui.PersonalizePanel, $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
         for ($i = 0; $i -lt $panels.Count; $i++) {
             $panels[$i].Visibility = if ($i -eq $sender.SelectedIndex) { 'Visible' } else { 'Collapsed' }
         }
@@ -920,6 +1004,20 @@ function New-GuiWindow {
     $ui.BtnAppNone.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Apps) { $r.CheckBox.IsChecked = $false } })
 
     # ---- actions -----------------------------------------------------------
+    $ui.BtnOneClick.Add_Click({
+        Invoke-GuiWork -Label 'one-click debloat box' -Work { Invoke-ToolboxAction -Id 'oneclick' }
+        # Steps 3 to 6 write registry and boot state the Tweaks page reports on.
+        Update-GuiTweakRow
+    })
+
+    # Not a duplicate of the nav: someone reading the landing page and deciding
+    # they want fewer steps should not have to find the sidebar.
+    $ui.BtnOneClickToolbox.Add_Click({
+        if (-not $Ctx.Gui) { return }
+        $index = [array]::IndexOf([string[]]@($Ctx.Gui.NavNames), 'Toolbox')
+        if ($index -ge 0) { $Ctx.Gui.Ui.NavList.SelectedIndex = $index }
+    })
+
     $ui.BtnApply.Add_Click({
         $selected = Get-CheckedItem -Rows $Ctx.Gui.Rows.Tweaks
         if ($selected.Count -eq 0) { $Ctx.Gui.Ui.StatusText.Text = 'Nothing selected.'; return }
@@ -1081,6 +1179,7 @@ function New-GuiWindow {
     })
 
     # ---- go ----------------------------------------------------------------
+    Update-GuiOneClickSteps
     Update-GuiTweakRow
     Update-GuiAppRow
     Update-GuiToolboxRow
@@ -1096,9 +1195,10 @@ function New-GuiWindow {
     if ($Ctx.DryRun) { Write-Warn 'Dry run - nothing will actually be changed.' }
 
     [pscustomobject]@{
-        Window = $window
-        Ui     = $ui
-        Rows   = $Ctx.Gui.Rows
+        Window   = $window
+        Ui       = $ui
+        Rows     = $Ctx.Gui.Rows
+        NavNames = $Ctx.Gui.NavNames
     }
 }
 
@@ -1130,7 +1230,7 @@ function Invoke-GuiWork {
     if (-not $Ctx.Gui) { & $Work; return }
 
     $ui = $Ctx.Gui.Ui
-    $buttons = @('BtnApply', 'BtnRevert', 'BtnInstall', 'BtnStoreInstall', 'BtnStoreRefresh', 'BtnRunProfile', 'BtnSaveProfile')
+    $buttons = @('BtnOneClick', 'BtnApply', 'BtnRevert', 'BtnInstall', 'BtnStoreInstall', 'BtnStoreRefresh', 'BtnRunProfile', 'BtnSaveProfile')
     foreach ($name in $buttons) { $ui[$name].IsEnabled = $false }
 
     $ui.StatusText.Text = $Label

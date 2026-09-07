@@ -367,7 +367,8 @@
       <Border Grid.Column="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,1,0">
         <ListBox x:Name="NavList" Background="Transparent" BorderThickness="0" Margin="0,12,0,0"
                  ItemContainerStyle="{StaticResource NavItem}">
-          <ListBoxItem Content="Tweaks" IsSelected="True"/>
+          <ListBoxItem Content="One click" IsSelected="True"/>
+          <ListBoxItem Content="Tweaks"/>
           <ListBoxItem Content="Apps"/>
           <ListBoxItem Content="Store"/>
           <ListBoxItem Content="Toolbox"/>
@@ -388,7 +389,74 @@
         <!-- pages share this cell; only one is visible at a time -->
         <Grid Grid.Row="0" Margin="22,18,22,0">
 
-          <Grid x:Name="TweaksPanel">
+          <!-- the landing page: the whole debloat pass, one button -->
+          <Grid x:Name="OneClickPanel">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="One-click debloat box" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+              <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                      BorderThickness="1" CornerRadius="10" Padding="26,19,26,16" Margin="0">
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+
+                  <StackPanel Grid.Column="0" Margin="0,0,22,0">
+                    <TextBlock Text="Debloat this machine" FontSize="24" FontWeight="SemiBold"
+                               Foreground="{StaticResource TitleInk}"/>
+                    <TextBlock x:Name="OneClickBlurb" TextWrapping="Wrap" FontSize="13" Margin="0,7,0,0"
+                               Foreground="{StaticResource Muted}"
+                               Text="Six steps, one prompt. Everything is listed before anything runs."/>
+
+                    <StackPanel x:Name="OneClickSteps" Margin="0,15,0,0"/>
+                  </StackPanel>
+
+                  <!-- The caution lives beside the button rather than under the
+                       steps: down there it fell below the fold on an 760px
+                       window, which is no use for a safety notice. -->
+                  <StackPanel Grid.Column="1" VerticalAlignment="Top" Width="208">
+                    <Button x:Name="BtnOneClick" Content="Run the box" Style="{StaticResource Primary}"
+                            FontSize="15" Padding="0,13" HorizontalAlignment="Stretch"/>
+                    <TextBlock TextWrapping="Wrap" FontSize="11" Margin="2,8,0,0"
+                               Foreground="{StaticResource Faint}"
+                               Text="Asks once, then runs all six without asking again."/>
+                    <!-- The label says what it does, so no note under this one. -->
+                    <Button x:Name="BtnOneClickToolbox" Content="Pick steps yourself" Margin="0,12,0,0"
+                            Padding="0,8" HorizontalAlignment="Stretch"
+                            ToolTip="Every step is also a separate action in the Toolbox"/>
+
+                    <Border Background="{StaticResource Panel2}" BorderBrush="{StaticResource Line}"
+                            BorderThickness="1" CornerRadius="7" Padding="12,9" Margin="0,14,0,0">
+                      <StackPanel>
+                        <TextBlock Text="Before you press it" FontSize="11.5" FontWeight="SemiBold"
+                                   Foreground="{StaticResource Warn}"/>
+                        <TextBlock TextWrapping="Wrap" FontSize="11" Margin="0,5,0,0" LineHeight="15"
+                                   Foreground="{StaticResource Muted}"
+                                   Text="Steps 1 and 2 run scripts published by other people. Both URLs are printed before anything runs."/>
+                        <TextBlock TextWrapping="Wrap" FontSize="11" Margin="0,5,0,0" LineHeight="15"
+                                   Foreground="{StaticResource Muted}"
+                                   Text="Step 1 is not unattended - you press Run Tweaks in WinUtil's window."/>
+                        <TextBlock TextWrapping="Wrap" FontSize="11" Margin="0,5,0,0" LineHeight="15"
+                                   Foreground="{StaticResource Muted}"
+                                   Text="Restore point first. Steps 5 and 6 need a reboot."/>
+                      </StackPanel>
+                    </Border>
+                  </StackPanel>
+                </Grid>
+              </Border>
+            </ScrollViewer>
+          </Grid>
+
+          <Grid x:Name="TweaksPanel" Visibility="Collapsed">
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="Auto"/>

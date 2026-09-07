@@ -17,8 +17,12 @@ $EmbeddedRaphiOneClickJson = ''
 
 function Get-ToolboxActions {
     @(
+        # Standalone: this one has its own front door - the GUI's landing page
+        # and the CLI's first menu entry - so the toolbox lists leave it out
+        # rather than burying it among the one-shot actions. Still addressable
+        # as -Toolbox oneclick, and still shown by -List toolbox.
         [pscustomobject]@{
-            Id = 'oneclick'; Name = 'One-click debloat box'; Admin = $true
+            Id = 'oneclick'; Name = 'One-click debloat box'; Admin = $true; Standalone = $true
             Description = 'The whole thing in one go: WinUtil preset, Win11Debloat preset, recommended Windows Update settings, TCP autotuning off, Win32PrioritySeparation 22, dynamic tick off.'
         }
         # The four below launch a third-party script in its own elevated window,
@@ -88,6 +92,13 @@ function Get-ToolboxActions {
             Description = 'mmsys.cpl, the classic playback/recording device list.'
         }
     )
+}
+
+# The actions that belong in a list of one-shot actions - everything without a
+# front door of its own. Tested by property presence, not by value, because
+# Set-StrictMode makes reading an absent property on the other entries throw.
+function Get-ToolboxListActions {
+    @(Get-ToolboxActions | Where-Object { -not $_.PSObject.Properties['Standalone'] })
 }
 
 function Resolve-ToolboxAction {
@@ -238,6 +249,24 @@ function Invoke-RemoteScript {
 #
 # UTF-8 without a BOM: Win11Debloat reads its config with ConvertFrom-Json,
 # which chokes on a BOM in Windows PowerShell 5.1.
+function Get-PresetJson {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Json,
+        [Parameter(Mandatory)][string]$DataFile,
+        [Parameter(Mandatory)][string]$Label
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($Json)) { return $Json }
+
+    $candidate = $null
+    if ($PSScriptRoot) { $candidate = Join-Path $PSScriptRoot (Join-Path '..\data' $DataFile) }
+    if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+        return (Get-Content -LiteralPath $candidate -Raw -Encoding UTF8)
+    }
+
+    throw "The $Label preset is not embedded in this build."
+}
+
 function Get-PresetConfigPath {
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string]$Json,
@@ -245,20 +274,11 @@ function Get-PresetConfigPath {
         [Parameter(Mandatory)][string]$Label
     )
 
-    if ([string]::IsNullOrWhiteSpace($Json)) {
-        $candidate = $null
-        if ($PSScriptRoot) { $candidate = Join-Path $PSScriptRoot (Join-Path '..\data' $DataFile) }
-        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
-            $Json = Get-Content -LiteralPath $candidate -Raw -Encoding UTF8
-        }
-        else {
-            throw "The $Label preset is not embedded in this build."
-        }
-    }
+    $text = Get-PresetJson -Json $Json -DataFile $DataFile -Label $Label
 
     Initialize-State
     $path = Join-Path $Ctx.StateDir $DataFile
-    [IO.File]::WriteAllText($path, $Json, (New-Object Text.UTF8Encoding $false))
+    [IO.File]::WriteAllText($path, $text, (New-Object Text.UTF8Encoding $false))
     return $path
 }
 
@@ -272,6 +292,53 @@ function Get-WinutilOneClickPath {
 
 function Get-RaphiOneClickPath {
     Get-PresetConfigPath -Json $EmbeddedRaphiOneClickJson -DataFile 'raphi-oneclick.json' -Label 'Win11Debloat one-click'
+}
+
+# The six steps, as data. One source of truth: the CLI prints this before
+# asking, the GUI's landing page draws it, and Invoke-OneClickDebloat walks it.
+#
+# Data only, deliberately - no script blocks. A block built here would go
+# looking for this function's locals long after it had returned. See the note
+# at the top of 70-Gui.ps1.
+function Get-OneClickSteps {
+    $winutil = Get-PresetJson -Json $EmbeddedWinutilOneClickJson -DataFile 'winutil-oneclick.json' -Label 'WinUtil one-click'
+    $raphi   = Get-PresetJson -Json $EmbeddedRaphiOneClickJson -DataFile 'raphi-oneclick.json' -Label 'Win11Debloat one-click'
+
+    $winutilCount = @(($winutil | ConvertFrom-Json)).Count
+    $raphiCount   = @(($raphi | ConvertFrom-Json).Tweaks).Count
+
+    @(
+        [pscustomobject]@{
+            Id = 'winutil'
+            Title = "WinUtil with $winutilCount tweaks preselected"
+            Detail = 'christitus.com/win - opens its window, and you press Run Tweaks'
+        }
+        [pscustomobject]@{
+            Id = 'raphi'
+            Title = "Win11Debloat with $raphiCount tweaks"
+            Detail = 'debloat.raphi.re - silent, nothing to click. This is what removes Bing from search.'
+        }
+        [pscustomobject]@{
+            Id = 'updates-security'
+            Title = 'Windows Update set to security-only'
+            Detail = 'Feature updates deferred 365 days, quality updates 4, no reboots while signed in'
+        }
+        [pscustomobject]@{
+            Id = 'network-better'
+            Title = 'TCP autotuning disabled'
+            Detail = 'netsh int tcp set global autotuninglevel=disabled'
+        }
+        [pscustomobject]@{
+            Id = 'priority-22'
+            Title = 'Win32PrioritySeparation set to 22'
+            Detail = 'Favours the foreground app. Needs a reboot.'
+        }
+        [pscustomobject]@{
+            Id = 'dynamictick-off'
+            Title = 'Dynamic tick disabled'
+            Detail = 'bcdedit /set disabledynamictick yes. Needs a reboot.'
+        }
+    )
 }
 
 # The GUI's Raphi preset, kept in the same order for easy diffing.
@@ -382,20 +449,15 @@ function Invoke-NativeCommand {
 # arrives with everything ticked and the user presses Run Tweaks. Step 2 is
 # genuinely silent. Steps 3-6 are ours and run here.
 function Invoke-OneClickDebloat {
-    $winutilConfig = Get-WinutilOneClickPath
-    $raphiConfig   = Get-RaphiOneClickPath
-
-    $winutilCount = @((Get-Content -LiteralPath $winutilConfig -Raw -Encoding UTF8 | ConvertFrom-Json)).Count
-    $raphiTweaks  = @((Get-Content -LiteralPath $raphiConfig -Raw -Encoding UTF8 | ConvertFrom-Json).Tweaks).Count
+    $steps = @(Get-OneClickSteps)
 
     Write-Line ''
-    Write-Info 'The box runs six steps, in this order:'
-    Write-Line "      1. WinUtil with $winutilCount tweaks preselected (christitus.com/win)" -Color White
-    Write-Line "      2. Win11Debloat with $raphiTweaks tweaks, silent (debloat.raphi.re)" -Color White
-    Write-Line '      3. Windows Update set to security-only' -Color White
-    Write-Line '      4. TCP autotuning disabled' -Color White
-    Write-Line '      5. Win32PrioritySeparation set to 22' -Color White
-    Write-Line '      6. Dynamic tick disabled' -Color White
+    Write-Info "The box runs $($steps.Count) steps, in this order:"
+    for ($i = 0; $i -lt $steps.Count; $i++) {
+        Write-Line ("      {0}. {1}" -f ($i + 1), $steps[$i].Title) -Color White
+        if ($steps[$i].Detail) { Write-Line "         $($steps[$i].Detail)" -Color DarkGray }
+    }
+
     Write-Line ''
     Write-Warn 'Steps 1 and 2 are scripts published by third parties. Moscovium does not review or pin them.'
     Write-Warn 'Step 1 is not unattended: WinUtil has no -Run switch, so press Run Tweaks in its window.'
@@ -415,33 +477,31 @@ function Invoke-OneClickDebloat {
     $failed = [System.Collections.Generic.List[string]]::new()
 
     try {
-        $steps = @(
-            @{ Name = 'WinUtil preset'; Action = {
-                Invoke-RemoteScript -Url 'https://christitus.com/win' -Label 'WinUtil (one-click preset)' `
-                    -ScriptArguments @('-Config', $winutilConfig)
-            } }
-            @{ Name = 'Win11Debloat preset'; Action = {
-                Invoke-RemoteScript -Url 'https://debloat.raphi.re/' -Label 'Win11Debloat (one-click preset)' `
-                    -ScriptArguments @('-Silent', '-Config', $raphiConfig)
-            } }
-            @{ Name = 'Windows Update security-only'; Action = { Set-SecurityUpdatePolicy; $true } }
-            @{ Name = 'TCP autotuning'; Action = { Invoke-ToolboxStep -Id 'network-better' } }
-            @{ Name = 'Win32PrioritySeparation'; Action = { Invoke-ToolboxStep -Id 'priority-22' } }
-            @{ Name = 'Dynamic tick'; Action = { Invoke-ToolboxStep -Id 'dynamictick-off' } }
-        )
+        for ($i = 0; $i -lt $steps.Count; $i++) {
+            $step = $steps[$i]
 
-        $number = 0
-        foreach ($step in $steps) {
-            $number++
             Write-Line ''
-            Write-Rule -Title "Step $number of $($steps.Count) - $($step.Name)"
+            Write-Rule -Title ("Step {0} of {1} - {2}" -f ($i + 1), $steps.Count, $step.Title)
 
             try {
-                if (-not (& $step.Action)) { $failed.Add($step.Name) }
+                $ok = switch ($step.Id) {
+                    'winutil' {
+                        Invoke-RemoteScript -Url 'https://christitus.com/win' -Label 'WinUtil (one-click preset)' `
+                            -ScriptArguments @('-Config', (Get-WinutilOneClickPath))
+                    }
+                    'raphi' {
+                        Invoke-RemoteScript -Url 'https://debloat.raphi.re/' -Label 'Win11Debloat (one-click preset)' `
+                            -ScriptArguments @('-Silent', '-Config', (Get-RaphiOneClickPath))
+                    }
+                    'updates-security' { Set-SecurityUpdatePolicy; $true }
+                    default { Invoke-ToolboxStep -Id $step.Id }
+                }
+
+                if (-not $ok) { $failed.Add($step.Title) }
             }
             catch {
-                Write-Err "$($step.Name) - $($_.Exception.Message)"
-                $failed.Add($step.Name)
+                Write-Err "$($step.Title) - $($_.Exception.Message)"
+                $failed.Add($step.Title)
             }
         }
     }
@@ -451,10 +511,10 @@ function Invoke-OneClickDebloat {
 
     Write-Line ''
     if ($failed.Count -eq 0) {
-        Write-Ok 'All six steps finished.'
+        Write-Ok "All $($steps.Count) steps finished."
     }
     else {
-        Write-Warn "$($failed.Count) of 6 steps did not complete: $(@($failed) -join ', ')"
+        Write-Warn "$($failed.Count) of $($steps.Count) steps did not complete: $(@($failed) -join ', ')"
     }
     Write-Info 'Reboot to pick up the priority and dynamic tick changes.'
 }

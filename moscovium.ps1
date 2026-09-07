@@ -5,7 +5,7 @@
 
         irm https://moscovium.win | iex
 
-    Build 43e1f4b493  (a digest of src/ and data/ - same sources, same id).
+    Build faeff72ff7  (a digest of src/ and data/ - same sources, same id).
     Check with:  .\moscovium.ps1 -Version
 
     GENERATED FILE - do not edit.
@@ -4685,8 +4685,12 @@ param(
 
     function Get-ToolboxActions {
         @(
+            # Standalone: this one has its own front door - the GUI's landing page
+            # and the CLI's first menu entry - so the toolbox lists leave it out
+            # rather than burying it among the one-shot actions. Still addressable
+            # as -Toolbox oneclick, and still shown by -List toolbox.
             [pscustomobject]@{
-                Id = 'oneclick'; Name = 'One-click debloat box'; Admin = $true
+                Id = 'oneclick'; Name = 'One-click debloat box'; Admin = $true; Standalone = $true
                 Description = 'The whole thing in one go: WinUtil preset, Win11Debloat preset, recommended Windows Update settings, TCP autotuning off, Win32PrioritySeparation 22, dynamic tick off.'
             }
             # The four below launch a third-party script in its own elevated window,
@@ -4756,6 +4760,13 @@ param(
                 Description = 'mmsys.cpl, the classic playback/recording device list.'
             }
         )
+    }
+
+    # The actions that belong in a list of one-shot actions - everything without a
+    # front door of its own. Tested by property presence, not by value, because
+    # Set-StrictMode makes reading an absent property on the other entries throw.
+    function Get-ToolboxListActions {
+        @(Get-ToolboxActions | Where-Object { -not $_.PSObject.Properties['Standalone'] })
     }
 
     function Resolve-ToolboxAction {
@@ -4906,6 +4917,24 @@ param(
     #
     # UTF-8 without a BOM: Win11Debloat reads its config with ConvertFrom-Json,
     # which chokes on a BOM in Windows PowerShell 5.1.
+    function Get-PresetJson {
+        param(
+            [Parameter(Mandatory)][AllowEmptyString()][string]$Json,
+            [Parameter(Mandatory)][string]$DataFile,
+            [Parameter(Mandatory)][string]$Label
+        )
+
+        if (-not [string]::IsNullOrWhiteSpace($Json)) { return $Json }
+
+        $candidate = $null
+        if ($PSScriptRoot) { $candidate = Join-Path $PSScriptRoot (Join-Path '..\data' $DataFile) }
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+            return (Get-Content -LiteralPath $candidate -Raw -Encoding UTF8)
+        }
+
+        throw "The $Label preset is not embedded in this build."
+    }
+
     function Get-PresetConfigPath {
         param(
             [Parameter(Mandatory)][AllowEmptyString()][string]$Json,
@@ -4913,20 +4942,11 @@ param(
             [Parameter(Mandatory)][string]$Label
         )
 
-        if ([string]::IsNullOrWhiteSpace($Json)) {
-            $candidate = $null
-            if ($PSScriptRoot) { $candidate = Join-Path $PSScriptRoot (Join-Path '..\data' $DataFile) }
-            if ($candidate -and (Test-Path -LiteralPath $candidate)) {
-                $Json = Get-Content -LiteralPath $candidate -Raw -Encoding UTF8
-            }
-            else {
-                throw "The $Label preset is not embedded in this build."
-            }
-        }
+        $text = Get-PresetJson -Json $Json -DataFile $DataFile -Label $Label
 
         Initialize-State
         $path = Join-Path $Ctx.StateDir $DataFile
-        [IO.File]::WriteAllText($path, $Json, (New-Object Text.UTF8Encoding $false))
+        [IO.File]::WriteAllText($path, $text, (New-Object Text.UTF8Encoding $false))
         return $path
     }
 
@@ -4940,6 +4960,53 @@ param(
 
     function Get-RaphiOneClickPath {
         Get-PresetConfigPath -Json $EmbeddedRaphiOneClickJson -DataFile 'raphi-oneclick.json' -Label 'Win11Debloat one-click'
+    }
+
+    # The six steps, as data. One source of truth: the CLI prints this before
+    # asking, the GUI's landing page draws it, and Invoke-OneClickDebloat walks it.
+    #
+    # Data only, deliberately - no script blocks. A block built here would go
+    # looking for this function's locals long after it had returned. See the note
+    # at the top of 70-Gui.ps1.
+    function Get-OneClickSteps {
+        $winutil = Get-PresetJson -Json $EmbeddedWinutilOneClickJson -DataFile 'winutil-oneclick.json' -Label 'WinUtil one-click'
+        $raphi   = Get-PresetJson -Json $EmbeddedRaphiOneClickJson -DataFile 'raphi-oneclick.json' -Label 'Win11Debloat one-click'
+
+        $winutilCount = @(($winutil | ConvertFrom-Json)).Count
+        $raphiCount   = @(($raphi | ConvertFrom-Json).Tweaks).Count
+
+        @(
+            [pscustomobject]@{
+                Id = 'winutil'
+                Title = "WinUtil with $winutilCount tweaks preselected"
+                Detail = 'christitus.com/win - opens its window, and you press Run Tweaks'
+            }
+            [pscustomobject]@{
+                Id = 'raphi'
+                Title = "Win11Debloat with $raphiCount tweaks"
+                Detail = 'debloat.raphi.re - silent, nothing to click. This is what removes Bing from search.'
+            }
+            [pscustomobject]@{
+                Id = 'updates-security'
+                Title = 'Windows Update set to security-only'
+                Detail = 'Feature updates deferred 365 days, quality updates 4, no reboots while signed in'
+            }
+            [pscustomobject]@{
+                Id = 'network-better'
+                Title = 'TCP autotuning disabled'
+                Detail = 'netsh int tcp set global autotuninglevel=disabled'
+            }
+            [pscustomobject]@{
+                Id = 'priority-22'
+                Title = 'Win32PrioritySeparation set to 22'
+                Detail = 'Favours the foreground app. Needs a reboot.'
+            }
+            [pscustomobject]@{
+                Id = 'dynamictick-off'
+                Title = 'Dynamic tick disabled'
+                Detail = 'bcdedit /set disabledynamictick yes. Needs a reboot.'
+            }
+        )
     }
 
     # The GUI's Raphi preset, kept in the same order for easy diffing.
@@ -5050,20 +5117,15 @@ param(
     # arrives with everything ticked and the user presses Run Tweaks. Step 2 is
     # genuinely silent. Steps 3-6 are ours and run here.
     function Invoke-OneClickDebloat {
-        $winutilConfig = Get-WinutilOneClickPath
-        $raphiConfig   = Get-RaphiOneClickPath
-
-        $winutilCount = @((Get-Content -LiteralPath $winutilConfig -Raw -Encoding UTF8 | ConvertFrom-Json)).Count
-        $raphiTweaks  = @((Get-Content -LiteralPath $raphiConfig -Raw -Encoding UTF8 | ConvertFrom-Json).Tweaks).Count
+        $steps = @(Get-OneClickSteps)
 
         Write-Line ''
-        Write-Info 'The box runs six steps, in this order:'
-        Write-Line "      1. WinUtil with $winutilCount tweaks preselected (christitus.com/win)" -Color White
-        Write-Line "      2. Win11Debloat with $raphiTweaks tweaks, silent (debloat.raphi.re)" -Color White
-        Write-Line '      3. Windows Update set to security-only' -Color White
-        Write-Line '      4. TCP autotuning disabled' -Color White
-        Write-Line '      5. Win32PrioritySeparation set to 22' -Color White
-        Write-Line '      6. Dynamic tick disabled' -Color White
+        Write-Info "The box runs $($steps.Count) steps, in this order:"
+        for ($i = 0; $i -lt $steps.Count; $i++) {
+            Write-Line ("      {0}. {1}" -f ($i + 1), $steps[$i].Title) -Color White
+            if ($steps[$i].Detail) { Write-Line "         $($steps[$i].Detail)" -Color DarkGray }
+        }
+
         Write-Line ''
         Write-Warn 'Steps 1 and 2 are scripts published by third parties. Moscovium does not review or pin them.'
         Write-Warn 'Step 1 is not unattended: WinUtil has no -Run switch, so press Run Tweaks in its window.'
@@ -5083,33 +5145,31 @@ param(
         $failed = [System.Collections.Generic.List[string]]::new()
 
         try {
-            $steps = @(
-                @{ Name = 'WinUtil preset'; Action = {
-                    Invoke-RemoteScript -Url 'https://christitus.com/win' -Label 'WinUtil (one-click preset)' `
-                        -ScriptArguments @('-Config', $winutilConfig)
-                } }
-                @{ Name = 'Win11Debloat preset'; Action = {
-                    Invoke-RemoteScript -Url 'https://debloat.raphi.re/' -Label 'Win11Debloat (one-click preset)' `
-                        -ScriptArguments @('-Silent', '-Config', $raphiConfig)
-                } }
-                @{ Name = 'Windows Update security-only'; Action = { Set-SecurityUpdatePolicy; $true } }
-                @{ Name = 'TCP autotuning'; Action = { Invoke-ToolboxStep -Id 'network-better' } }
-                @{ Name = 'Win32PrioritySeparation'; Action = { Invoke-ToolboxStep -Id 'priority-22' } }
-                @{ Name = 'Dynamic tick'; Action = { Invoke-ToolboxStep -Id 'dynamictick-off' } }
-            )
+            for ($i = 0; $i -lt $steps.Count; $i++) {
+                $step = $steps[$i]
 
-            $number = 0
-            foreach ($step in $steps) {
-                $number++
                 Write-Line ''
-                Write-Rule -Title "Step $number of $($steps.Count) - $($step.Name)"
+                Write-Rule -Title ("Step {0} of {1} - {2}" -f ($i + 1), $steps.Count, $step.Title)
 
                 try {
-                    if (-not (& $step.Action)) { $failed.Add($step.Name) }
+                    $ok = switch ($step.Id) {
+                        'winutil' {
+                            Invoke-RemoteScript -Url 'https://christitus.com/win' -Label 'WinUtil (one-click preset)' `
+                                -ScriptArguments @('-Config', (Get-WinutilOneClickPath))
+                        }
+                        'raphi' {
+                            Invoke-RemoteScript -Url 'https://debloat.raphi.re/' -Label 'Win11Debloat (one-click preset)' `
+                                -ScriptArguments @('-Silent', '-Config', (Get-RaphiOneClickPath))
+                        }
+                        'updates-security' { Set-SecurityUpdatePolicy; $true }
+                        default { Invoke-ToolboxStep -Id $step.Id }
+                    }
+
+                    if (-not $ok) { $failed.Add($step.Title) }
                 }
                 catch {
-                    Write-Err "$($step.Name) - $($_.Exception.Message)"
-                    $failed.Add($step.Name)
+                    Write-Err "$($step.Title) - $($_.Exception.Message)"
+                    $failed.Add($step.Title)
                 }
             }
         }
@@ -5119,10 +5179,10 @@ param(
 
         Write-Line ''
         if ($failed.Count -eq 0) {
-            Write-Ok 'All six steps finished.'
+            Write-Ok "All $($steps.Count) steps finished."
         }
         else {
-            Write-Warn "$($failed.Count) of 6 steps did not complete: $(@($failed) -join ', ')"
+            Write-Warn "$($failed.Count) of $($steps.Count) steps did not complete: $(@($failed) -join ', ')"
         }
         Write-Info 'Reboot to pick up the priority and dynamic tick changes.'
     }
@@ -6700,7 +6760,8 @@ param(
     }
 
     function Show-ToolboxMenu {
-        $actions = Get-ToolboxActions
+        # Without the one-click box: it is the main menu's first entry instead.
+        $actions = Get-ToolboxListActions
 
         $result = Show-Selector -Items $actions -Title 'Toolbox' -SingleSelect `
             -Subtitle 'One-shot actions and classic control panels' `
@@ -6788,6 +6849,8 @@ param(
 
     function Show-MainMenu {
         $options = @(
+            # First, because it is the thing most people opened this for.
+            [pscustomobject]@{ Name = 'One click'; Hint = 'The whole debloat pass - 6 steps, one prompt';         Action = 'oneclick' }
             [pscustomobject]@{ Name = 'Tweaks';   Hint = "$($Ctx.Tweaks.Count) registry tweaks, apply or revert"; Action = 'tweaks' }
             [pscustomobject]@{ Name = 'Apps';     Hint = "$($Ctx.Apps.Count) curated packages";                    Action = 'apps' }
             [pscustomobject]@{ Name = 'Toolbox';  Hint = 'Debloat scripts, network, boot, control panels';         Action = 'toolbox' }
@@ -6810,6 +6873,7 @@ param(
             if (-not $result.Confirmed) { return }
 
             switch ($result.Selected[0].Action) {
+                'oneclick' { Write-Banner; Invoke-ToolboxAction -Id 'oneclick'; Wait-ForKey }
                 'tweaks'   { Show-TweakMenu }
                 'apps'     { Show-AppMenu }
                 'toolbox'  { Show-ToolboxMenu }
@@ -7233,7 +7297,8 @@ param(
       <Border Grid.Column="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,1,0">
         <ListBox x:Name="NavList" Background="Transparent" BorderThickness="0" Margin="0,12,0,0"
                  ItemContainerStyle="{StaticResource NavItem}">
-          <ListBoxItem Content="Tweaks" IsSelected="True"/>
+          <ListBoxItem Content="One click" IsSelected="True"/>
+          <ListBoxItem Content="Tweaks"/>
           <ListBoxItem Content="Apps"/>
           <ListBoxItem Content="Store"/>
           <ListBoxItem Content="Toolbox"/>
@@ -7254,7 +7319,74 @@ param(
         <!-- pages share this cell; only one is visible at a time -->
         <Grid Grid.Row="0" Margin="22,18,22,0">
 
-          <Grid x:Name="TweaksPanel">
+          <!-- the landing page: the whole debloat pass, one button -->
+          <Grid x:Name="OneClickPanel">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="One-click debloat box" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+              <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                      BorderThickness="1" CornerRadius="10" Padding="26,19,26,16" Margin="0">
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+
+                  <StackPanel Grid.Column="0" Margin="0,0,22,0">
+                    <TextBlock Text="Debloat this machine" FontSize="24" FontWeight="SemiBold"
+                               Foreground="{StaticResource TitleInk}"/>
+                    <TextBlock x:Name="OneClickBlurb" TextWrapping="Wrap" FontSize="13" Margin="0,7,0,0"
+                               Foreground="{StaticResource Muted}"
+                               Text="Six steps, one prompt. Everything is listed before anything runs."/>
+
+                    <StackPanel x:Name="OneClickSteps" Margin="0,15,0,0"/>
+                  </StackPanel>
+
+                  <!-- The caution lives beside the button rather than under the
+                       steps: down there it fell below the fold on an 760px
+                       window, which is no use for a safety notice. -->
+                  <StackPanel Grid.Column="1" VerticalAlignment="Top" Width="208">
+                    <Button x:Name="BtnOneClick" Content="Run the box" Style="{StaticResource Primary}"
+                            FontSize="15" Padding="0,13" HorizontalAlignment="Stretch"/>
+                    <TextBlock TextWrapping="Wrap" FontSize="11" Margin="2,8,0,0"
+                               Foreground="{StaticResource Faint}"
+                               Text="Asks once, then runs all six without asking again."/>
+                    <!-- The label says what it does, so no note under this one. -->
+                    <Button x:Name="BtnOneClickToolbox" Content="Pick steps yourself" Margin="0,12,0,0"
+                            Padding="0,8" HorizontalAlignment="Stretch"
+                            ToolTip="Every step is also a separate action in the Toolbox"/>
+
+                    <Border Background="{StaticResource Panel2}" BorderBrush="{StaticResource Line}"
+                            BorderThickness="1" CornerRadius="7" Padding="12,9" Margin="0,14,0,0">
+                      <StackPanel>
+                        <TextBlock Text="Before you press it" FontSize="11.5" FontWeight="SemiBold"
+                                   Foreground="{StaticResource Warn}"/>
+                        <TextBlock TextWrapping="Wrap" FontSize="11" Margin="0,5,0,0" LineHeight="15"
+                                   Foreground="{StaticResource Muted}"
+                                   Text="Steps 1 and 2 run scripts published by other people. Both URLs are printed before anything runs."/>
+                        <TextBlock TextWrapping="Wrap" FontSize="11" Margin="0,5,0,0" LineHeight="15"
+                                   Foreground="{StaticResource Muted}"
+                                   Text="Step 1 is not unattended - you press Run Tweaks in WinUtil's window."/>
+                        <TextBlock TextWrapping="Wrap" FontSize="11" Margin="0,5,0,0" LineHeight="15"
+                                   Foreground="{StaticResource Muted}"
+                                   Text="Restore point first. Steps 5 and 6 need a reboot."/>
+                      </StackPanel>
+                    </Border>
+                  </StackPanel>
+                </Grid>
+              </Border>
+            </ScrollViewer>
+          </Grid>
+
+          <Grid x:Name="TweaksPanel" Visibility="Collapsed">
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="Auto"/>
@@ -7974,14 +8106,13 @@ param(
         # Group by what the action actually does, so "runs a third-party script" is
         # never mistaken for "opens a control panel".
         $groups = @(
-            # First, and on its own, because it is the one that runs everything else.
-            @{ Title = 'Everything at once';          Ids = @('oneclick') }
             @{ Title = 'Third-party debloat scripts'; Ids = @('winutil', 'winutil-preset', 'raphi', 'raphi-auto') }
             @{ Title = 'System tuning';               Ids = @('updates-security', 'network-better', 'network-default', 'dynamictick-off', 'dynamictick-on', 'priority-22', 'priority-default') }
             @{ Title = 'Classic control panels';      Ids = @('control-panel', 'services', 'mouse', 'keyboard', 'sound') }
         )
 
-        $all = @(Get-ToolboxActions)
+        # The one-click box is not here: it has the landing page to itself.
+        $all = @(Get-ToolboxListActions)
 
         # Anything a future catalog adds that the grouping above does not know about
         # still gets shown, under Other.
@@ -8024,6 +8155,83 @@ param(
         }
 
         $Ctx.Gui.Rows.Toolbox = @($built)
+    }
+
+    # The landing page's step list. Built from the real presets rather than written
+    # into the XAML, so the counts cannot drift from what the box actually runs.
+    function Update-GuiOneClickSteps {
+        if (-not $Ctx.Gui) { return }
+        $ui = $Ctx.Gui.Ui
+
+        $ui.OneClickSteps.Children.Clear()
+
+        # A preset that failed to load is worth saying out loud, not worth crashing
+        # the page over - the other eight nav pages still work.
+        $steps = $null
+        try { $steps = @(Get-OneClickSteps) }
+        catch {
+            $ui.OneClickBlurb.Text = "The presets could not be read: $($_.Exception.Message)"
+            $ui.BtnOneClick.IsEnabled = $false
+            return
+        }
+
+        $number = 0
+        foreach ($step in $steps) {
+            $number++
+
+            $line = New-Object Windows.Controls.Grid
+            $line.Margin = New-Object Windows.Thickness 0, 0, 0, 7
+            foreach ($unit in @([Windows.GridUnitType]::Auto, [Windows.GridUnitType]::Star)) {
+                $column = New-Object Windows.Controls.ColumnDefinition
+                $column.Width = New-Object Windows.GridLength 1, $unit
+                $line.ColumnDefinitions.Add($column)
+            }
+
+            $chip = New-Object Windows.Controls.Border
+            $chip.Width = 24
+            $chip.Height = 24
+            $chip.CornerRadius = New-Object Windows.CornerRadius 12
+            $chip.Background = New-HexBrush '#FF1C1430'
+            $chip.BorderBrush = New-HexBrush '#FF261B3D'
+            $chip.BorderThickness = New-Object Windows.Thickness 1
+            $chip.VerticalAlignment = 'Top'
+
+            $index = New-Object Windows.Controls.TextBlock
+            $index.Text = [string]$number
+            $index.FontSize = 11.5
+            $index.Foreground = New-HexBrush '#FFB388FF'
+            $index.HorizontalAlignment = 'Center'
+            $index.VerticalAlignment = 'Center'
+            $chip.Child = $index
+
+            [Windows.Controls.Grid]::SetColumn($chip, 0)
+            $line.Children.Add($chip) | Out-Null
+
+            $text = New-Object Windows.Controls.StackPanel
+            $text.Margin = New-Object Windows.Thickness 11, 1, 0, 0
+
+            $title = New-Object Windows.Controls.TextBlock
+            $title.Text = $step.Title
+            $title.FontSize = 13
+            $title.TextWrapping = 'Wrap'
+            $title.Foreground = New-HexBrush '#FFEDE8F7'
+            $text.Children.Add($title) | Out-Null
+
+            if ($step.Detail) {
+                $detail = New-Object Windows.Controls.TextBlock
+                $detail.Text = $step.Detail
+                $detail.FontSize = 11.5
+                $detail.TextWrapping = 'Wrap'
+                $detail.Foreground = New-HexBrush '#FF8B81A8'
+                $detail.Margin = New-Object Windows.Thickness 0, 2, 0, 0
+                $text.Children.Add($detail) | Out-Null
+            }
+
+            [Windows.Controls.Grid]::SetColumn($text, 1)
+            $line.Children.Add($text) | Out-Null
+
+            $ui.OneClickSteps.Children.Add($line) | Out-Null
+        }
     }
 
     # Nav rows carry a count on the right, so the sidebar says how much is behind
@@ -8245,8 +8453,9 @@ param(
         $ui = @{}
         foreach ($name in @(
             'VersionText', 'CatalogChip', 'DryRunBadge',
-            'NavList', 'TweaksPanel', 'AppsPanel', 'ToolboxPanel', 'ProfilesPanel',
+            'NavList', 'OneClickPanel', 'TweaksPanel', 'AppsPanel', 'ToolboxPanel', 'ProfilesPanel',
             'StorePanel', 'GuidesPanel', 'PersonalizePanel', 'SettingsPanel',
+            'OneClickSteps', 'OneClickBlurb', 'BtnOneClick', 'BtnOneClickToolbox',
             'StoreRows', 'BtnStoreRefresh', 'BtnStoreInstall', 'GuideRows',
             'BtnCursorInstall', 'BtnCursorRestore', 'WallpaperStyle', 'BtnWallpaper',
             'CsFolderText', 'BtnCsDefault', 'BtnCsFile', 'BtnCsLaunch',
@@ -8278,6 +8487,9 @@ param(
             Ui        = $ui
             Paragraph = $paragraph
             Rows      = [pscustomobject]@{ Tweaks = @(); Apps = @(); Toolbox = @(); Store = @() }
+            # Filled in below. Lets a handler say which page it wants by name
+            # instead of hard-coding an index into the sidebar.
+            NavNames  = @()
             Bound     = $BoundParameters
             Glyphs    = $Ctx.Theme.Glyph
         }
@@ -8345,8 +8557,12 @@ param(
 
         # Order has to match the ListBoxItems in the XAML and the $panels array in
         # the SelectionChanged handler. -1 means "no count worth showing".
-        $navNames  = @('Tweaks', 'Apps', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Profiles', 'Settings')
-        $navCounts = @($Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-ToolboxActions).Count, $Ctx.Guides.Count, -1, -1, -1)
+        $navNames  = @('One click', 'Tweaks', 'Apps', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Profiles', 'Settings')
+        $navCounts = @(-1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1)
+
+        # The item Content becomes a DockPanel below, so the labels are no longer
+        # readable off the ListBox. Keep them where a handler can still find them.
+        $Ctx.Gui.NavNames = $navNames
 
         if ($ui.NavList.Items.Count -ne $navNames.Count) {
             Write-Log "Nav has $($ui.NavList.Items.Count) items but $($navNames.Count) names." 'WARN'
@@ -8393,9 +8609,9 @@ param(
             param($sender, $e)
             if (-not $Ctx.Gui) { return }
 
-            $panels = @($Ctx.Gui.Ui.TweaksPanel, $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.StorePanel,
-                        $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.GuidesPanel, $Ctx.Gui.Ui.PersonalizePanel,
-                        $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
+            $panels = @($Ctx.Gui.Ui.OneClickPanel, $Ctx.Gui.Ui.TweaksPanel, $Ctx.Gui.Ui.AppsPanel,
+                        $Ctx.Gui.Ui.StorePanel, $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.GuidesPanel,
+                        $Ctx.Gui.Ui.PersonalizePanel, $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
             for ($i = 0; $i -lt $panels.Count; $i++) {
                 $panels[$i].Visibility = if ($i -eq $sender.SelectedIndex) { 'Visible' } else { 'Collapsed' }
             }
@@ -8420,6 +8636,20 @@ param(
         $ui.BtnAppNone.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Apps) { $r.CheckBox.IsChecked = $false } })
 
         # ---- actions -----------------------------------------------------------
+        $ui.BtnOneClick.Add_Click({
+            Invoke-GuiWork -Label 'one-click debloat box' -Work { Invoke-ToolboxAction -Id 'oneclick' }
+            # Steps 3 to 6 write registry and boot state the Tweaks page reports on.
+            Update-GuiTweakRow
+        })
+
+        # Not a duplicate of the nav: someone reading the landing page and deciding
+        # they want fewer steps should not have to find the sidebar.
+        $ui.BtnOneClickToolbox.Add_Click({
+            if (-not $Ctx.Gui) { return }
+            $index = [array]::IndexOf([string[]]@($Ctx.Gui.NavNames), 'Toolbox')
+            if ($index -ge 0) { $Ctx.Gui.Ui.NavList.SelectedIndex = $index }
+        })
+
         $ui.BtnApply.Add_Click({
             $selected = Get-CheckedItem -Rows $Ctx.Gui.Rows.Tweaks
             if ($selected.Count -eq 0) { $Ctx.Gui.Ui.StatusText.Text = 'Nothing selected.'; return }
@@ -8581,6 +8811,7 @@ param(
         })
 
         # ---- go ----------------------------------------------------------------
+        Update-GuiOneClickSteps
         Update-GuiTweakRow
         Update-GuiAppRow
         Update-GuiToolboxRow
@@ -8596,9 +8827,10 @@ param(
         if ($Ctx.DryRun) { Write-Warn 'Dry run - nothing will actually be changed.' }
 
         [pscustomobject]@{
-            Window = $window
-            Ui     = $ui
-            Rows   = $Ctx.Gui.Rows
+            Window   = $window
+            Ui       = $ui
+            Rows     = $Ctx.Gui.Rows
+            NavNames = $Ctx.Gui.NavNames
         }
     }
 
@@ -8630,7 +8862,7 @@ param(
         if (-not $Ctx.Gui) { & $Work; return }
 
         $ui = $Ctx.Gui.Ui
-        $buttons = @('BtnApply', 'BtnRevert', 'BtnInstall', 'BtnStoreInstall', 'BtnStoreRefresh', 'BtnRunProfile', 'BtnSaveProfile')
+        $buttons = @('BtnOneClick', 'BtnApply', 'BtnRevert', 'BtnInstall', 'BtnStoreInstall', 'BtnStoreRefresh', 'BtnRunProfile', 'BtnSaveProfile')
         foreach ($name in $buttons) { $ui[$name].IsEnabled = $false }
 
         $ui.StatusText.Text = $Label
@@ -8990,4 +9222,4 @@ param(
         Restore-ConsoleEncoding -Previous $previousEncoding
     }
 
-} $PSBoundParameters '1.2.0' $SourceUrl '43e1f4b493'
+} $PSBoundParameters '1.2.0' $SourceUrl 'faeff72ff7'

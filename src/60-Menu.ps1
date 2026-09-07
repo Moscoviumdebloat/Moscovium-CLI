@@ -437,7 +437,8 @@ function Show-AppMenu {
 }
 
 function Show-ToolboxMenu {
-    $actions = Get-ToolboxActions
+    # Without the one-click box: it is the main menu's first entry instead.
+    $actions = Get-ToolboxListActions
 
     $result = Show-Selector -Items $actions -Title 'Toolbox' -SingleSelect `
         -Subtitle 'One-shot actions and classic control panels' `
@@ -525,6 +526,8 @@ function Wait-ForKey {
 
 function Show-MainMenu {
     $options = @(
+        # First, because it is the thing most people opened this for.
+        [pscustomobject]@{ Name = 'One click'; Hint = 'The whole debloat pass - 6 steps, one prompt';         Action = 'oneclick' }
         [pscustomobject]@{ Name = 'Tweaks';   Hint = "$($Ctx.Tweaks.Count) registry tweaks, apply or revert"; Action = 'tweaks' }
         [pscustomobject]@{ Name = 'Apps';     Hint = "$($Ctx.Apps.Count) curated packages";                    Action = 'apps' }
         [pscustomobject]@{ Name = 'Toolbox';  Hint = 'Debloat scripts, network, boot, control panels';         Action = 'toolbox' }
@@ -547,6 +550,7 @@ function Show-MainMenu {
         if (-not $result.Confirmed) { return }
 
         switch ($result.Selected[0].Action) {
+            'oneclick' { Write-Banner; Invoke-ToolboxAction -Id 'oneclick'; Wait-ForKey }
             'tweaks'   { Show-TweakMenu }
             'apps'     { Show-AppMenu }
             'toolbox'  { Show-ToolboxMenu }

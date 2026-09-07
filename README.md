@@ -19,10 +19,10 @@ which ships with Windows, is enough.
 
 | | |
 |---|---|
+| **One-click debloat box** | The landing page in the window and the first entry in the menu. Six steps behind one prompt: WinUtil preset, Win11Debloat preset, security-only Windows Update, TCP autotuning, CPU priority, dynamic tick. |
 | **40 tweaks** | Privacy & telemetry, Explorer & taskbar, gaming & performance, hardware, advanced. Applied, reverted, or reported on. |
 | **127 apps** | The full curated winget catalog, plus direct-download and archive installers, across 8 categories. |
-| **One-click debloat box** | Six steps behind one prompt: WinUtil preset, Win11Debloat preset, security-only Windows Update, TCP autotuning, CPU priority, dynamic tick. |
-| **17 toolbox actions** | WinUtil, Win11Debloat, Windows Update policy, TCP autotuning, dynamic tick, CPU priority, and the classic control panels. |
+| **16 toolbox actions** | WinUtil, Win11Debloat, Windows Update policy, TCP autotuning, dynamic tick, CPU priority, and the classic control panels - each on its own, when you do not want the whole box. |
 | **6 guides** | The manual walkthroughs - BIOS, GPU control panels, network - that no tool can do for you. |
 | **App store** | Community releases from the Moscovium dev orgs on GitHub. |
 | **Personalise** | Cursor schemes, wallpaper, Counter-Strike configs. |
@@ -153,12 +153,26 @@ silently.
 .\moscovium.ps1 -VCRuntimes                          # all VC++ redistributables
 ```
 
+### One click
+
+```powershell
+.\moscovium.ps1 -Toolbox oneclick
+```
+
+Or open the window and press the button - it is the page you land on:
+
+```powershell
+.\moscovium.ps1 -Gui
+```
+
 ### Toolbox
+
+The individual actions, for when you want fewer than all six.
 
 ```powershell
 .\moscovium.ps1 -List toolbox
-.\moscovium.ps1 -Toolbox oneclick          # the whole debloat box
 .\moscovium.ps1 -Toolbox winutil-preset
+.\moscovium.ps1 -Toolbox updates-security
 .\moscovium.ps1 -Toolbox network-better
 ```
 
@@ -364,8 +378,13 @@ nothing. The CLI sends `-Config` alone, which is exactly what WinUtil's own
 
 ### The one-click box
 
-`-Toolbox oneclick` runs six steps behind a single confirmation, after listing
-both third-party URLs and everything it is about to do:
+It is deliberately not one of the toolbox actions. In the window it is the
+landing page, and in the menu it is the first entry; the Toolbox page and menu
+list the other sixteen. `Get-ToolboxListActions` is the filtered list, and
+`-List toolbox` and `-Toolbox oneclick` still see all seventeen.
+
+It runs six steps behind a single confirmation, after listing both third-party
+URLs and everything it is about to do:
 
 | | |
 |---|---|

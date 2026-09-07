@@ -869,6 +869,61 @@ Test-Case 'the Win11Debloat deployment block passes its consistency checks' {
     }
 }
 
+Test-Case 'the box is its own front door, not a toolbox row' {
+    # It is still addressable and still listed by -List toolbox; it is just not
+    # one of the one-shot actions the Toolbox page and menu enumerate.
+    $all = @(Get-ToolboxActions | ForEach-Object { $_.Id })
+    $listed = @(Get-ToolboxListActions | ForEach-Object { $_.Id })
+
+    Assert-True ($all -contains 'oneclick') 'oneclick is not a resolvable action'
+    Assert-True ($listed -notcontains 'oneclick') 'oneclick is still listed among the one-shot actions'
+    Assert-Equal ($all.Count - 1) $listed.Count
+
+    $resolved = Resolve-ToolboxAction -Id 'oneclick'
+    Assert-Equal 'oneclick' $resolved.Id
+}
+
+Test-Case 'the steps are one list, shared by both front-ends' {
+    $steps = @(Get-OneClickSteps)
+    Assert-Equal 6 $steps.Count
+
+    # Ids the runner switches on, in the order they run.
+    $expected = @('winutil', 'raphi', 'updates-security', 'network-better', 'priority-22', 'dynamictick-off')
+    for ($i = 0; $i -lt $expected.Count; $i++) { Assert-Equal $expected[$i] $steps[$i].Id }
+
+    foreach ($step in $steps) {
+        Assert-True (-not [string]::IsNullOrWhiteSpace($step.Title)) "step '$($step.Id)' has no title"
+    }
+}
+
+Test-Case 'the step titles carry the real preset counts' {
+    # The landing page and the console plan both read these, so a preset edit
+    # that did not reach the text would show up here.
+    $winutilParsed = Get-Content -LiteralPath $winutilOneClick -Raw -Encoding UTF8 | ConvertFrom-Json
+    $raphiParsed = Get-Content -LiteralPath $raphiOneClick -Raw -Encoding UTF8 | ConvertFrom-Json
+
+    $steps = @(Get-OneClickSteps)
+    Assert-True ($steps[0].Title -match "\b$(@($winutilParsed).Count)\b") "step 1 does not name $(@($winutilParsed).Count) tweaks"
+    Assert-True ($steps[1].Title -match "\b$(@($raphiParsed.Tweaks).Count)\b") "step 2 does not name $(@($raphiParsed.Tweaks).Count) tweaks"
+}
+
+Test-Case 'reading the steps does not write anything to disk' {
+    # The GUI draws this page at window-open, before the user has agreed to
+    # anything, so counting tweaks must not spill preset files into StateDir.
+    $probe = Join-Path ([IO.Path]::GetTempPath()) "moscovium-steps-$([guid]::NewGuid().ToString('N'))"
+    $previous = $Ctx.StateDir
+    $Ctx.StateDir = $probe
+
+    try {
+        Get-OneClickSteps | Out-Null
+        Assert-True (-not (Test-Path -LiteralPath $probe)) 'reading the steps created the state directory'
+    }
+    finally {
+        $Ctx.StateDir = $previous
+        Remove-Item -LiteralPath $probe -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Test-Case 'the one-click box covers every step it advertises' {
     $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/40-Toolbox.ps1') -Raw
 
@@ -1051,7 +1106,21 @@ if (Test-StaApartment) {
             Assert-True ($null -ne $gui.Window) 'no window was created'
             Assert-Equal $Ctx.Tweaks.Count $gui.Rows.Tweaks.Count
             Assert-Equal $Ctx.Apps.Count $gui.Rows.Apps.Count
-            Assert-Equal @(Get-ToolboxActions).Count $gui.Rows.Toolbox.Count
+            # The one-click box is not a toolbox row; it has the landing page.
+            Assert-Equal @(Get-ToolboxListActions).Count $gui.Rows.Toolbox.Count
+
+            # The box is the landing page: first in the sidebar, and the panel
+            # already showing before anything is clicked.
+            Assert-Equal 0 $gui.Ui.NavList.SelectedIndex
+            Assert-Equal 'One click' $gui.NavNames[0]
+            Assert-Equal 'Visible' ([string]$gui.Ui.OneClickPanel.Visibility)
+            Assert-Equal 'Collapsed' ([string]$gui.Ui.TweaksPanel.Visibility)
+
+            # One drawn row per step, built from the presets rather than XAML.
+            Assert-Equal @(Get-OneClickSteps).Count $gui.Ui.OneClickSteps.Children.Count
+
+            # A nav item with no panel behind it would silently show nothing.
+            Assert-Equal $gui.Ui.NavList.Items.Count $gui.NavNames.Count
 
             # Category pickers get an "All" entry plus one per category.
             Assert-Equal ($Ctx.TweakCategories.Count + 1) $gui.Ui.TweakCategory.Items.Count
