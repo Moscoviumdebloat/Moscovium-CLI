@@ -608,6 +608,74 @@ function Show-CustomizationMenu {
 
 # The desktop app's Cursors, wallpaper and Counter-Strike pages, as one screen.
 # Until this existed the Personalise features were window-only.
+# The Pointer Options tab as a screen: every setting with its current value,
+# enter to change it. Toggles flip; ranges ask for a number.
+function Show-MouseMenu {
+    while ($true) {
+        $entries = @(Get-MouseSnapshot)
+
+        $options = [System.Collections.Generic.List[object]]::new()
+        foreach ($entry in $entries) {
+            $options.Add([pscustomobject]@{
+                Kind = 'setting'
+                Id = $entry.Setting.Id
+                Name = $entry.Setting.Name
+                Hint = (Format-MouseValue -Setting $entry.Setting -Value $entry.Value)
+                Entry = $entry
+            })
+        }
+        foreach ($preset in Get-MousePresets) {
+            $options.Add([pscustomobject]@{
+                Kind = 'preset'; Id = $preset.Id; Name = "Preset: $($preset.Name)"
+                Hint = $preset.Summary; Entry = $null
+            })
+        }
+
+        $result = Show-Selector -Items @($options) -Title 'Mouse' -SingleSelect `
+            -Subtitle 'Pointer Options, applied live - no sign-out, no administrator' `
+            -Label { param($o) $o.Name } `
+            -Sublabel { param($o) $o.Hint }
+
+        if (-not $result.Confirmed) { return }
+        $choice = $result.Selected[0]
+
+        Write-Banner
+
+        if ($choice.Kind -eq 'preset') {
+            Invoke-MousePreset -Id $choice.Id | Out-Null
+            Wait-ForKey
+            continue
+        }
+
+        $setting = $choice.Entry.Setting
+
+        if ($setting.Kind -eq 'toggle') {
+            # A toggle has one useful action, so do it rather than asking.
+            $next = 0
+            if (-not $choice.Entry.Value) { $next = 1 }
+            Set-MouseSetting -Id $setting.Id -Value $next | Out-Null
+        }
+        else {
+            Write-SectionHeading $setting.Name
+            Write-Info $setting.Description
+            Write-Info "Now: $(Format-MouseValue -Setting $setting -Value $choice.Entry.Value)"
+            Write-Line ''
+            Write-Line "  New value ($($setting.Minimum)-$($setting.Maximum), blank to cancel): " -Color Yellow -NoNewline
+
+            $typed = [string](Read-Host)
+            if ($typed) {
+                $number = 0
+                if ([int]::TryParse($typed.Trim(), [ref]$number)) {
+                    Set-MouseSetting -Id $setting.Id -Value $number | Out-Null
+                }
+                else { Write-Err "'$typed' is not a number." }
+            }
+        }
+
+        Wait-ForKey
+    }
+}
+
 function Show-PersonalizeMenu {
     while ($true) {
         $options = [System.Collections.Generic.List[object]]::new()
@@ -843,6 +911,7 @@ function Show-MainMenu {
             'packages' { Show-PackageMenu }
             'customize' { Show-CustomizationMenu }
             'personalise' { Show-PersonalizeMenu }
+            'mouse'    { Show-MouseMenu }
             'cs2'      { Show-CsMenu -Game CS2 }
             'csgo'     { Show-CsMenu -Game CSGO }
             'tasks'    { Show-TaskManager }

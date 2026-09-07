@@ -290,9 +290,11 @@
       <Setter Property="Foreground" Value="{StaticResource Muted}"/>
       <Setter Property="FontFamily" Value="Segoe UI"/>
       <Setter Property="FontSize" Value="14"/>
-      <!-- 9 rather than 12: fourteen pages at the roomier padding overflowed
-           the sidebar at the window's minimum height and clipped Settings. -->
-      <Setter Property="Padding" Value="18,9"/>
+      <!-- 7 rather than 12: sixteen pages at the roomier padding overflowed the
+           sidebar at the window's minimum height and clipped Settings. Tightened
+           once at fourteen pages and again at sixteen - past twenty the sidebar
+           will need grouping rather than another two pixels. -->
+      <Setter Property="Padding" Value="18,7"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
         <Setter.Value>
@@ -356,6 +358,65 @@
               <Trigger Property="IsSelected" Value="True">
                 <Setter TargetName="Chrome" Property="Background" Value="#FF2A1B4D"/>
                 <Setter Property="Foreground" Value="{StaticResource Text}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- The mouse page's sliders. WPF's stock Slider is a light grey track with
+         a chrome thumb, which on this palette reads as a control borrowed from
+         another program - and its RepeatButtons would render as full buttons
+         without a template of their own. -->
+    <Style x:Key="TrackButton" TargetType="RepeatButton">
+      <Setter Property="Focusable" Value="False"/>
+      <Setter Property="IsTabStop" Value="False"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="RepeatButton">
+            <Border Background="Transparent" Height="18"/>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style TargetType="Slider">
+      <Setter Property="Foreground" Value="{StaticResource Accent}"/>
+      <Setter Property="IsSnapToTickEnabled" Value="True"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Slider">
+            <Grid Height="22" Background="Transparent">
+              <Border Height="4" CornerRadius="2" VerticalAlignment="Center"
+                      Background="{StaticResource Panel2}" BorderBrush="{StaticResource Line}" BorderThickness="1"/>
+              <Track x:Name="PART_Track">
+                <Track.DecreaseRepeatButton>
+                  <RepeatButton Style="{StaticResource TrackButton}" Command="Slider.DecreaseLarge"/>
+                </Track.DecreaseRepeatButton>
+                <Track.IncreaseRepeatButton>
+                  <RepeatButton Style="{StaticResource TrackButton}" Command="Slider.IncreaseLarge"/>
+                </Track.IncreaseRepeatButton>
+                <Track.Thumb>
+                  <Thumb Width="15" Height="15">
+                    <Thumb.Template>
+                      <ControlTemplate TargetType="Thumb">
+                        <Ellipse x:Name="Knob" Fill="{StaticResource Accent}" Stroke="#FF12071F" StrokeThickness="1.5"/>
+                        <ControlTemplate.Triggers>
+                          <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Knob" Property="Fill" Value="#FFD8B4FE"/>
+                          </Trigger>
+                        </ControlTemplate.Triggers>
+                      </ControlTemplate>
+                    </Thumb.Template>
+                  </Thumb>
+                </Track.Thumb>
+              </Track>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.4"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -431,6 +492,7 @@
           <ListBoxItem Content="Toolbox"/>
           <ListBoxItem Content="Guides"/>
           <ListBoxItem Content="Personalise"/>
+          <ListBoxItem Content="Mouse"/>
           <ListBoxItem Content="Counter-Strike 2"/>
           <ListBoxItem Content="CS:GO"/>
           <ListBoxItem Content="Customization"/>
@@ -927,6 +989,107 @@
                     <StackPanel Orientation="Horizontal">
                       <ComboBox x:Name="WallpaperStyle" Width="150" Margin="0,0,8,0"/>
                       <Button x:Name="BtnWallpaper" Content="Choose image" Style="{StaticResource Primary}"/>
+                    </StackPanel>
+                  </StackPanel>
+                </Border>
+
+              </StackPanel>
+            </ScrollViewer>
+          </Grid>
+
+          <!-- The Pointer Options tab of the Windows mouse control panel, with
+               the same grouping. Every control applies live. -->
+          <Grid x:Name="MousePanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Mouse" Style="{StaticResource PageTitle}"/>
+              <TextBlock x:Name="MouseSummary" FontSize="11" Foreground="{StaticResource Faint}"
+                         VerticalAlignment="Center" Margin="12,3,0,0"
+                         Text="Applied live through SystemParametersInfo - no sign-out, no administrator."/>
+            </StackPanel>
+
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+              <StackPanel>
+
+                <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                        CornerRadius="8" Padding="16" Margin="0,0,0,10">
+                  <StackPanel>
+                    <TextBlock Text="Motion" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
+
+                    <TextBlock Text="Pointer speed" FontSize="12" Foreground="{StaticResource Muted}"/>
+                    <Grid Margin="0,6,0,0">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Grid.Column="0" Text="Slow" FontSize="11" Foreground="{StaticResource Faint}"
+                                 VerticalAlignment="Center" Margin="0,0,10,0"/>
+                      <Slider x:Name="MouseSpeedSlider" Grid.Column="1" Minimum="1" Maximum="11"
+                              TickFrequency="1" SmallChange="1" LargeChange="1" MaxWidth="320"
+                              HorizontalAlignment="Left" Width="320"/>
+                      <TextBlock Grid.Column="2" Text="Fast" FontSize="11" Foreground="{StaticResource Faint}"
+                                 VerticalAlignment="Center" Margin="10,0,12,0"/>
+                      <TextBlock x:Name="MouseSpeedValue" Grid.Column="3" FontSize="12" FontFamily="Consolas"
+                                 Foreground="{StaticResource Accent}" VerticalAlignment="Center" Text=""/>
+                    </Grid>
+
+                    <CheckBox x:Name="ChkMousePrecision" Content="Enhance pointer precision" Margin="0,14,0,0"/>
+                    <TextBlock Text="Mouse acceleration. Off means the same hand movement always travels the same distance - what you want for aiming."
+                               FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource Faint}" Margin="27,4,0,0"/>
+                  </StackPanel>
+                </Border>
+
+                <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                        CornerRadius="8" Padding="16" Margin="0,0,0,10">
+                  <StackPanel>
+                    <TextBlock Text="Snap To" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                    <CheckBox x:Name="ChkMouseSnap" Content="Automatically move pointer to the default button in a dialog box"/>
+                  </StackPanel>
+                </Border>
+
+                <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                        CornerRadius="8" Padding="16" Margin="0,0,0,10">
+                  <StackPanel>
+                    <TextBlock Text="Visibility" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
+
+                    <CheckBox x:Name="ChkMouseTrails" Content="Display pointer trails"/>
+                    <Grid Margin="27,8,0,0">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Grid.Column="0" Text="Short" FontSize="11" Foreground="{StaticResource Faint}"
+                                 VerticalAlignment="Center" Margin="0,0,10,0"/>
+                      <Slider x:Name="MouseTrailsSlider" Grid.Column="1" Minimum="2" Maximum="7"
+                              TickFrequency="1" SmallChange="1" LargeChange="1" Width="220"/>
+                      <TextBlock Grid.Column="2" Text="Long" FontSize="11" Foreground="{StaticResource Faint}"
+                                 VerticalAlignment="Center" Margin="10,0,12,0"/>
+                      <TextBlock x:Name="MouseTrailsValue" Grid.Column="3" FontSize="12" FontFamily="Consolas"
+                                 Foreground="{StaticResource Accent}" VerticalAlignment="Center" Text=""/>
+                    </Grid>
+
+                    <CheckBox x:Name="ChkMouseVanish" Content="Hide pointer while typing" Margin="0,14,0,0"/>
+                    <CheckBox x:Name="ChkMouseSonar" Content="Show location of pointer when I press the CTRL key" Margin="0,10,0,0"/>
+                  </StackPanel>
+                </Border>
+
+                <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                        CornerRadius="8" Padding="16">
+                  <StackPanel>
+                    <TextBlock Text="Presets" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                    <StackPanel Orientation="Horizontal">
+                      <Button x:Name="BtnMouseRaw" Content="Raw input" Style="{StaticResource Primary}"
+                              ToolTip="Acceleration off and the slider at 1:1"/>
+                      <Button x:Name="BtnMouseDefault" Content="Windows defaults"/>
                     </StackPanel>
                   </StackPanel>
                 </Border>

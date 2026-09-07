@@ -22,6 +22,7 @@ which ships with Windows, is enough.
 | **One-click debloat box** | The landing page in the window and the first entry in the menu. Six steps behind one prompt: WinUtil preset, Win11Debloat preset, security-only Windows Update, TCP autotuning, CPU priority, dynamic tick. |
 | **Task manager** | btop-shaped: CPU with per-core bars and history, memory, disk, network, and a sortable process list you can end a process from. |
 | **Search apps** | One query across winget, Chocolatey and Scoop, with install from whichever one has it. |
+| **Mouse** | The Pointer Options tab: pointer speed, acceleration, snap-to, trails, hide-while-typing, CTRL highlight - applied live, plus a raw-input preset. |
 | **Package managers** | Install Chocolatey or Scoop from their own install scripts, with winget status alongside. |
 | **Customization** | The desktop app's shell replacements - Open-Shell, Nilesoft Shell, StartAllBack, ExplorerPatcher - each fetched from its vendor's current release. |
 | **40 tweaks** | Privacy & telemetry, Explorer & taskbar, gaming & performance, hardware, advanced. Applied, reverted, or reported on. |
@@ -277,6 +278,33 @@ publishes is also what the desktop app bundles.
 The desktop page's fifth button, the StartAllBack trial reset, is not here.
 It circumvents licensing, the same reason MAS is not in the catalog.
 
+### Mouse
+
+```powershell
+.moscovium.ps1 -Mouse                    # what it is set to now
+.moscovium.ps1 -SetMouse precision=0     # acceleration off
+.moscovium.ps1 -MousePreset raw          # no acceleration, slider at 1:1
+```
+
+The Pointer Options tab, as its own page in the window with real sliders and
+checkboxes, and a **Mouse** screen in the menu.
+
+**Read and written through `SystemParametersInfo`, not the registry.**
+`HKCUControl PanelMouse` is where Windows caches these, but the cache and the
+effective setting are not the same thing: on the machine this was written on,
+`MouseSonar` was absent from the registry entirely while `SPI_GETMOUSEVANISH`
+answered 1. Reading the registry would report settings that are not what the
+mouse is doing, and writing it would change nothing until the next sign-in.
+The writes pass `SPIF_UPDATEINIFILE | SPIF_SENDCHANGE`, so Windows persists the
+value itself and every running program is told - the change is live.
+
+The slider has eleven notches and the API takes 1-20, so they are not the same
+number. Notch 6 is speed 10, which is 1:1 - Windows scales nothing. That is
+half of what `-MousePreset raw` does; the other half is turning acceleration
+off, which is the setting that actually matters for aiming.
+
+All of it is per-user, so none of it asks for administrator.
+
 ### Personalise
 
 ```powershell
@@ -413,6 +441,7 @@ src/              function libraries, concatenated in name order
   20-Tweaks       apply, revert, status
   30-Apps         winget, download, zip and script installs
   40-Toolbox      one-shot actions
+  49-Mouse        pointer settings through SystemParametersInfo
   50-Profile      setup profiles
   52-Tasks        task manager sampling
   54-Packages     package manager detection and install

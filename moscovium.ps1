@@ -5,7 +5,7 @@
 
         irm https://moscovium.win | iex
 
-    Build 2b8a602190  (a digest of src/ and data/ - same sources, same id).
+    Build 35492921f6  (a digest of src/ and data/ - same sources, same id).
     Check with:  .\moscovium.ps1 -Version
 
     GENERATED FILE - do not edit.
@@ -32,6 +32,9 @@ param(
     [string]  $Customize,
     [string]  $FindApp,
     [string[]]$FindIn,
+    [switch]  $Mouse,
+    [string[]]$SetMouse,
+    [string]  $MousePreset,
     [string]  $Cursor,
     [string]  $Wallpaper,
     [string]  $WallpaperStyle,
@@ -6406,6 +6409,422 @@ param(
         }
     }
 
+# ===== src/49-Mouse.ps1 ================================================
+
+    # =============================================================================
+    # Mouse settings: the Pointer Options tab of the Windows Mouse control panel.
+    #
+    # Read and written through SystemParametersInfo rather than the registry.
+    #
+    # That is not a style choice. HKCU\Control Panel\Mouse is where Windows caches
+    # these, but the cache and the effective setting are not the same thing: on the
+    # machine this was written on, MouseSonar was absent from the registry entirely
+    # while SPI_GETMOUSEVANISH answered 1. Reading the registry would have reported
+    # settings that are not what the mouse is actually doing, and writing it would
+    # change nothing until the next sign-in.
+    #
+    # Every SPI_GET below was checked against the registry where the registry did
+    # have a value, and all six agreed.
+    #
+    # The writes pass SPIF_UPDATEINIFILE | SPIF_SENDCHANGE, so Windows persists the
+    # value itself and every running program is told - the change is live, with no
+    # sign-out.
+    #
+    # All of it is per-user (HKCU), so none of it needs administrator.
+    # =============================================================================
+
+    # uiAction values, from WinUser.h.
+    $SpiGetMouse            = 0x0003   # acceleration: int[3]
+    $SpiSetMouse            = 0x0004
+    $SpiSetMouseTrails      = 0x005D
+    $SpiGetMouseTrails      = 0x005E
+    $SpiGetSnapToDefButton  = 0x005F
+    $SpiSetSnapToDefButton  = 0x0060
+    $SpiGetMouseSpeed       = 0x0070
+    $SpiSetMouseSpeed       = 0x0071
+    $SpiGetMouseSonar       = 0x101C
+    $SpiSetMouseSonar       = 0x101D
+    $SpiGetMouseVanish      = 0x1020
+    $SpiSetMouseVanish      = 0x1021
+
+    # SPIF_UPDATEINIFILE | SPIF_SENDCHANGE: persist it, and tell everything running.
+    $SpiPersistAndBroadcast = 0x0003
+
+    # The pointer speed slider has eleven notches and the API takes 1-20, so the
+    # two are not the same number. This is the mapping the control panel uses, and
+    # it is why 'speed 10' and 'the middle of the slider' both mean 1:1.
+    $MousePointerSpeedSteps = @(1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20)
+
+    # Three overloads because pvParam is three different things depending on the
+    # action: a pointer to an int when reading, an int[3] for acceleration, and the
+    # value itself cast to a pointer when writing a scalar.
+    #
+    # Built by joining lines rather than a here-string - build.ps1 indents every
+    # source line into the bundle's script block, and a here-string terminator has
+    # to sit at column 0.
+    function Initialize-MouseNative {
+        if ('Moscovium.MouseNative' -as [type]) { return }
+
+        $signature = @(
+            '[DllImport("user32.dll", SetLastError = true, EntryPoint = "SystemParametersInfoW")]',
+            'public static extern bool Read(uint uiAction, uint uiParam, ref int pvParam, uint fWinIni);',
+            '[DllImport("user32.dll", SetLastError = true, EntryPoint = "SystemParametersInfoW")]',
+            'public static extern bool ReadArray(uint uiAction, uint uiParam, int[] pvParam, uint fWinIni);',
+            '[DllImport("user32.dll", SetLastError = true, EntryPoint = "SystemParametersInfoW")]',
+            'public static extern bool Write(uint uiAction, uint uiParam, System.IntPtr pvParam, uint fWinIni);'
+        ) -join [Environment]::NewLine
+
+        Add-Type -MemberDefinition $signature -Name 'MouseNative' -Namespace 'Moscovium' -PassThru | Out-Null
+    }
+
+    # -----------------------------------------------------------------------------
+    # The settings themselves
+    # -----------------------------------------------------------------------------
+
+    function Get-MouseSettings {
+        @(
+            [pscustomobject]@{
+                Id = 'speed'; Name = 'Pointer speed'; Group = 'Motion'
+                Kind = 'range'; Minimum = 1; Maximum = 11
+                Description = 'The eleven-notch slider. 6 is 1:1 - Windows scales nothing.'
+            }
+            [pscustomobject]@{
+                Id = 'precision'; Name = 'Enhance pointer precision'; Group = 'Motion'
+                Kind = 'toggle'; Minimum = 0; Maximum = 1
+                Description = 'Mouse acceleration. Off means the same hand movement always travels the same distance.'
+            }
+            [pscustomobject]@{
+                Id = 'snap'; Name = 'Snap to default button'; Group = 'Snap To'
+                Kind = 'toggle'; Minimum = 0; Maximum = 1
+                Description = 'Jumps the pointer to the default button when a dialog opens.'
+            }
+            [pscustomobject]@{
+                Id = 'trails'; Name = 'Pointer trails'; Group = 'Visibility'
+                # 0 is off; 2 to 7 is the Short-to-Long slider. 1 also means off,
+                # which is why the range starts at 2.
+                Kind = 'range'; Minimum = 0; Maximum = 7
+                Description = '0 turns them off; 2 (short) to 7 (long) sets the length.'
+            }
+            [pscustomobject]@{
+                Id = 'vanish'; Name = 'Hide pointer while typing'; Group = 'Visibility'
+                Kind = 'toggle'; Minimum = 0; Maximum = 1
+                Description = 'Hides the pointer while you type, until the mouse moves again.'
+            }
+            [pscustomobject]@{
+                Id = 'sonar'; Name = 'Show pointer location on CTRL'; Group = 'Visibility'
+                Kind = 'toggle'; Minimum = 0; Maximum = 1
+                Description = 'Rings the pointer when you press and release CTRL.'
+            }
+        )
+    }
+
+    function Resolve-MouseSetting {
+        param([Parameter(Mandatory)][string]$Id)
+
+        $settings = Get-MouseSettings
+
+        $exact = @($settings | Where-Object { $_.Id -eq $Id })
+        if ($exact.Count -eq 1) { return $exact[0] }
+
+        $fuzzy = @($settings | Where-Object {
+            (Test-NameMatch -Value $_.Id -Pattern $Id) -or (Test-NameMatch -Value $_.Name -Pattern $Id)
+        })
+        if ($fuzzy.Count -eq 1) { return $fuzzy[0] }
+
+        if ($fuzzy.Count -gt 1) {
+            Write-Err "'$Id' is ambiguous. Did you mean one of these?"
+            foreach ($setting in $fuzzy) { Write-Info $setting.Id }
+            return $null
+        }
+
+        Write-Err "Unknown mouse setting '$Id'. Known: $((Get-MouseSettings | ForEach-Object { $_.Id }) -join ', ')."
+        return $null
+    }
+
+    # Slider notch (1-11) to the API's 1-20, and back. Back is nearest-notch,
+    # because a value set by something other than the control panel - a driver, a
+    # script - need not be one of the eleven.
+    function ConvertTo-MousePointerSpeed {
+        param([Parameter(Mandatory)][int]$Position)
+
+        $index = [Math]::Max(1, [Math]::Min($MousePointerSpeedSteps.Count, $Position)) - 1
+        return $MousePointerSpeedSteps[$index]
+    }
+
+    function ConvertFrom-MousePointerSpeed {
+        param([Parameter(Mandatory)][int]$Speed)
+
+        $best = 1
+        $closest = [int]::MaxValue
+
+        for ($i = 0; $i -lt $MousePointerSpeedSteps.Count; $i++) {
+            $distance = [Math]::Abs($MousePointerSpeedSteps[$i] - $Speed)
+            if ($distance -lt $closest) { $closest = $distance; $best = $i + 1 }
+        }
+
+        return $best
+    }
+
+    function Get-MouseSettingValue {
+        param([Parameter(Mandatory)][string]$Id)
+
+        Initialize-MouseNative
+        $value = 0
+
+        switch ($Id) {
+            'speed' {
+                if (-not [Moscovium.MouseNative]::Read($SpiGetMouseSpeed, 0, [ref]$value, 0)) { throw 'Could not read the pointer speed.' }
+                return (ConvertFrom-MousePointerSpeed -Speed $value)
+            }
+            'precision' {
+                # int[3] - threshold1, threshold2, acceleration. Acceleration is the
+                # third, and it is the one the checkbox controls.
+                $acceleration = New-Object 'int[]' 3
+                if (-not [Moscovium.MouseNative]::ReadArray($SpiGetMouse, 0, $acceleration, 0)) { throw 'Could not read the acceleration settings.' }
+                if ($acceleration[2] -gt 0) { return 1 }
+                return 0
+            }
+            'snap' {
+                if (-not [Moscovium.MouseNative]::Read($SpiGetSnapToDefButton, 0, [ref]$value, 0)) { throw 'Could not read snap-to-default-button.' }
+                if ($value) { return 1 }
+                return 0
+            }
+            'trails' {
+                if (-not [Moscovium.MouseNative]::Read($SpiGetMouseTrails, 0, [ref]$value, 0)) { throw 'Could not read the pointer trails.' }
+                # 1 means off just as 0 does; report both as 0 so a caller has one
+                # value to test rather than two.
+                if ($value -le 1) { return 0 }
+                return $value
+            }
+            'vanish' {
+                if (-not [Moscovium.MouseNative]::Read($SpiGetMouseVanish, 0, [ref]$value, 0)) { throw 'Could not read hide-while-typing.' }
+                if ($value) { return 1 }
+                return 0
+            }
+            'sonar' {
+                if (-not [Moscovium.MouseNative]::Read($SpiGetMouseSonar, 0, [ref]$value, 0)) { throw 'Could not read the CTRL pointer location.' }
+                if ($value) { return 1 }
+                return 0
+            }
+            default { throw "No such mouse setting '$Id'." }
+        }
+    }
+
+    function Set-MouseSettingValue {
+        param(
+            [Parameter(Mandatory)][string]$Id,
+            [Parameter(Mandatory)][int]$Value
+        )
+
+        Initialize-MouseNative
+        $flags = $SpiPersistAndBroadcast
+
+        switch ($Id) {
+            'speed' {
+                $speed = ConvertTo-MousePointerSpeed -Position $Value
+                # pvParam carries the value itself, not a pointer to it.
+                if (-not [Moscovium.MouseNative]::Write($SpiSetMouseSpeed, 0, [IntPtr]$speed, $flags)) { throw 'Could not set the pointer speed.' }
+            }
+            'precision' {
+                # The control panel's own on and off values: thresholds 6 and 10
+                # with acceleration 1, or all zeroes.
+                $acceleration = New-Object 'int[]' 3
+                if ($Value) { $acceleration[0] = 6; $acceleration[1] = 10; $acceleration[2] = 1 }
+                if (-not [Moscovium.MouseNative]::ReadArray($SpiSetMouse, 0, $acceleration, $flags)) { throw 'Could not set the acceleration settings.' }
+            }
+            'snap' {
+                # uiParam carries the flag here; pvParam is unused.
+                if (-not [Moscovium.MouseNative]::Write($SpiSetSnapToDefButton, [uint32]$Value, [IntPtr]::Zero, $flags)) { throw 'Could not set snap-to-default-button.' }
+            }
+            'trails' {
+                if (-not [Moscovium.MouseNative]::Write($SpiSetMouseTrails, [uint32]$Value, [IntPtr]::Zero, $flags)) { throw 'Could not set the pointer trails.' }
+            }
+            'vanish' {
+                if (-not [Moscovium.MouseNative]::Write($SpiSetMouseVanish, 0, [IntPtr]$Value, $flags)) { throw 'Could not set hide-while-typing.' }
+            }
+            'sonar' {
+                if (-not [Moscovium.MouseNative]::Write($SpiSetMouseSonar, 0, [IntPtr]$Value, $flags)) { throw 'Could not set the CTRL pointer location.' }
+            }
+            default { throw "No such mouse setting '$Id'." }
+        }
+    }
+
+    # Clamps to the setting's own range, so a typo cannot leave the mouse in a
+    # state the control panel has no way to show.
+    function Set-MouseSetting {
+        param(
+            [Parameter(Mandatory)][string]$Id,
+            [Parameter(Mandatory)][int]$Value
+        )
+
+        $setting = Resolve-MouseSetting -Id $Id
+        if (-not $setting) { return $false }
+
+        $clamped = [Math]::Max($setting.Minimum, [Math]::Min($setting.Maximum, $Value))
+
+        # 1 is another way of saying off, and leaving it set to 1 would make the
+        # value read back as 0 - which looks like the write failed.
+        if ($setting.Id -eq 'trails' -and $clamped -eq 1) { $clamped = 0 }
+
+        if ($Ctx.DryRun) {
+            Write-Status -Glyph (Get-Glyph 'Info') -Color (Get-Color 'Warn') -Message $setting.Name -MessageColor (Get-Color 'Warn')
+            Write-Info "would set $($setting.Id) to $clamped"
+            return $false
+        }
+
+        try {
+            Set-MouseSettingValue -Id $setting.Id -Value $clamped
+        }
+        catch {
+            Write-Err "$($setting.Name) - $($_.Exception.Message)"
+            return $false
+        }
+
+        Write-Ok "$($setting.Name) - $(Format-MouseValue -Setting $setting -Value $clamped)"
+        Write-Log "mouse: $($setting.Id) = $clamped"
+        return $true
+    }
+
+    function Get-MouseSnapshot {
+        $snapshot = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($setting in Get-MouseSettings) {
+            $value = $null
+            $problem = ''
+
+            try { $value = Get-MouseSettingValue -Id $setting.Id }
+            catch { $problem = $_.Exception.Message }
+
+            $snapshot.Add([pscustomobject]@{
+                Setting = $setting
+                Value   = $value
+                Error   = $problem
+            })
+        }
+
+        return @($snapshot)
+    }
+
+    # -----------------------------------------------------------------------------
+    # Presets
+    # -----------------------------------------------------------------------------
+
+    function Get-MousePresets {
+        @(
+            [pscustomobject]@{
+                Id = 'raw'; Name = 'Raw input'
+                Summary = 'Acceleration off and the slider at 1:1 - the same hand movement always travels the same distance.'
+                Values = [ordered]@{ precision = 0; speed = 6; trails = 0; snap = 0 }
+            }
+            [pscustomobject]@{
+                Id = 'default'; Name = 'Windows defaults'
+                Summary = 'Acceleration on, slider at 6, no trails, no snap, hide while typing on.'
+                Values = [ordered]@{ precision = 1; speed = 6; trails = 0; snap = 0; vanish = 1; sonar = 0 }
+            }
+        )
+    }
+
+    function Resolve-MousePreset {
+        param([Parameter(Mandatory)][string]$Id)
+
+        $preset = @(Get-MousePresets | Where-Object { $_.Id -eq $Id })
+        if ($preset.Count -eq 1) { return $preset[0] }
+
+        Write-Err "Unknown mouse preset '$Id'. Known: $((Get-MousePresets | ForEach-Object { $_.Id }) -join ', ')."
+        return $null
+    }
+
+    function Invoke-MousePreset {
+        param([Parameter(Mandatory)][string]$Id)
+
+        $preset = Resolve-MousePreset -Id $Id
+        if (-not $preset) { return $false }
+
+        Write-SectionHeading $preset.Name
+        Write-Info $preset.Summary
+
+        $applied = 0
+        foreach ($key in $preset.Values.Keys) {
+            if (Set-MouseSetting -Id $key -Value $preset.Values[$key]) { $applied++ }
+        }
+
+        if (-not $Ctx.DryRun) { Write-Info 'Applied live - no sign-out needed.' }
+        return ($applied -gt 0)
+    }
+
+    # -----------------------------------------------------------------------------
+    # Console output
+    # -----------------------------------------------------------------------------
+
+    function Format-MouseValue {
+        param([Parameter(Mandatory)]$Setting, [AllowNull()]$Value)
+
+        if ($null -eq $Value) { return 'unknown' }
+
+        if ($Setting.Kind -eq 'toggle') {
+            if ($Value) { return 'on' }
+            return 'off'
+        }
+
+        if ($Setting.Id -eq 'speed') {
+            $note = ''
+            if ($Value -eq 6) { $note = '  (1:1)' }
+            return ('{0}/11{1}' -f $Value, $note)
+        }
+
+        if ($Setting.Id -eq 'trails') {
+            if ($Value -le 1) { return 'off' }
+            return ('on, length {0}' -f $Value)
+        }
+
+        return [string]$Value
+    }
+
+    function Show-MouseSettings {
+        Write-SectionHeading 'Mouse'
+        Write-Info 'The Pointer Options tab, read live through SystemParametersInfo.'
+
+        $group = ''
+        foreach ($entry in @(Get-MouseSnapshot)) {
+            if ($entry.Setting.Group -ne $group) {
+                $group = $entry.Setting.Group
+                Write-Line ''
+                Write-Line "  $group" -Color (Get-Color 'Faint')
+            }
+
+            if ($entry.Error) {
+                Write-Line '    ' -NoNewline
+                Write-Line $entry.Setting.Id.PadRight(12) -Color White -NoNewline
+                Write-Line $entry.Error -Color (Get-Color 'Err')
+                continue
+            }
+
+            $rendered = Format-MouseValue -Setting $entry.Setting -Value $entry.Value
+
+            # The speed gets the slider drawn, because 6/11 means more with the
+            # notch shown than as a bare number.
+            $meter = ''
+            if ($entry.Setting.Id -eq 'speed') {
+                $meter = '  ' + (New-MeterBar -Percent (100.0 * $entry.Value / 11.0) -Width 11)
+            }
+
+            $color = Get-Color 'Text'
+            if ($entry.Setting.Kind -eq 'toggle') {
+                $color = Get-Color 'Muted'
+                if ($entry.Value) { $color = Get-Color 'Ok' }
+            }
+
+            Write-Line '    ' -NoNewline
+            Write-Line $entry.Setting.Id.PadRight(12) -Color White -NoNewline
+            Write-Line ($rendered.PadRight(16)) -Color $color -NoNewline
+            Write-Line $meter -Color (Get-Color 'Accent')
+            Write-Info $entry.Setting.Description
+        }
+
+        Write-Line ''
+        Write-Info 'Change one with:  -SetMouse precision=0     a whole preset with:  -MousePreset raw'
+    }
+
 # ===== src/50-Profile.ps1 ==============================================
 
     # =============================================================================
@@ -9181,6 +9600,74 @@ param(
 
     # The desktop app's Cursors, wallpaper and Counter-Strike pages, as one screen.
     # Until this existed the Personalise features were window-only.
+    # The Pointer Options tab as a screen: every setting with its current value,
+    # enter to change it. Toggles flip; ranges ask for a number.
+    function Show-MouseMenu {
+        while ($true) {
+            $entries = @(Get-MouseSnapshot)
+
+            $options = [System.Collections.Generic.List[object]]::new()
+            foreach ($entry in $entries) {
+                $options.Add([pscustomobject]@{
+                    Kind = 'setting'
+                    Id = $entry.Setting.Id
+                    Name = $entry.Setting.Name
+                    Hint = (Format-MouseValue -Setting $entry.Setting -Value $entry.Value)
+                    Entry = $entry
+                })
+            }
+            foreach ($preset in Get-MousePresets) {
+                $options.Add([pscustomobject]@{
+                    Kind = 'preset'; Id = $preset.Id; Name = "Preset: $($preset.Name)"
+                    Hint = $preset.Summary; Entry = $null
+                })
+            }
+
+            $result = Show-Selector -Items @($options) -Title 'Mouse' -SingleSelect `
+                -Subtitle 'Pointer Options, applied live - no sign-out, no administrator' `
+                -Label { param($o) $o.Name } `
+                -Sublabel { param($o) $o.Hint }
+
+            if (-not $result.Confirmed) { return }
+            $choice = $result.Selected[0]
+
+            Write-Banner
+
+            if ($choice.Kind -eq 'preset') {
+                Invoke-MousePreset -Id $choice.Id | Out-Null
+                Wait-ForKey
+                continue
+            }
+
+            $setting = $choice.Entry.Setting
+
+            if ($setting.Kind -eq 'toggle') {
+                # A toggle has one useful action, so do it rather than asking.
+                $next = 0
+                if (-not $choice.Entry.Value) { $next = 1 }
+                Set-MouseSetting -Id $setting.Id -Value $next | Out-Null
+            }
+            else {
+                Write-SectionHeading $setting.Name
+                Write-Info $setting.Description
+                Write-Info "Now: $(Format-MouseValue -Setting $setting -Value $choice.Entry.Value)"
+                Write-Line ''
+                Write-Line "  New value ($($setting.Minimum)-$($setting.Maximum), blank to cancel): " -Color Yellow -NoNewline
+
+                $typed = [string](Read-Host)
+                if ($typed) {
+                    $number = 0
+                    if ([int]::TryParse($typed.Trim(), [ref]$number)) {
+                        Set-MouseSetting -Id $setting.Id -Value $number | Out-Null
+                    }
+                    else { Write-Err "'$typed' is not a number." }
+                }
+            }
+
+            Wait-ForKey
+        }
+    }
+
     function Show-PersonalizeMenu {
         while ($true) {
             $options = [System.Collections.Generic.List[object]]::new()
@@ -9416,6 +9903,7 @@ param(
                 'packages' { Show-PackageMenu }
                 'customize' { Show-CustomizationMenu }
                 'personalise' { Show-PersonalizeMenu }
+                'mouse'    { Show-MouseMenu }
                 'cs2'      { Show-CsMenu -Game CS2 }
                 'csgo'     { Show-CsMenu -Game CSGO }
                 'tasks'    { Show-TaskManager }
@@ -10521,9 +11009,11 @@ param(
       <Setter Property="Foreground" Value="{StaticResource Muted}"/>
       <Setter Property="FontFamily" Value="Segoe UI"/>
       <Setter Property="FontSize" Value="14"/>
-      <!-- 9 rather than 12: fourteen pages at the roomier padding overflowed
-           the sidebar at the window's minimum height and clipped Settings. -->
-      <Setter Property="Padding" Value="18,9"/>
+      <!-- 7 rather than 12: sixteen pages at the roomier padding overflowed the
+           sidebar at the window's minimum height and clipped Settings. Tightened
+           once at fourteen pages and again at sixteen - past twenty the sidebar
+           will need grouping rather than another two pixels. -->
+      <Setter Property="Padding" Value="18,7"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
         <Setter.Value>
@@ -10587,6 +11077,65 @@ param(
               <Trigger Property="IsSelected" Value="True">
                 <Setter TargetName="Chrome" Property="Background" Value="#FF2A1B4D"/>
                 <Setter Property="Foreground" Value="{StaticResource Text}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- The mouse page's sliders. WPF's stock Slider is a light grey track with
+         a chrome thumb, which on this palette reads as a control borrowed from
+         another program - and its RepeatButtons would render as full buttons
+         without a template of their own. -->
+    <Style x:Key="TrackButton" TargetType="RepeatButton">
+      <Setter Property="Focusable" Value="False"/>
+      <Setter Property="IsTabStop" Value="False"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="RepeatButton">
+            <Border Background="Transparent" Height="18"/>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style TargetType="Slider">
+      <Setter Property="Foreground" Value="{StaticResource Accent}"/>
+      <Setter Property="IsSnapToTickEnabled" Value="True"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Slider">
+            <Grid Height="22" Background="Transparent">
+              <Border Height="4" CornerRadius="2" VerticalAlignment="Center"
+                      Background="{StaticResource Panel2}" BorderBrush="{StaticResource Line}" BorderThickness="1"/>
+              <Track x:Name="PART_Track">
+                <Track.DecreaseRepeatButton>
+                  <RepeatButton Style="{StaticResource TrackButton}" Command="Slider.DecreaseLarge"/>
+                </Track.DecreaseRepeatButton>
+                <Track.IncreaseRepeatButton>
+                  <RepeatButton Style="{StaticResource TrackButton}" Command="Slider.IncreaseLarge"/>
+                </Track.IncreaseRepeatButton>
+                <Track.Thumb>
+                  <Thumb Width="15" Height="15">
+                    <Thumb.Template>
+                      <ControlTemplate TargetType="Thumb">
+                        <Ellipse x:Name="Knob" Fill="{StaticResource Accent}" Stroke="#FF12071F" StrokeThickness="1.5"/>
+                        <ControlTemplate.Triggers>
+                          <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Knob" Property="Fill" Value="#FFD8B4FE"/>
+                          </Trigger>
+                        </ControlTemplate.Triggers>
+                      </ControlTemplate>
+                    </Thumb.Template>
+                  </Thumb>
+                </Track.Thumb>
+              </Track>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.4"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -10662,6 +11211,7 @@ param(
           <ListBoxItem Content="Toolbox"/>
           <ListBoxItem Content="Guides"/>
           <ListBoxItem Content="Personalise"/>
+          <ListBoxItem Content="Mouse"/>
           <ListBoxItem Content="Counter-Strike 2"/>
           <ListBoxItem Content="CS:GO"/>
           <ListBoxItem Content="Customization"/>
@@ -11158,6 +11708,107 @@ param(
                     <StackPanel Orientation="Horizontal">
                       <ComboBox x:Name="WallpaperStyle" Width="150" Margin="0,0,8,0"/>
                       <Button x:Name="BtnWallpaper" Content="Choose image" Style="{StaticResource Primary}"/>
+                    </StackPanel>
+                  </StackPanel>
+                </Border>
+
+              </StackPanel>
+            </ScrollViewer>
+          </Grid>
+
+          <!-- The Pointer Options tab of the Windows mouse control panel, with
+               the same grouping. Every control applies live. -->
+          <Grid x:Name="MousePanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Mouse" Style="{StaticResource PageTitle}"/>
+              <TextBlock x:Name="MouseSummary" FontSize="11" Foreground="{StaticResource Faint}"
+                         VerticalAlignment="Center" Margin="12,3,0,0"
+                         Text="Applied live through SystemParametersInfo - no sign-out, no administrator."/>
+            </StackPanel>
+
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+              <StackPanel>
+
+                <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                        CornerRadius="8" Padding="16" Margin="0,0,0,10">
+                  <StackPanel>
+                    <TextBlock Text="Motion" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
+
+                    <TextBlock Text="Pointer speed" FontSize="12" Foreground="{StaticResource Muted}"/>
+                    <Grid Margin="0,6,0,0">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Grid.Column="0" Text="Slow" FontSize="11" Foreground="{StaticResource Faint}"
+                                 VerticalAlignment="Center" Margin="0,0,10,0"/>
+                      <Slider x:Name="MouseSpeedSlider" Grid.Column="1" Minimum="1" Maximum="11"
+                              TickFrequency="1" SmallChange="1" LargeChange="1" MaxWidth="320"
+                              HorizontalAlignment="Left" Width="320"/>
+                      <TextBlock Grid.Column="2" Text="Fast" FontSize="11" Foreground="{StaticResource Faint}"
+                                 VerticalAlignment="Center" Margin="10,0,12,0"/>
+                      <TextBlock x:Name="MouseSpeedValue" Grid.Column="3" FontSize="12" FontFamily="Consolas"
+                                 Foreground="{StaticResource Accent}" VerticalAlignment="Center" Text=""/>
+                    </Grid>
+
+                    <CheckBox x:Name="ChkMousePrecision" Content="Enhance pointer precision" Margin="0,14,0,0"/>
+                    <TextBlock Text="Mouse acceleration. Off means the same hand movement always travels the same distance - what you want for aiming."
+                               FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource Faint}" Margin="27,4,0,0"/>
+                  </StackPanel>
+                </Border>
+
+                <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                        CornerRadius="8" Padding="16" Margin="0,0,0,10">
+                  <StackPanel>
+                    <TextBlock Text="Snap To" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                    <CheckBox x:Name="ChkMouseSnap" Content="Automatically move pointer to the default button in a dialog box"/>
+                  </StackPanel>
+                </Border>
+
+                <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                        CornerRadius="8" Padding="16" Margin="0,0,0,10">
+                  <StackPanel>
+                    <TextBlock Text="Visibility" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
+
+                    <CheckBox x:Name="ChkMouseTrails" Content="Display pointer trails"/>
+                    <Grid Margin="27,8,0,0">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Grid.Column="0" Text="Short" FontSize="11" Foreground="{StaticResource Faint}"
+                                 VerticalAlignment="Center" Margin="0,0,10,0"/>
+                      <Slider x:Name="MouseTrailsSlider" Grid.Column="1" Minimum="2" Maximum="7"
+                              TickFrequency="1" SmallChange="1" LargeChange="1" Width="220"/>
+                      <TextBlock Grid.Column="2" Text="Long" FontSize="11" Foreground="{StaticResource Faint}"
+                                 VerticalAlignment="Center" Margin="10,0,12,0"/>
+                      <TextBlock x:Name="MouseTrailsValue" Grid.Column="3" FontSize="12" FontFamily="Consolas"
+                                 Foreground="{StaticResource Accent}" VerticalAlignment="Center" Text=""/>
+                    </Grid>
+
+                    <CheckBox x:Name="ChkMouseVanish" Content="Hide pointer while typing" Margin="0,14,0,0"/>
+                    <CheckBox x:Name="ChkMouseSonar" Content="Show location of pointer when I press the CTRL key" Margin="0,10,0,0"/>
+                  </StackPanel>
+                </Border>
+
+                <Border Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                        CornerRadius="8" Padding="16">
+                  <StackPanel>
+                    <TextBlock Text="Presets" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                    <StackPanel Orientation="Horizontal">
+                      <Button x:Name="BtnMouseRaw" Content="Raw input" Style="{StaticResource Primary}"
+                              ToolTip="Acceleration off and the slider at 1:1"/>
+                      <Button x:Name="BtnMouseDefault" Content="Windows defaults"/>
                     </StackPanel>
                   </StackPanel>
                 </Border>
@@ -11938,6 +12589,67 @@ param(
         }
     }
 
+    # -----------------------------------------------------------------------------
+    # Mouse page
+    # -----------------------------------------------------------------------------
+
+    # Fills every control from the live settings. MouseLoading is what stops the
+    # assignments below from being mistaken for the user moving something.
+    function Update-GuiMouseControls {
+        if (-not $Ctx.Gui) { return }
+        $ui = $Ctx.Gui.Ui
+
+        $Ctx.Gui.MouseLoading = $true
+        try {
+            $problems = [System.Collections.Generic.List[string]]::new()
+            $values = @{}
+
+            foreach ($entry in @(Get-MouseSnapshot)) {
+                if ($entry.Error) { $problems.Add("$($entry.Setting.Id): $($entry.Error)"); continue }
+                $values[$entry.Setting.Id] = $entry.Value
+            }
+
+            if ($values.ContainsKey('speed')) {
+                $ui.MouseSpeedSlider.Value = $values['speed']
+                $ui.MouseSpeedValue.Text = Format-MouseValue -Setting (Resolve-MouseSetting -Id 'speed') -Value $values['speed']
+            }
+
+            if ($values.ContainsKey('trails')) {
+                $on = $values['trails'] -gt 1
+                $ui.ChkMouseTrails.IsChecked = $on
+                # The length slider only spans 2-7, so an off value of 0 would fall
+                # outside it - park it at the short end and grey it out instead.
+                $ui.MouseTrailsSlider.Value = if ($on) { $values['trails'] } else { 2 }
+                $ui.MouseTrailsSlider.IsEnabled = $on
+                $ui.MouseTrailsValue.Text = if ($on) { [string]$values['trails'] } else { 'off' }
+            }
+
+            foreach ($pair in @(@('precision', 'ChkMousePrecision'), @('snap', 'ChkMouseSnap'),
+                                @('vanish', 'ChkMouseVanish'), @('sonar', 'ChkMouseSonar'))) {
+                if ($values.ContainsKey($pair[0])) { $ui[$pair[1]].IsChecked = [bool]$values[$pair[0]] }
+            }
+
+            $summary = 'Applied live through SystemParametersInfo - no sign-out, no administrator.'
+            if ($problems.Count -gt 0) { $summary = ($problems -join '   ') }
+            $ui.MouseSummary.Text = $summary
+        }
+        finally { $Ctx.Gui.MouseLoading = $false }
+    }
+
+    # One setting, from a control the user just moved. Silent during a reload.
+    function Set-GuiMouseSetting {
+        param([Parameter(Mandatory)][string]$Id, [Parameter(Mandatory)][int]$Value)
+
+        if (-not $Ctx.Gui) { return }
+        if ($Ctx.Gui.MouseLoading) { return }
+
+        if (Set-MouseSetting -Id $Id -Value $Value) {
+            $Ctx.Gui.Ui.StatusText.Text = "$Id set to $Value"
+        }
+
+        Update-GuiMouseControls
+    }
+
     # Runs the search the three checkboxes ask for and fills the results list.
     function Invoke-GuiAppSearch {
         if (-not $Ctx.Gui) { return }
@@ -12537,6 +13249,9 @@ param(
             'CpuGraph', 'CoreStrip', 'TaskRows', 'TaskSearch', 'TaskSort', 'BtnTaskPause', 'BtnTaskKill',
             'StoreRows', 'BtnStoreRefresh', 'BtnStoreInstall', 'GuideRows',
             'CursorPresets', 'BtnCursorInstall', 'BtnCursorRestore', 'WallpaperStyle', 'BtnWallpaper', 'BtnCsLaunchCsgo',
+            'MousePanel', 'MouseSummary', 'MouseSpeedSlider', 'MouseSpeedValue',
+            'MouseTrailsSlider', 'MouseTrailsValue', 'ChkMousePrecision', 'ChkMouseSnap',
+            'ChkMouseTrails', 'ChkMouseVanish', 'ChkMouseSonar', 'BtnMouseRaw', 'BtnMouseDefault',
             'Cs2Panel', 'CsgoPanel', 'CsFolderText', 'CsgoFolderText',
             'Cs2LaunchText', 'CsgoLaunchText',
             'BtnCsDefault', 'BtnCsFile', 'BtnCsgoFile', 'BtnCsLaunch',
@@ -12571,6 +13286,11 @@ param(
             # Filled in below. Lets a handler say which page it wants by name
             # instead of hard-coding an index into the sidebar.
             NavNames  = @()
+
+            # Set while the mouse page is being filled in from the live settings.
+            # Assigning IsChecked or Value fires the same handlers a click does, so
+            # without this a refresh would write every setting straight back.
+            MouseLoading = $false
 
             # Task manager state. It lives here rather than in the handlers for the
             # reason at the top of this file: a handler runs long after the function
@@ -12645,8 +13365,8 @@ param(
 
         # Order has to match the ListBoxItems in the XAML and the $panels array in
         # the SelectionChanged handler. -1 means "no count worth showing".
-        $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Search apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Counter-Strike 2', 'CS:GO', 'Customization', 'Profiles', 'Settings')
-        $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1, @(Get-CustomizationTools).Count, -1, -1)
+        $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Search apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Mouse', 'Counter-Strike 2', 'CS:GO', 'Customization', 'Profiles', 'Settings')
+        $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1, -1, @(Get-CustomizationTools).Count, -1, -1)
 
         # The item Content becomes a DockPanel below, so the labels are no longer
         # readable off the ListBox. Keep them where a handler can still find them.
@@ -12701,7 +13421,7 @@ param(
                         $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.SearchAppsPanel,
                         $Ctx.Gui.Ui.PackagesPanel, $Ctx.Gui.Ui.StorePanel,
                         $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.GuidesPanel, $Ctx.Gui.Ui.PersonalizePanel,
-                        $Ctx.Gui.Ui.Cs2Panel, $Ctx.Gui.Ui.CsgoPanel,
+                        $Ctx.Gui.Ui.MousePanel, $Ctx.Gui.Ui.Cs2Panel, $Ctx.Gui.Ui.CsgoPanel,
                         $Ctx.Gui.Ui.CustomizationPanel, $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
             for ($i = 0; $i -lt $panels.Count; $i++) {
                 $panels[$i].Visibility = if ($i -eq $sender.SelectedIndex) { 'Visible' } else { 'Collapsed' }
@@ -12730,6 +13450,65 @@ param(
         $ui.BtnTweakAll.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Tweaks) { $r.CheckBox.IsChecked = $true } })
         $ui.BtnTweakNone.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Tweaks) { $r.CheckBox.IsChecked = $false } })
         $ui.BtnAppNone.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Apps) { $r.CheckBox.IsChecked = $false } })
+
+        # ---- mouse -------------------------------------------------------------
+        # Sliders fire per pixel while dragging, so the write happens on release
+        # rather than on every value change - each one is a SystemParametersInfo
+        # call that persists and broadcasts.
+        $ui.MouseSpeedSlider.Add_ValueChanged({
+            param($sender, $e)
+            if (-not $Ctx.Gui -or $Ctx.Gui.MouseLoading) { return }
+            $Ctx.Gui.Ui.MouseSpeedValue.Text = Format-MouseValue -Setting (Resolve-MouseSetting -Id 'speed') -Value ([int]$sender.Value)
+        })
+
+        $ui.MouseSpeedSlider.Add_PreviewMouseUp({
+            param($sender, $e)
+            Set-GuiMouseSetting -Id 'speed' -Value ([int]$sender.Value)
+        })
+
+        $ui.MouseTrailsSlider.Add_ValueChanged({
+            param($sender, $e)
+            if (-not $Ctx.Gui -or $Ctx.Gui.MouseLoading) { return }
+            $Ctx.Gui.Ui.MouseTrailsValue.Text = [string][int]$sender.Value
+        })
+
+        $ui.MouseTrailsSlider.Add_PreviewMouseUp({
+            param($sender, $e)
+            Set-GuiMouseSetting -Id 'trails' -Value ([int]$sender.Value)
+        })
+
+        # The trails checkbox drives the same setting as its slider: on means the
+        # slider's length, off means zero.
+        $ui.ChkMouseTrails.Add_Click({
+            param($sender, $e)
+            if (-not $Ctx.Gui) { return }
+            $length = 0
+            if ($sender.IsChecked) { $length = [Math]::Max(2, [int]$Ctx.Gui.Ui.MouseTrailsSlider.Value) }
+            Set-GuiMouseSetting -Id 'trails' -Value $length
+        })
+
+        foreach ($pair in @(@('ChkMousePrecision', 'precision'), @('ChkMouseSnap', 'snap'),
+                            @('ChkMouseVanish', 'vanish'), @('ChkMouseSonar', 'sonar'))) {
+            # Tag carries the setting id, read back off $sender - a plain script
+            # block cannot capture $pair, per the note at the top of this file.
+            $ui[$pair[0]].Tag = $pair[1]
+            $ui[$pair[0]].Add_Click({
+                param($sender, $e)
+                $value = 0
+                if ($sender.IsChecked) { $value = 1 }
+                Set-GuiMouseSetting -Id ([string]$sender.Tag) -Value $value
+            })
+        }
+
+        $ui.BtnMouseRaw.Add_Click({
+            Invoke-GuiWork -Label 'mouse: raw input' -Work { Invoke-MousePreset -Id 'raw' | Out-Null }
+            Update-GuiMouseControls
+        })
+
+        $ui.BtnMouseDefault.Add_Click({
+            Invoke-GuiWork -Label 'mouse: Windows defaults' -Work { Invoke-MousePreset -Id 'default' | Out-Null }
+            Update-GuiMouseControls
+        })
 
         # ---- app search --------------------------------------------------------
         # A search is a network round trip per manager, so it runs on demand rather
@@ -13038,6 +13817,7 @@ param(
 
         # ---- go ----------------------------------------------------------------
         Update-GuiOneClickSteps
+        Update-GuiMouseControls
         Update-GuiPackageRow
         Update-GuiCustomizationRow
         Update-GuiTweakRow
@@ -13146,6 +13926,9 @@ param(
         Write-Line '    -Toolbox <id>      run a toolbox action (see -List toolbox)' -Color Gray
         Write-Line '    -InstallManager <id>  install a package manager: choco or scoop' -Color Gray
         Write-Line '    -Customize <id>    install Open-Shell, Nilesoft Shell, StartAllBack or ExplorerPatcher' -Color Gray
+        Write-Line '    -Mouse             show the mouse pointer settings' -Color Gray
+        Write-Line '    -SetMouse <name=value>  e.g. precision=0, speed=6, trails=0' -Color Gray
+        Write-Line '    -MousePreset <id>  raw (no acceleration, 1:1) or default' -Color Gray
         Write-Line '    -Cursor <id|path|default>  apply a cursor pack (see -List cursors), a folder, or restore' -Color Gray
         Write-Line '    -Wallpaper <image> [-WallpaperStyle Fill|Fit|Stretch|Tile|Center|Span]' -Color Gray
         Write-Line '    -CsConfig <path|yabosen>  install a Counter-Strike .cfg into every Steam cfg folder' -Color Gray
@@ -13432,6 +14215,28 @@ param(
             $didSomething = $true
         }
 
+        # Per-user (HKCU) and applied through SystemParametersInfo, so none of these
+        # joins $mutating - elevating to move a slider would be needless UAC.
+        if (& $has 'Mouse') { Show-MouseSettings; $didSomething = $true }
+
+        if (& $has 'SetMouse') {
+            foreach ($pair in @($Bound['SetMouse'])) {
+                $split = ([string]$pair).Split('=', 2)
+                if ($split.Count -ne 2) { Write-Err "Expected name=value, got '$pair'."; continue }
+
+                $number = 0
+                if (-not [int]::TryParse($split[1].Trim(), [ref]$number)) {
+                    Write-Err "'$($split[1].Trim())' is not a number. Toggles take 0 or 1."
+                    continue
+                }
+
+                Set-MouseSetting -Id $split[0].Trim() -Value $number | Out-Null
+            }
+            $didSomething = $true
+        }
+
+        if (& $has 'MousePreset') { Invoke-MousePreset -Id $Bound['MousePreset'] | Out-Null; $didSomething = $true }
+
         if (& $has 'Cursor') {
             $cursor = [string]$Bound['Cursor']
             try {
@@ -13518,4 +14323,4 @@ param(
         Restore-ConsoleEncoding -Previous $previousEncoding
     }
 
-} $PSBoundParameters '1.2.0' $SourceUrl '2b8a602190'
+} $PSBoundParameters '1.2.0' $SourceUrl '35492921f6'

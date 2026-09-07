@@ -602,6 +602,67 @@ function Update-GuiOneClickSteps {
     }
 }
 
+# -----------------------------------------------------------------------------
+# Mouse page
+# -----------------------------------------------------------------------------
+
+# Fills every control from the live settings. MouseLoading is what stops the
+# assignments below from being mistaken for the user moving something.
+function Update-GuiMouseControls {
+    if (-not $Ctx.Gui) { return }
+    $ui = $Ctx.Gui.Ui
+
+    $Ctx.Gui.MouseLoading = $true
+    try {
+        $problems = [System.Collections.Generic.List[string]]::new()
+        $values = @{}
+
+        foreach ($entry in @(Get-MouseSnapshot)) {
+            if ($entry.Error) { $problems.Add("$($entry.Setting.Id): $($entry.Error)"); continue }
+            $values[$entry.Setting.Id] = $entry.Value
+        }
+
+        if ($values.ContainsKey('speed')) {
+            $ui.MouseSpeedSlider.Value = $values['speed']
+            $ui.MouseSpeedValue.Text = Format-MouseValue -Setting (Resolve-MouseSetting -Id 'speed') -Value $values['speed']
+        }
+
+        if ($values.ContainsKey('trails')) {
+            $on = $values['trails'] -gt 1
+            $ui.ChkMouseTrails.IsChecked = $on
+            # The length slider only spans 2-7, so an off value of 0 would fall
+            # outside it - park it at the short end and grey it out instead.
+            $ui.MouseTrailsSlider.Value = if ($on) { $values['trails'] } else { 2 }
+            $ui.MouseTrailsSlider.IsEnabled = $on
+            $ui.MouseTrailsValue.Text = if ($on) { [string]$values['trails'] } else { 'off' }
+        }
+
+        foreach ($pair in @(@('precision', 'ChkMousePrecision'), @('snap', 'ChkMouseSnap'),
+                            @('vanish', 'ChkMouseVanish'), @('sonar', 'ChkMouseSonar'))) {
+            if ($values.ContainsKey($pair[0])) { $ui[$pair[1]].IsChecked = [bool]$values[$pair[0]] }
+        }
+
+        $summary = 'Applied live through SystemParametersInfo - no sign-out, no administrator.'
+        if ($problems.Count -gt 0) { $summary = ($problems -join '   ') }
+        $ui.MouseSummary.Text = $summary
+    }
+    finally { $Ctx.Gui.MouseLoading = $false }
+}
+
+# One setting, from a control the user just moved. Silent during a reload.
+function Set-GuiMouseSetting {
+    param([Parameter(Mandatory)][string]$Id, [Parameter(Mandatory)][int]$Value)
+
+    if (-not $Ctx.Gui) { return }
+    if ($Ctx.Gui.MouseLoading) { return }
+
+    if (Set-MouseSetting -Id $Id -Value $Value) {
+        $Ctx.Gui.Ui.StatusText.Text = "$Id set to $Value"
+    }
+
+    Update-GuiMouseControls
+}
+
 # Runs the search the three checkboxes ask for and fills the results list.
 function Invoke-GuiAppSearch {
     if (-not $Ctx.Gui) { return }
@@ -1201,6 +1262,9 @@ function New-GuiWindow {
         'CpuGraph', 'CoreStrip', 'TaskRows', 'TaskSearch', 'TaskSort', 'BtnTaskPause', 'BtnTaskKill',
         'StoreRows', 'BtnStoreRefresh', 'BtnStoreInstall', 'GuideRows',
         'CursorPresets', 'BtnCursorInstall', 'BtnCursorRestore', 'WallpaperStyle', 'BtnWallpaper', 'BtnCsLaunchCsgo',
+        'MousePanel', 'MouseSummary', 'MouseSpeedSlider', 'MouseSpeedValue',
+        'MouseTrailsSlider', 'MouseTrailsValue', 'ChkMousePrecision', 'ChkMouseSnap',
+        'ChkMouseTrails', 'ChkMouseVanish', 'ChkMouseSonar', 'BtnMouseRaw', 'BtnMouseDefault',
         'Cs2Panel', 'CsgoPanel', 'CsFolderText', 'CsgoFolderText',
         'Cs2LaunchText', 'CsgoLaunchText',
         'BtnCsDefault', 'BtnCsFile', 'BtnCsgoFile', 'BtnCsLaunch',
@@ -1235,6 +1299,11 @@ function New-GuiWindow {
         # Filled in below. Lets a handler say which page it wants by name
         # instead of hard-coding an index into the sidebar.
         NavNames  = @()
+
+        # Set while the mouse page is being filled in from the live settings.
+        # Assigning IsChecked or Value fires the same handlers a click does, so
+        # without this a refresh would write every setting straight back.
+        MouseLoading = $false
 
         # Task manager state. It lives here rather than in the handlers for the
         # reason at the top of this file: a handler runs long after the function
@@ -1309,8 +1378,8 @@ function New-GuiWindow {
 
     # Order has to match the ListBoxItems in the XAML and the $panels array in
     # the SelectionChanged handler. -1 means "no count worth showing".
-    $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Search apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Counter-Strike 2', 'CS:GO', 'Customization', 'Profiles', 'Settings')
-    $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1, @(Get-CustomizationTools).Count, -1, -1)
+    $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Search apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Mouse', 'Counter-Strike 2', 'CS:GO', 'Customization', 'Profiles', 'Settings')
+    $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1, -1, @(Get-CustomizationTools).Count, -1, -1)
 
     # The item Content becomes a DockPanel below, so the labels are no longer
     # readable off the ListBox. Keep them where a handler can still find them.
@@ -1365,7 +1434,7 @@ function New-GuiWindow {
                     $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.SearchAppsPanel,
                     $Ctx.Gui.Ui.PackagesPanel, $Ctx.Gui.Ui.StorePanel,
                     $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.GuidesPanel, $Ctx.Gui.Ui.PersonalizePanel,
-                    $Ctx.Gui.Ui.Cs2Panel, $Ctx.Gui.Ui.CsgoPanel,
+                    $Ctx.Gui.Ui.MousePanel, $Ctx.Gui.Ui.Cs2Panel, $Ctx.Gui.Ui.CsgoPanel,
                     $Ctx.Gui.Ui.CustomizationPanel, $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
         for ($i = 0; $i -lt $panels.Count; $i++) {
             $panels[$i].Visibility = if ($i -eq $sender.SelectedIndex) { 'Visible' } else { 'Collapsed' }
@@ -1394,6 +1463,65 @@ function New-GuiWindow {
     $ui.BtnTweakAll.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Tweaks) { $r.CheckBox.IsChecked = $true } })
     $ui.BtnTweakNone.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Tweaks) { $r.CheckBox.IsChecked = $false } })
     $ui.BtnAppNone.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Apps) { $r.CheckBox.IsChecked = $false } })
+
+    # ---- mouse -------------------------------------------------------------
+    # Sliders fire per pixel while dragging, so the write happens on release
+    # rather than on every value change - each one is a SystemParametersInfo
+    # call that persists and broadcasts.
+    $ui.MouseSpeedSlider.Add_ValueChanged({
+        param($sender, $e)
+        if (-not $Ctx.Gui -or $Ctx.Gui.MouseLoading) { return }
+        $Ctx.Gui.Ui.MouseSpeedValue.Text = Format-MouseValue -Setting (Resolve-MouseSetting -Id 'speed') -Value ([int]$sender.Value)
+    })
+
+    $ui.MouseSpeedSlider.Add_PreviewMouseUp({
+        param($sender, $e)
+        Set-GuiMouseSetting -Id 'speed' -Value ([int]$sender.Value)
+    })
+
+    $ui.MouseTrailsSlider.Add_ValueChanged({
+        param($sender, $e)
+        if (-not $Ctx.Gui -or $Ctx.Gui.MouseLoading) { return }
+        $Ctx.Gui.Ui.MouseTrailsValue.Text = [string][int]$sender.Value
+    })
+
+    $ui.MouseTrailsSlider.Add_PreviewMouseUp({
+        param($sender, $e)
+        Set-GuiMouseSetting -Id 'trails' -Value ([int]$sender.Value)
+    })
+
+    # The trails checkbox drives the same setting as its slider: on means the
+    # slider's length, off means zero.
+    $ui.ChkMouseTrails.Add_Click({
+        param($sender, $e)
+        if (-not $Ctx.Gui) { return }
+        $length = 0
+        if ($sender.IsChecked) { $length = [Math]::Max(2, [int]$Ctx.Gui.Ui.MouseTrailsSlider.Value) }
+        Set-GuiMouseSetting -Id 'trails' -Value $length
+    })
+
+    foreach ($pair in @(@('ChkMousePrecision', 'precision'), @('ChkMouseSnap', 'snap'),
+                        @('ChkMouseVanish', 'vanish'), @('ChkMouseSonar', 'sonar'))) {
+        # Tag carries the setting id, read back off $sender - a plain script
+        # block cannot capture $pair, per the note at the top of this file.
+        $ui[$pair[0]].Tag = $pair[1]
+        $ui[$pair[0]].Add_Click({
+            param($sender, $e)
+            $value = 0
+            if ($sender.IsChecked) { $value = 1 }
+            Set-GuiMouseSetting -Id ([string]$sender.Tag) -Value $value
+        })
+    }
+
+    $ui.BtnMouseRaw.Add_Click({
+        Invoke-GuiWork -Label 'mouse: raw input' -Work { Invoke-MousePreset -Id 'raw' | Out-Null }
+        Update-GuiMouseControls
+    })
+
+    $ui.BtnMouseDefault.Add_Click({
+        Invoke-GuiWork -Label 'mouse: Windows defaults' -Work { Invoke-MousePreset -Id 'default' | Out-Null }
+        Update-GuiMouseControls
+    })
 
     # ---- app search --------------------------------------------------------
     # A search is a network round trip per manager, so it runs on demand rather
@@ -1702,6 +1830,7 @@ function New-GuiWindow {
 
     # ---- go ----------------------------------------------------------------
     Update-GuiOneClickSteps
+    Update-GuiMouseControls
     Update-GuiPackageRow
     Update-GuiCustomizationRow
     Update-GuiTweakRow

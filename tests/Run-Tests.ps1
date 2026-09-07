@@ -1491,6 +1491,184 @@ if (Test-StaApartment) {
 }
 
 # -----------------------------------------------------------------------------
+Write-Section 'Mouse'
+
+Test-Case 'the six settings are the Pointer Options tab' {
+    $settings = @(Get-MouseSettings)
+    Assert-Equal 6 $settings.Count
+
+    $ids = @($settings | ForEach-Object { $_.Id })
+    Assert-Equal 6 @($ids | Sort-Object -Unique).Count 'setting ids are not unique'
+    foreach ($expected in @('speed', 'precision', 'snap', 'trails', 'vanish', 'sonar')) {
+        Assert-True ($ids -contains $expected) "$expected is missing"
+    }
+
+    # Same three groups the dialog uses, in the same order.
+    $groups = @($settings | ForEach-Object { $_.Group } | Select-Object -Unique)
+    Assert-Equal 3 $groups.Count
+    Assert-Equal 'Motion' $groups[0]
+    Assert-Equal 'Snap To' $groups[1]
+    Assert-Equal 'Visibility' $groups[2]
+
+    foreach ($setting in $settings) {
+        Assert-True ($setting.Kind -in @('toggle', 'range')) "$($setting.Id) has kind '$($setting.Kind)'"
+        Assert-True ($setting.Maximum -gt $setting.Minimum) "$($setting.Id) has an empty range"
+        Assert-True (-not [string]::IsNullOrWhiteSpace($setting.Description)) "$($setting.Id) has no description"
+        Assert-Equal $setting.Id (Resolve-MouseSetting -Id $setting.Id).Id
+    }
+
+    Assert-True ($null -eq (Resolve-MouseSetting -Id 'no-such-setting')) 'a nonsense id resolved'
+}
+
+Test-Case 'the eleven slider notches map onto the API''s 1-20' {
+    # The dialog's slider has eleven positions and SystemParametersInfo takes
+    # 1-20, so they are not the same number. This is the control panel's own
+    # mapping, and it is why 'notch 6' and 'speed 10' both mean 1:1.
+    $expected = @(1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20)
+    for ($position = 1; $position -le 11; $position++) {
+        Assert-Equal $expected[$position - 1] (ConvertTo-MousePointerSpeed -Position $position)
+        # And back again, for every notch.
+        Assert-Equal $position (ConvertFrom-MousePointerSpeed -Speed $expected[$position - 1])
+    }
+
+    # 1:1 is the middle notch.
+    Assert-Equal 10 (ConvertTo-MousePointerSpeed -Position 6)
+
+    # Out of range clamps rather than indexing past the end of the table.
+    Assert-Equal 1 (ConvertTo-MousePointerSpeed -Position 0)
+    Assert-Equal 1 (ConvertTo-MousePointerSpeed -Position -5)
+    Assert-Equal 20 (ConvertTo-MousePointerSpeed -Position 99)
+
+    # A value set by something other than the control panel need not be one of
+    # the eleven, so coming back picks the nearest notch.
+    Assert-Equal 7 (ConvertFrom-MousePointerSpeed -Speed 13)
+    Assert-Equal 1 (ConvertFrom-MousePointerSpeed -Speed 0)
+    Assert-Equal 11 (ConvertFrom-MousePointerSpeed -Speed 40)
+}
+
+Test-Case 'values read back in the words the dialog uses' {
+    $speed = Resolve-MouseSetting -Id 'speed'
+    $trails = Resolve-MouseSetting -Id 'trails'
+    $precision = Resolve-MouseSetting -Id 'precision'
+
+    Assert-True ((Format-MouseValue -Setting $speed -Value 6) -match '1:1') 'the middle notch is not called out as 1:1'
+    Assert-True ((Format-MouseValue -Setting $speed -Value 3) -match '^3/11') 'a speed is not shown out of eleven'
+
+    Assert-Equal 'on' (Format-MouseValue -Setting $precision -Value 1)
+    Assert-Equal 'off' (Format-MouseValue -Setting $precision -Value 0)
+
+    # 0 and 1 both mean off for trails; only 2 and up is a length.
+    Assert-Equal 'off' (Format-MouseValue -Setting $trails -Value 0)
+    Assert-Equal 'off' (Format-MouseValue -Setting $trails -Value 1)
+    Assert-True ((Format-MouseValue -Setting $trails -Value 5) -match 'length 5') 'a trail length is not reported'
+
+    Assert-Equal 'unknown' (Format-MouseValue -Setting $speed -Value $null)
+}
+
+Test-Case 'every setting reads live without throwing' {
+    # Read-only: SPI_GET for all six. None of them needs administrator.
+    $snapshot = @(Get-MouseSnapshot)
+    Assert-Equal 6 $snapshot.Count
+
+    foreach ($entry in $snapshot) {
+        Assert-Equal '' $entry.Error "$($entry.Setting.Id) - $($entry.Error)"
+        Assert-True ($null -ne $entry.Value) "$($entry.Setting.Id) read as null"
+        Assert-True ($entry.Value -ge $entry.Setting.Minimum -and $entry.Value -le $entry.Setting.Maximum) `
+            "$($entry.Setting.Id) read $($entry.Value), outside $($entry.Setting.Minimum)-$($entry.Setting.Maximum)"
+    }
+}
+
+Test-Case 'every setting round-trips, and the machine ends as it started' {
+    # The one test that writes. It captures all six first and restores them in
+    # a finally, so running the suite never leaves someone's mouse changed.
+    $before = @{}
+    foreach ($setting in Get-MouseSettings) { $before[$setting.Id] = Get-MouseSettingValue -Id $setting.Id }
+
+    try {
+        # A different value for each, so a write that silently did nothing
+        # would show up as a mismatch rather than passing by luck.
+        $probe = @{ speed = 8; precision = 1; snap = 1; trails = 5; vanish = 0; sonar = 1 }
+
+        foreach ($id in @($probe.Keys)) {
+            Set-MouseSettingValue -Id $id -Value $probe[$id]
+            Assert-Equal $probe[$id] (Get-MouseSettingValue -Id $id) "$id did not read back what was written"
+        }
+
+        # SPIF_UPDATEINIFILE means Windows persists it, so the registry has to
+        # agree - otherwise the setting would revert at the next sign-in.
+        $mouse = Get-ItemProperty 'HKCU:\Control Panel\Mouse'
+        Assert-Equal '14' ([string]$mouse.MouseSensitivity) 'notch 8 did not persist as sensitivity 14'
+        Assert-Equal '5' ([string]$mouse.MouseTrails) 'the trail length did not persist'
+    }
+    finally {
+        foreach ($id in @($before.Keys)) { Set-MouseSettingValue -Id $id -Value $before[$id] }
+    }
+
+    foreach ($setting in Get-MouseSettings) {
+        Assert-Equal $before[$setting.Id] (Get-MouseSettingValue -Id $setting.Id) "$($setting.Id) was not restored"
+    }
+}
+
+Test-Case 'a dry run reports without touching anything' {
+    $before = @{}
+    foreach ($setting in Get-MouseSettings) { $before[$setting.Id] = Get-MouseSettingValue -Id $setting.Id }
+
+    $previousDryRun = $Ctx.DryRun
+    $Ctx.DryRun = $true
+    try {
+        Assert-True (-not (Set-MouseSetting -Id 'precision' -Value 1)) 'a dry run reported a change'
+        Assert-True (-not (Invoke-MousePreset -Id 'raw')) 'a dry run preset reported a change'
+    }
+    finally { $Ctx.DryRun = $previousDryRun }
+
+    foreach ($setting in Get-MouseSettings) {
+        Assert-Equal $before[$setting.Id] (Get-MouseSettingValue -Id $setting.Id) "$($setting.Id) changed during a dry run"
+    }
+}
+
+Test-Case 'out-of-range values clamp instead of writing nonsense' {
+    # Checked without writing: a dry run reports the clamped value it would use.
+    $previousDryRun = $Ctx.DryRun
+    $Ctx.DryRun = $true
+    try {
+        # Nothing here should throw, and nothing should reach the API.
+        Assert-True (-not (Set-MouseSetting -Id 'speed' -Value 99)) 'a dry run reported a change'
+        Assert-True (-not (Set-MouseSetting -Id 'speed' -Value -4)) 'a dry run reported a change'
+        Assert-True (-not (Set-MouseSetting -Id 'trails' -Value 1)) 'a dry run reported a change'
+        Assert-True (-not (Set-MouseSetting -Id 'nonsense' -Value 1)) 'an unknown setting reported a change'
+    }
+    finally { $Ctx.DryRun = $previousDryRun }
+}
+
+Test-Case 'presets only name settings that exist' {
+    $presets = @(Get-MousePresets)
+    Assert-True ($presets.Count -ge 2) 'fewer than two presets'
+
+    $ids = @(Get-MouseSettings | ForEach-Object { $_.Id })
+
+    foreach ($preset in $presets) {
+        Assert-True (-not [string]::IsNullOrWhiteSpace($preset.Summary)) "$($preset.Id) has no summary"
+        Assert-Equal $preset.Id (Resolve-MousePreset -Id $preset.Id).Id
+
+        foreach ($key in $preset.Values.Keys) {
+            Assert-True ($ids -contains $key) "preset $($preset.Id) sets '$key', which is not a setting"
+
+            $setting = Resolve-MouseSetting -Id $key
+            $value = $preset.Values[$key]
+            Assert-True ($value -ge $setting.Minimum -and $value -le $setting.Maximum) `
+                "preset $($preset.Id) sets $key to $value, outside its range"
+        }
+    }
+
+    # The one people actually want: no acceleration, slider at 1:1.
+    $raw = Resolve-MousePreset -Id 'raw'
+    Assert-Equal 0 $raw.Values['precision']
+    Assert-Equal 6 $raw.Values['speed']
+
+    Assert-True ($null -eq (Resolve-MousePreset -Id 'no-such-preset')) 'a nonsense preset resolved'
+}
+
+# -----------------------------------------------------------------------------
 Write-Section 'Personalise'
 
 Test-Case 'the six cursor presets are the desktop app''s six' {
@@ -2325,6 +2503,32 @@ if (Test-StaApartment) {
                 Assert-True ([bool]$gui.Ui[$box].IsChecked) "$box does not start ticked"
             }
             Assert-True ($null -eq $gui.Ui.AppSearchRows.ItemsSource) 'the results list is populated before any search'
+
+            # Mouse page: every control present, and filled in from the live
+            # settings at window-open rather than left at its XAML default.
+            Assert-True ($null -ne $gui.Ui.MousePanel) 'no mouse panel'
+            Assert-True ($gui.NavNames -contains 'Mouse') 'Mouse is not in the sidebar'
+
+            foreach ($name in @('MouseSpeedSlider', 'MouseTrailsSlider', 'ChkMousePrecision',
+                                'ChkMouseSnap', 'ChkMouseTrails', 'ChkMouseVanish', 'ChkMouseSonar',
+                                'BtnMouseRaw', 'BtnMouseDefault')) {
+                Assert-True ($null -ne $gui.Ui[$name]) "the mouse page has no $name"
+            }
+
+            # The slider spans the eleven notches, not the API's 1-20.
+            Assert-Equal 1 ([int]$gui.Ui.MouseSpeedSlider.Minimum)
+            Assert-Equal 11 ([int]$gui.Ui.MouseSpeedSlider.Maximum)
+            # Trails length is 2-7; 0 and 1 both mean off and are the checkbox.
+            Assert-Equal 2 ([int]$gui.Ui.MouseTrailsSlider.Minimum)
+            Assert-Equal 7 ([int]$gui.Ui.MouseTrailsSlider.Maximum)
+
+            Assert-Equal (Get-MouseSettingValue -Id 'speed') ([int]$gui.Ui.MouseSpeedSlider.Value)
+            Assert-Equal ([bool](Get-MouseSettingValue -Id 'precision')) ([bool]$gui.Ui.ChkMousePrecision.IsChecked)
+            Assert-Equal ([bool](Get-MouseSettingValue -Id 'sonar')) ([bool]$gui.Ui.ChkMouseSonar.IsChecked)
+
+            # Filling the controls must not have written anything back: the
+            # guard flag is down again once the load finishes.
+            Assert-True (-not $Ctx.Gui.MouseLoading) 'the mouse page is still marked as loading'
 
             # Package managers page: one row per manager, and the nav count
             # agrees with the catalog.

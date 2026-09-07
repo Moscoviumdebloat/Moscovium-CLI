@@ -33,6 +33,9 @@ function Show-Help {
     Write-Line '    -Toolbox <id>      run a toolbox action (see -List toolbox)' -Color Gray
     Write-Line '    -InstallManager <id>  install a package manager: choco or scoop' -Color Gray
     Write-Line '    -Customize <id>    install Open-Shell, Nilesoft Shell, StartAllBack or ExplorerPatcher' -Color Gray
+    Write-Line '    -Mouse             show the mouse pointer settings' -Color Gray
+    Write-Line '    -SetMouse <name=value>  e.g. precision=0, speed=6, trails=0' -Color Gray
+    Write-Line '    -MousePreset <id>  raw (no acceleration, 1:1) or default' -Color Gray
     Write-Line '    -Cursor <id|path|default>  apply a cursor pack (see -List cursors), a folder, or restore' -Color Gray
     Write-Line '    -Wallpaper <image> [-WallpaperStyle Fill|Fit|Stretch|Tile|Center|Span]' -Color Gray
     Write-Line '    -CsConfig <path|yabosen>  install a Counter-Strike .cfg into every Steam cfg folder' -Color Gray
@@ -318,6 +321,28 @@ function Invoke-Main {
         Install-CustomizationTool -Id $Bound['Customize'] | Out-Null
         $didSomething = $true
     }
+
+    # Per-user (HKCU) and applied through SystemParametersInfo, so none of these
+    # joins $mutating - elevating to move a slider would be needless UAC.
+    if (& $has 'Mouse') { Show-MouseSettings; $didSomething = $true }
+
+    if (& $has 'SetMouse') {
+        foreach ($pair in @($Bound['SetMouse'])) {
+            $split = ([string]$pair).Split('=', 2)
+            if ($split.Count -ne 2) { Write-Err "Expected name=value, got '$pair'."; continue }
+
+            $number = 0
+            if (-not [int]::TryParse($split[1].Trim(), [ref]$number)) {
+                Write-Err "'$($split[1].Trim())' is not a number. Toggles take 0 or 1."
+                continue
+            }
+
+            Set-MouseSetting -Id $split[0].Trim() -Value $number | Out-Null
+        }
+        $didSomething = $true
+    }
+
+    if (& $has 'MousePreset') { Invoke-MousePreset -Id $Bound['MousePreset'] | Out-Null; $didSomething = $true }
 
     if (& $has 'Cursor') {
         $cursor = [string]$Bound['Cursor']
