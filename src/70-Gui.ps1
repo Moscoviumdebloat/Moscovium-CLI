@@ -71,28 +71,53 @@ function Import-WpfAssembly {
     }
 }
 
-# WPF cannot run on an MTA thread. powershell.exe is STA; pwsh is not, so a run
-# started there is relaunched into an STA host rather than failing.
-function Invoke-StaRelaunch {
+# The GUI has two hard requirements the current host may not meet, and both are
+# fixed the same way - by relaunching:
+#
+#   STA    WPF cannot run on an MTA thread. powershell.exe is STA; pwsh is not.
+#   Admin  Nearly every tweak writes to HKLM. A non-elevated window would show a
+#          catalog it mostly cannot apply, so the window is always elevated and
+#          there is no in-app "restart as admin" to explain.
+#
+# Returns $true when a replacement was started and this run should stand down.
+function Invoke-GuiRelaunch {
     param([hashtable]$BoundParameters = @{})
 
-    Write-Warn 'The GUI needs an STA thread, and this PowerShell host is running MTA.'
+    $needsSta = -not (Test-StaApartment)
+
+    # A dry run writes nothing, so demanding a UAC prompt to preview a plan would
+    # be theatre. The header badge makes it obvious which mode the window is in.
+    $needsAdmin = (-not $Ctx.IsAdmin) -and (-not $Ctx.DryRun)
+
+    if (-not $needsSta -and -not $needsAdmin) { return $false }
+
+    $reasons = @()
+    if ($needsAdmin) { $reasons += 'administrator rights' }
+    if ($needsSta)   { $reasons += 'an STA thread' }
+    Write-Step ("Reopening the GUI with " + ($reasons -join ' and '))
 
     $command = Get-RelaunchCommand -BoundParameters $BoundParameters
+    # Always the 5.1 host: it is STA by default and always present.
     $host51 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 
-    Write-Step 'Relaunching in an STA host'
-    Write-Log "STA relaunch: $command"
+    $start = @{
+        FilePath     = $host51
+        ArgumentList = @('-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', $command)
+        ErrorAction  = 'Stop'
+    }
+    # UAC is the prompt; asking first would just be a dialog about a dialog.
+    if ($needsAdmin) { $start.Verb = 'RunAs' }
+
+    Write-Log "GUI relaunch: $command"
 
     try {
-        Start-Process -FilePath $host51 -ArgumentList @(
-            '-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', $command
-        ) -ErrorAction Stop | Out-Null
+        Start-Process @start | Out-Null
         return $true
     }
     catch {
-        Write-Err "Could not start an STA host: $($_.Exception.Message)"
-        return $false
+        # Almost always the user dismissing UAC.
+        Write-Err "The GUI needs administrator rights and was not granted them: $($_.Exception.Message)"
+        return $true
     }
 }
 
@@ -105,19 +130,24 @@ function Invoke-StaRelaunch {
 function ConvertTo-Brush {
     param($Color)
 
+    # The console's sixteen colours mapped onto the window's purple palette, so
+    # log output reads as part of the same design rather than a terminal pasted
+    # into it. Cyan is the CLI's accent, so it lands on the purple accent here.
     $hex = switch ([string]$Color) {
-        'Green'      { '#FF7BD88F' }
-        'DarkGreen'  { '#FF5FA86F' }
-        'Yellow'     { '#FFF0C674' }
-        'DarkYellow' { '#FFD0A354' }
-        'Red'        { '#FFF07178' }
-        'DarkRed'    { '#FFC05058' }
-        'Cyan'       { '#FF4FC3F7' }
-        'DarkCyan'   { '#FF3A93BC' }
-        'White'      { '#FFF4F4F8' }
-        'Gray'       { '#FFC8C8D2' }
-        'DarkGray'   { '#FF8E8E9C' }
-        default      { '#FFE4E4EA' }
+        'Green'      { '#FF7EE0A6' }
+        'DarkGreen'  { '#FF56A87A' }
+        'Yellow'     { '#FFFFCB7A' }
+        'DarkYellow' { '#FFD1A055' }
+        'Red'        { '#FFFF7B94' }
+        'DarkRed'    { '#FFC2536B' }
+        'Cyan'       { '#FFB388FF' }
+        'DarkCyan'   { '#FF7D5CC0' }
+        'Magenta'    { '#FFD8B4FE' }
+        'DarkMagenta'{ '#FF9268D8' }
+        'White'      { '#FFF3EFFC' }
+        'Gray'       { '#FFC5BDDC' }
+        'DarkGray'   { '#FF8B81A8' }
+        default      { '#FFEDE8F7' }
     }
 
     New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($hex))
@@ -151,8 +181,8 @@ function Set-GuiRowVisual {
 
     $box = $Border.Child.Children[0]
 
-    if ($box.IsChecked -eq $true) { $Border.Background = New-HexBrush '#FF16323E' }
-    elseif ($Hover)               { $Border.Background = New-HexBrush '#FF212129' }
+    if ($box.IsChecked -eq $true) { $Border.Background = New-HexBrush '#FF1D1233' }
+    elseif ($Hover)               { $Border.Background = New-HexBrush '#FF120C1E' }
     else                          { $Border.Background = [Windows.Media.Brushes]::Transparent }
 }
 
@@ -193,7 +223,7 @@ function New-GuiGroupHeader {
     $badge = New-Object Windows.Controls.TextBlock
     $badge.Text = [string]$Count
     $badge.FontSize = 11
-    $badge.Foreground = New-HexBrush '#FF6E6E7E'
+    $badge.Foreground = New-HexBrush '#FF5F5680'
     [Windows.Controls.DockPanel]::SetDock($badge, 'Right')
     $panel.Children.Add($badge) | Out-Null
 
@@ -201,13 +231,13 @@ function New-GuiGroupHeader {
     $label.Text = $Title.ToUpperInvariant()
     $label.FontSize = 10.5
     $label.FontWeight = 'SemiBold'
-    $label.Foreground = New-HexBrush '#FF8E8E9C'
+    $label.Foreground = New-HexBrush '#FF8B81A8'
     [Windows.Controls.DockPanel]::SetDock($label, 'Left')
     $panel.Children.Add($label) | Out-Null
 
     $rule = New-Object Windows.Controls.Border
     $rule.Height = 1
-    $rule.Background = New-HexBrush '#FF2C2C36'
+    $rule.Background = New-HexBrush '#FF241A3A'
     $rule.VerticalAlignment = 'Center'
     $rule.Margin = New-Object Windows.Thickness 10, 1, 10, 0
     $panel.Children.Add($rule) | Out-Null
@@ -241,8 +271,8 @@ function New-GuiRow {
         [Parameter(Mandatory)][string]$Primary,
         [AllowEmptyString()][string]$Secondary = '',
         [AllowEmptyString()][string]$Status = '',
-        [string]$StatusBrush = '#FF9C9CAC',
-        [string]$StatusFill = '#FF262630',
+        [string]$StatusBrush = '#FF8B81A8',
+        [string]$StatusFill = '#FF150F22',
         [switch]$NoCheckBox
     )
 
@@ -287,14 +317,14 @@ function New-GuiRow {
 
     $title = New-Object Windows.Controls.TextBlock
     $title.Text = $Primary
-    $title.Foreground = ConvertTo-Brush 'White'
+    $title.Foreground = New-HexBrush '#FFEDE8F7'
     $title.FontSize = 13
     $stack.Children.Add($title) | Out-Null
 
     if ($Secondary) {
         $sub = New-Object Windows.Controls.TextBlock
         $sub.Text = $Secondary
-        $sub.Foreground = ConvertTo-Brush 'DarkGray'
+        $sub.Foreground = New-HexBrush '#FF8B81A8'
         $sub.FontSize = 11
         $sub.TextWrapping = 'Wrap'
         $sub.Margin = New-Object Windows.Thickness 0, 1, 0, 0
@@ -367,10 +397,10 @@ function Update-GuiTweakRow {
         foreach ($tweak in $matching) {
             $status = Get-TweakStatus -Tweak $tweak
             $label, $ink, $fill = switch ($status) {
-                'Applied' { 'applied', '#FF7BD88F', '#FF1B3226' }
-                'Partial' { 'partial', '#FFF0C674', '#FF332C18' }
-                'Action'  { 'action',  '#FF4FC3F7', '#FF16303C' }
-                default   { '',        '#FF9C9CAC', '#FF262630' }
+                'Applied' { 'applied', '#FF7EE0A6', '#FF102A1E' }
+                'Partial' { 'partial', '#FFFFCB7A', '#FF2E2410' }
+                'Action'  { 'action',  '#FFB388FF', '#FF1E1436' }
+                default   { '',        '#FF8B81A8', '#FF150F22' }
             }
 
             $row = New-GuiRow -Item $tweak -Primary $tweak.name -Secondary $tweak.description `
@@ -414,10 +444,10 @@ function Update-GuiAppRow {
         foreach ($app in $matching) {
             # Anything but winget is worth flagging: it means a vendor download
             # or, for a script, remote code.
-            $how, $ink, $fill = if ($app.scriptUrl)      { 'script',   '#FFF0C674', '#FF332C18' }
-                                elseif ($app.zipUrl)     { 'archive',  '#FF9C9CAC', '#FF262630' }
-                                elseif ($app.downloadUrl){ 'download', '#FF9C9CAC', '#FF262630' }
-                                else                     { 'winget',   '#FF6E7E8C', '#FF20262C' }
+            $how, $ink, $fill = if ($app.scriptUrl)      { 'script',   '#FFFFCB7A', '#FF2E2410' }
+                                elseif ($app.zipUrl)     { 'archive',  '#FF8B81A8', '#FF150F22' }
+                                elseif ($app.downloadUrl){ 'download', '#FF8B81A8', '#FF150F22' }
+                                else                     { 'winget',   '#FF7D5CC0', '#FF150F22' }
 
             $row = New-GuiRow -Item $app -Primary $app.name -Secondary ([string]$app.description) `
                 -Status $how -StatusBrush $ink -StatusFill $fill
@@ -502,7 +532,7 @@ function Set-GuiNavContent {
         $badge = New-Object Windows.Controls.TextBlock
         $badge.Text = [string]$Count
         $badge.FontSize = 11
-        $badge.Foreground = New-HexBrush '#FF6E6E7E'
+        $badge.Foreground = New-HexBrush '#FF5F5680'
         $badge.VerticalAlignment = 'Center'
         [Windows.Controls.DockPanel]::SetDock($badge, 'Right')
         $panel.Children.Add($badge) | Out-Null
@@ -532,11 +562,11 @@ function New-GuiIcon {
     $visual = New-Object Windows.Media.DrawingVisual
     $dc = $visual.RenderOpen()
     try {
-        $accent = New-HexBrush '#FF4FC3F7'
+        $accent = New-HexBrush '#FFB388FF'
         $dc.DrawRoundedRectangle($accent, $null, (New-Object Windows.Rect 0, 0, 32, 32), 7, 7)
 
         # A stylised M, stroked rather than typeset, so no font is involved.
-        $pen = New-Object Windows.Media.Pen ((New-HexBrush '#FF0B1218'), 3.4)
+        $pen = New-Object Windows.Media.Pen ((New-HexBrush '#FF14082B'), 3.4)
         $pen.StartLineCap = 'Round'; $pen.EndLineCap = 'Round'; $pen.LineJoin = 'Round'
         $geometry = [Windows.Media.Geometry]::Parse('M 8,23 L 8,9 L 16,18 L 24,9 L 24,23')
         $dc.DrawGeometry($null, $pen, $geometry)
@@ -564,7 +594,7 @@ function New-GuiWindow {
     # Pull every x:Name into a lookup so handlers read as $ui.BtnApply.
     $ui = @{}
     foreach ($name in @(
-        'VersionText', 'CatalogChip', 'ElevChip', 'ElevChipBorder', 'DryRunToggle', 'BtnElevate',
+        'VersionText', 'CatalogChip', 'DryRunBadge',
         'NavList', 'TweaksPanel', 'AppsPanel', 'ToolboxPanel', 'ProfilesPanel',
         'TweakSearch', 'TweakCategory', 'TweakRows', 'BtnApply', 'BtnRevert', 'BtnTweakAll', 'BtnTweakNone',
         'AppSearch', 'AppCategory', 'AppRows', 'BtnInstall', 'BtnAppNone',
@@ -687,22 +717,10 @@ function New-GuiWindow {
     $ui.VersionText.Text = "v$($Ctx.Version)"
     $ui.CatalogChip.Text = "$($Ctx.Tweaks.Count) tweaks   $($Ctx.Apps.Count) apps"
 
-    if ($Ctx.IsAdmin) {
-        $ui.ElevChip.Text = 'elevated'
-        $ui.ElevChip.Foreground = ConvertTo-Brush 'Green'
-        $ui.BtnElevate.Visibility = 'Collapsed'
-    }
-    else {
-        $ui.ElevChip.Text = 'not elevated'
-    }
-
-    $ui.DryRunToggle.IsChecked = $Ctx.DryRun
-    $ui.DryRunToggle.Add_Click({ param($sender, $e) $Ctx.DryRun = [bool]$sender.IsChecked })
-
-    $ui.BtnElevate.Add_Click({
-        param($sender, $e)
-        if (Invoke-SelfElevate -BoundParameters $Ctx.Gui.Bound) { $Ctx.Gui.Window.Close() }
-    })
+    # The window is always elevated, so there is nothing to report and no button
+    # to offer. Dry run is a CLI flag only; surface it read-only when it is on,
+    # so a dry run never looks like a real one.
+    if ($Ctx.DryRun) { $ui.DryRunBadge.Visibility = 'Visible' }
 
     $ui.BtnClearLog.Add_Click({ if ($Ctx.Gui) { $Ctx.Gui.Paragraph.Inlines.Clear() } })
 
@@ -808,7 +826,9 @@ function New-GuiWindow {
 
     Write-Rule -Title 'Moscovium' -Suffix "v$($Ctx.Version)"
     Write-Info "$($Ctx.Tweaks.Count) tweaks, $($Ctx.Apps.Count) apps loaded."
-    if (-not $Ctx.IsAdmin) { Write-Warn 'Not elevated - machine-wide tweaks will be skipped.' }
+
+    # No elevation notice: Show-Gui guarantees it, so saying so would be noise.
+    if ($Ctx.DryRun) { Write-Warn 'Dry run - nothing will actually be changed.' }
 
     [pscustomobject]@{
         Window = $window
@@ -820,13 +840,8 @@ function New-GuiWindow {
 function Show-Gui {
     param([hashtable]$BoundParameters = @{})
 
-    if (-not (Test-StaApartment)) {
-        if (Invoke-StaRelaunch -BoundParameters $BoundParameters) {
-            Write-Ok 'GUI launched in a separate STA window.'
-            return 0
-        }
-        return 1
-    }
+    # Elevated and STA or not at all - see Invoke-GuiRelaunch.
+    if (Invoke-GuiRelaunch -BoundParameters $BoundParameters) { return 0 }
 
     try { Import-WpfAssembly }
     catch {

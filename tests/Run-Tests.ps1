@@ -937,7 +937,7 @@ Test-Case 'the built bundle can open the GUI for real' {
     # Everything above runs against src/, where the scope differs - which is
     # exactly how the GetNewClosure bug reached the user.
     #
-    # -Gui is driven to build and immediately close, so no window is left behind.
+    # Driven with -DryRun, which is the one mode the GUI opens unelevated in.
     $bundlePath = Join-Path $RepoRoot 'moscovium.ps1'
     $marker = Join-Path $Ctx.StateDir 'gui-smoke.txt'
 
@@ -947,7 +947,9 @@ Test-Case 'the built bundle can open the GUI for real' {
 `$ErrorActionPreference = 'Stop'
 try {
     `$sb = [scriptblock]::Create((Get-Content -LiteralPath '$bundlePath' -Raw))
-    & `$sb -Gui -NoBanner
+    # -DryRun so the window opens without a UAC prompt: the GUI is elevated by
+    # default, and an unattended test cannot answer one.
+    & `$sb -Gui -DryRun -NoBanner
     'CLOSED' | Set-Content -LiteralPath '$marker'
 }
 catch {

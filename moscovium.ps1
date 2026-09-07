@@ -5,7 +5,7 @@
 
         irm https://moscovium.win | iex
 
-    Build 80f6fd927c  (a digest of src/ and data/ - same sources, same id).
+    Build a3be1f6431  (a digest of src/ and data/ - same sources, same id).
     Check with:  .\moscovium.ps1 -Version
 
     GENERATED FILE - do not edit.
@@ -5798,19 +5798,40 @@ param(
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Moscovium" Height="760" Width="1120" MinHeight="560" MinWidth="900"
-        WindowStartupLocation="CenterScreen" Background="#FF16161A">
+        WindowStartupLocation="CenterScreen" Background="#FF000000"
+        TextOptions.TextFormattingMode="Display">
 
   <Window.Resources>
-    <SolidColorBrush x:Key="Bg"      Color="#FF16161A"/>
-    <SolidColorBrush x:Key="Panel"   Color="#FF1E1E24"/>
-    <SolidColorBrush x:Key="Panel2"  Color="#FF24242C"/>
-    <SolidColorBrush x:Key="Line"    Color="#FF32323C"/>
-    <SolidColorBrush x:Key="Text"    Color="#FFE4E4EA"/>
-    <SolidColorBrush x:Key="Muted"   Color="#FF8E8E9C"/>
-    <SolidColorBrush x:Key="Accent"  Color="#FF4FC3F7"/>
-    <SolidColorBrush x:Key="Ok"      Color="#FF7BD88F"/>
-    <SolidColorBrush x:Key="Warn"    Color="#FFF0C674"/>
-    <SolidColorBrush x:Key="Err"     Color="#FFF07178"/>
+    <!-- AMOLED: the canvas is true black, so an OLED panel leaves those pixels
+         off. Surfaces lift off it in near-black purples rather than greys. -->
+    <SolidColorBrush x:Key="Bg"        Color="#FF000000"/>
+    <SolidColorBrush x:Key="Panel"     Color="#FF08060E"/>
+    <SolidColorBrush x:Key="Panel2"    Color="#FF130E1F"/>
+    <SolidColorBrush x:Key="PanelHi"   Color="#FF1C1430"/>
+    <SolidColorBrush x:Key="Line"      Color="#FF261B3D"/>
+    <SolidColorBrush x:Key="Text"      Color="#FFEDE8F7"/>
+    <SolidColorBrush x:Key="Muted"     Color="#FF8B81A8"/>
+    <SolidColorBrush x:Key="Faint"     Color="#FF5F5680"/>
+    <SolidColorBrush x:Key="Accent"    Color="#FFB388FF"/>
+    <SolidColorBrush x:Key="AccentDim" Color="#FF7D5CC0"/>
+    <SolidColorBrush x:Key="Ok"        Color="#FF7EE0A6"/>
+    <SolidColorBrush x:Key="Warn"      Color="#FFFFCB7A"/>
+    <SolidColorBrush x:Key="Err"       Color="#FFFF7B94"/>
+
+    <LinearGradientBrush x:Key="AccentFill" StartPoint="0,0" EndPoint="0,1">
+      <GradientStop Color="#FF6E3FC4" Offset="0"/>
+      <GradientStop Color="#FF4E2A94" Offset="1"/>
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="AccentFillHot" StartPoint="0,0" EndPoint="0,1">
+      <GradientStop Color="#FF8451DE" Offset="0"/>
+      <GradientStop Color="#FF5F35AE" Offset="1"/>
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="TitleInk" StartPoint="0,0" EndPoint="1,0">
+      <GradientStop Color="#FFC9A6FF" Offset="0"/>
+      <GradientStop Color="#FF8B5CF6" Offset="1"/>
+    </LinearGradientBrush>
 
     <Style TargetType="TextBlock">
       <Setter Property="Foreground" Value="{StaticResource Text}"/>
@@ -5829,18 +5850,18 @@ param(
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="Chrome" CornerRadius="5" Background="{TemplateBinding Background}"
+            <Border x:Name="Chrome" CornerRadius="6" Background="{TemplateBinding Background}"
                     BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
                                 Margin="{TemplateBinding Padding}"/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Chrome" Property="Background" Value="#FF2E2E38"/>
-                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource PanelHi}"/>
+                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource AccentDim}"/>
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
-                <Setter Property="Opacity" Value="0.4"/>
+                <Setter Property="Opacity" Value="0.35"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -5849,8 +5870,29 @@ param(
     </Style>
 
     <Style x:Key="Primary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-      <Setter Property="Background" Value="#FF19566B"/>
-      <Setter Property="BorderBrush" Value="{StaticResource Accent}"/>
+      <Setter Property="Background" Value="{StaticResource AccentFill}"/>
+      <Setter Property="BorderBrush" Value="#FF8B5CF6"/>
+      <Setter Property="Foreground" Value="#FFF6F1FF"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Chrome" CornerRadius="6" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                Margin="{TemplateBinding Padding}"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource AccentFillHot}"/>
+                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource Accent}"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.3"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
     </Style>
 
     <!-- The stock check box is a small light square and is the loudest reminder
@@ -5865,11 +5907,11 @@ param(
           <ControlTemplate TargetType="CheckBox">
             <StackPanel Orientation="Horizontal" Background="Transparent">
               <Border x:Name="Box" Width="18" Height="18" CornerRadius="5"
-                      Background="#FF1B1B23" BorderBrush="#FF3E3E4A" BorderThickness="1.4"
+                      Background="#FF120C1E" BorderBrush="#FF33254F" BorderThickness="1.4"
                       VerticalAlignment="Center">
                 <Path x:Name="Tick" Width="10" Height="10" Stretch="Uniform" Opacity="0"
                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                      Data="M 0,5 L 4,9 L 11,1" Stroke="#FF0B1218" StrokeThickness="2.4"
+                      Data="M 0,5 L 4,9 L 11,1" Stroke="#FF12071F" StrokeThickness="2.4"
                       StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
               </Border>
               <ContentPresenter x:Name="Label" Margin="9,0,0,0" VerticalAlignment="Center"/>
@@ -5892,29 +5934,33 @@ param(
       </Setter>
     </Style>
 
-    <!-- Status badge: a tinted pill rather than loose coloured text. -->
-    <Style x:Key="Pill" TargetType="Border">
-      <Setter Property="CornerRadius" Value="9"/>
-      <Setter Property="Padding" Value="9,2"/>
-      <Setter Property="VerticalAlignment" Value="Center"/>
-      <Setter Property="Margin" Value="10,0,2,0"/>
-    </Style>
-
-    <Style x:Key="GroupHeading" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="{StaticResource Muted}"/>
-      <Setter Property="FontFamily" Value="Segoe UI"/>
-      <Setter Property="FontSize" Value="11"/>
-      <Setter Property="FontWeight" Value="SemiBold"/>
-    </Style>
-
     <Style TargetType="TextBox">
       <Setter Property="Background" Value="{StaticResource Panel2}"/>
       <Setter Property="Foreground" Value="{StaticResource Text}"/>
       <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
       <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="Padding" Value="7,5"/>
+      <Setter Property="Padding" Value="8,6"/>
       <Setter Property="FontFamily" Value="Segoe UI"/>
-      <Setter Property="CaretBrush" Value="{StaticResource Text}"/>
+      <Setter Property="CaretBrush" Value="{StaticResource Accent}"/>
+      <Setter Property="SelectionBrush" Value="{StaticResource AccentDim}"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="TextBox">
+            <Border x:Name="Chrome" CornerRadius="6" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+              <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource Accent}"/>
+              </Trigger>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource AccentDim}"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
     </Style>
 
     <!-- The stock ComboBox and ScrollBar chrome is light, and ignores Background,
@@ -5922,7 +5968,7 @@ param(
     <Style TargetType="ComboBoxItem">
       <Setter Property="Foreground" Value="{StaticResource Text}"/>
       <Setter Property="FontFamily" Value="Segoe UI"/>
-      <Setter Property="Padding" Value="10,6"/>
+      <Setter Property="Padding" Value="11,7"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ComboBoxItem">
@@ -5931,7 +5977,7 @@ param(
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsHighlighted" Value="True">
-                <Setter TargetName="Chrome" Property="Background" Value="#FF19566B"/>
+                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource AccentFill}"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -5951,8 +5997,8 @@ param(
                 <ToggleButton.Template>
                   <ControlTemplate TargetType="ToggleButton">
                     <Border x:Name="Chrome" Background="{StaticResource Panel2}" BorderBrush="{StaticResource Line}"
-                            BorderThickness="1" CornerRadius="5">
-                      <Path HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,10,0"
+                            BorderThickness="1" CornerRadius="6">
+                      <Path HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,11,0"
                             Data="M 0 0 L 8 0 L 4 5 Z" Fill="{StaticResource Muted}"/>
                     </Border>
                     <ControlTemplate.Triggers>
@@ -5963,14 +6009,14 @@ param(
                   </ControlTemplate>
                 </ToggleButton.Template>
               </ToggleButton>
-              <ContentPresenter Margin="11,0,28,0" VerticalAlignment="Center" IsHitTestVisible="False"
+              <ContentPresenter Margin="12,0,28,0" VerticalAlignment="Center" IsHitTestVisible="False"
                                 Content="{TemplateBinding SelectionBoxItem}"
                                 ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"/>
               <Popup IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" AllowsTransparency="True"
                      Focusable="False" PopupAnimation="Fade">
                 <Border Background="{StaticResource Panel2}" BorderBrush="{StaticResource Line}" BorderThickness="1"
-                        CornerRadius="5" MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
-                        MaxHeight="320" Margin="0,2,0,0">
+                        CornerRadius="6" MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                        MaxHeight="320" Margin="0,3,0,0">
                   <ScrollViewer>
                     <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
                   </ScrollViewer>
@@ -5984,10 +6030,10 @@ param(
 
     <!-- Placeholder text: a TextBlock behind the box, shown only while empty. -->
     <Style x:Key="Watermark" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="{StaticResource Muted}"/>
+      <Setter Property="Foreground" Value="{StaticResource Faint}"/>
       <Setter Property="FontFamily" Value="Segoe UI"/>
       <Setter Property="FontSize" Value="12"/>
-      <Setter Property="Margin" Value="11,0,0,0"/>
+      <Setter Property="Margin" Value="13,0,0,0"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
       <Setter Property="IsHitTestVisible" Value="False"/>
     </Style>
@@ -5996,10 +6042,10 @@ param(
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Thumb">
-            <Border x:Name="Chrome" Background="#FF3A3A46" CornerRadius="3" Margin="3,0"/>
+            <Border x:Name="Chrome" Background="#FF2E2148" CornerRadius="3" Margin="3,0"/>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Chrome" Property="Background" Value="#FF525263"/>
+                <Setter TargetName="Chrome" Property="Background" Value="#FF4B3576"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -6041,27 +6087,40 @@ param(
       <Setter Property="Foreground" Value="{StaticResource Muted}"/>
       <Setter Property="FontFamily" Value="Segoe UI"/>
       <Setter Property="FontSize" Value="14"/>
-      <Setter Property="Padding" Value="16,11"/>
+      <Setter Property="Padding" Value="18,12"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ListBoxItem">
-            <Border x:Name="Chrome" Background="Transparent" BorderThickness="3,0,0,0" BorderBrush="Transparent">
-              <ContentPresenter Margin="{TemplateBinding Padding}"/>
-            </Border>
+            <Grid>
+              <Border x:Name="Chrome" Background="Transparent" CornerRadius="0,7,7,0" Margin="0,1,10,1">
+                <ContentPresenter Margin="{TemplateBinding Padding}"/>
+              </Border>
+              <Border x:Name="Marker" Width="3" HorizontalAlignment="Left" Margin="0,7"
+                      CornerRadius="0,2,2,0" Background="Transparent"/>
+            </Grid>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Chrome" Property="Background" Value="#FF24242C"/>
+                <Setter TargetName="Chrome" Property="Background" Value="#FF120C1E"/>
+                <Setter Property="Foreground" Value="{StaticResource Text}"/>
               </Trigger>
               <Trigger Property="IsSelected" Value="True">
-                <Setter TargetName="Chrome" Property="Background" Value="#FF24242C"/>
-                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                <Setter TargetName="Chrome" Property="Background" Value="#FF1A1030"/>
+                <Setter TargetName="Marker" Property="Background" Value="{StaticResource Accent}"/>
                 <Setter Property="Foreground" Value="{StaticResource Text}"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
         </Setter.Value>
       </Setter>
+    </Style>
+
+    <Style x:Key="PageTitle" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="17"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Foreground" Value="{StaticResource Text}"/>
+      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
     </Style>
   </Window.Resources>
 
@@ -6074,23 +6133,23 @@ param(
 
     <!-- header -->
     <Border Grid.Row="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
-      <Grid Margin="20,14">
+      <Grid Margin="22,15">
         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-          <TextBlock Text="MOSCOVIUM" FontSize="19" FontWeight="SemiBold" Foreground="{StaticResource Accent}"/>
-          <TextBlock x:Name="VersionText" Text="v0.0.0" FontSize="12" Foreground="{StaticResource Muted}"
-                     VerticalAlignment="Center" Margin="10,3,0,0"/>
-          <Border Background="{StaticResource Panel2}" CornerRadius="9" Padding="9,3" Margin="16,0,0,0">
-            <TextBlock x:Name="CatalogChip" Text="" FontSize="11" Foreground="{StaticResource Muted}"/>
-          </Border>
-          <Border x:Name="ElevChipBorder" Background="{StaticResource Panel2}" CornerRadius="9" Padding="9,3" Margin="8,0,0,0">
-            <TextBlock x:Name="ElevChip" Text="" FontSize="11" Foreground="{StaticResource Warn}"/>
-          </Border>
+          <TextBlock Text="MOSCOVIUM" FontSize="20" FontWeight="SemiBold"
+                     Foreground="{StaticResource TitleInk}"/>
+          <TextBlock x:Name="VersionText" Text="v0.0.0" FontSize="12" Foreground="{StaticResource Faint}"
+                     VerticalAlignment="Center" Margin="11,4,0,0"/>
         </StackPanel>
 
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-          <CheckBox x:Name="DryRunToggle" Content="Dry run" Margin="0,0,16,0"
-                    ToolTip="Show what would change without changing anything"/>
-          <Button x:Name="BtnElevate" Content="Restart as admin"/>
+          <Border x:Name="DryRunBadge" Background="#FF2E2410" BorderBrush="#FF5A4620" BorderThickness="1"
+                  CornerRadius="10" Padding="11,3" Margin="0,0,10,0" Visibility="Collapsed">
+            <TextBlock Text="DRY RUN" FontSize="10.5" FontWeight="SemiBold" Foreground="{StaticResource Warn}"/>
+          </Border>
+          <Border Background="{StaticResource Panel2}" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                  CornerRadius="10" Padding="11,3">
+            <TextBlock x:Name="CatalogChip" Text="" FontSize="11" Foreground="{StaticResource Muted}"/>
+          </Border>
         </StackPanel>
       </Grid>
     </Border>
@@ -6098,12 +6157,12 @@ param(
     <!-- body -->
     <Grid Grid.Row="1">
       <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="188"/>
+        <ColumnDefinition Width="196"/>
         <ColumnDefinition Width="*"/>
       </Grid.ColumnDefinitions>
 
       <Border Grid.Column="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,0,1,0">
-        <ListBox x:Name="NavList" Background="Transparent" BorderThickness="0" Margin="0,10,0,0"
+        <ListBox x:Name="NavList" Background="Transparent" BorderThickness="0" Margin="0,12,0,0"
                  ItemContainerStyle="{StaticResource NavItem}">
           <ListBoxItem Content="Tweaks" IsSelected="True"/>
           <ListBoxItem Content="Apps"/>
@@ -6116,11 +6175,11 @@ param(
         <Grid.RowDefinitions>
           <RowDefinition Height="*" MinHeight="180"/>
           <RowDefinition Height="Auto"/>
-          <RowDefinition Height="200"/>
+          <RowDefinition Height="196"/>
         </Grid.RowDefinitions>
 
         <!-- pages share this cell; only one is visible at a time -->
-        <Grid Grid.Row="0" Margin="20,16,20,0">
+        <Grid Grid.Row="0" Margin="22,18,22,0">
 
           <Grid x:Name="TweaksPanel">
             <Grid.RowDefinitions>
@@ -6128,8 +6187,11 @@ param(
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
-            <TextBlock Grid.Row="0" Text="Registry tweaks" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
-            <DockPanel Grid.Row="1" Margin="0,0,0,10" LastChildFill="False">
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Registry tweaks" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+            <DockPanel Grid.Row="1" Margin="0,0,0,12" LastChildFill="False">
               <Grid Width="230" DockPanel.Dock="Left" Margin="0,0,8,0">
                 <TextBox x:Name="TweakSearch" ToolTip="Filter by name, description or category"/>
                 <TextBlock Text="Search tweaks">
@@ -6152,8 +6214,8 @@ param(
               <Button x:Name="BtnApply" Content="Apply selected" DockPanel.Dock="Right" Style="{StaticResource Primary}"/>
             </DockPanel>
             <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
-                    BorderThickness="1" CornerRadius="6">
-              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="6">
+                    BorderThickness="1" CornerRadius="8">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="7">
                 <StackPanel x:Name="TweakRows"/>
               </ScrollViewer>
             </Border>
@@ -6165,8 +6227,11 @@ param(
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
-            <TextBlock Grid.Row="0" Text="Applications" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
-            <DockPanel Grid.Row="1" Margin="0,0,0,10" LastChildFill="False">
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Applications" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+            <DockPanel Grid.Row="1" Margin="0,0,0,12" LastChildFill="False">
               <Grid Width="230" DockPanel.Dock="Left" Margin="0,0,8,0">
                 <TextBox x:Name="AppSearch" ToolTip="Filter by name, id or description"/>
                 <TextBlock Text="Search apps">
@@ -6187,8 +6252,8 @@ param(
               <Button x:Name="BtnInstall" Content="Install selected" DockPanel.Dock="Right" Style="{StaticResource Primary}"/>
             </DockPanel>
             <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
-                    BorderThickness="1" CornerRadius="6">
-              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="6">
+                    BorderThickness="1" CornerRadius="8">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="7">
                 <StackPanel x:Name="AppRows"/>
               </ScrollViewer>
             </Border>
@@ -6199,10 +6264,13 @@ param(
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
-            <TextBlock Grid.Row="0" Text="Toolbox" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Toolbox" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
             <Border Grid.Row="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
-                    BorderThickness="1" CornerRadius="6">
-              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="6">
+                    BorderThickness="1" CornerRadius="8">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="7">
                 <StackPanel x:Name="ToolboxRows"/>
               </ScrollViewer>
             </Border>
@@ -6214,12 +6282,15 @@ param(
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
-            <TextBlock Grid.Row="0" Text="Setup profiles" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,6"/>
-            <TextBlock Grid.Row="1" TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="0,0,0,14"
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Setup profiles" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+            <TextBlock Grid.Row="1" TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="0,0,0,16"
                        Text="A profile is a saved checklist of tweaks and apps. The format matches the Moscovium desktop app, so profiles move between them."/>
             <StackPanel Grid.Row="2">
-              <TextBlock Text="Profile file" Foreground="{StaticResource Muted}" Margin="0,0,0,6"/>
-              <DockPanel LastChildFill="True" Margin="0,0,0,14">
+              <TextBlock Text="Profile file" Foreground="{StaticResource Faint}" FontSize="11" Margin="0,0,0,7"/>
+              <DockPanel LastChildFill="True" Margin="0,0,0,16">
                 <Button x:Name="BtnBrowseProfile" Content="Browse" DockPanel.Dock="Right" Margin="8,0,0,0"/>
                 <TextBox x:Name="ProfilePath"/>
               </DockPanel>
@@ -6233,19 +6304,19 @@ param(
         </Grid>
 
         <GridSplitter Grid.Row="1" Height="4" HorizontalAlignment="Stretch" Background="{StaticResource Line}"
-                      VerticalAlignment="Center" Margin="0,10,0,0"/>
+                      VerticalAlignment="Center" Margin="0,12,0,0"/>
 
-        <Border Grid.Row="2" Background="#FF101014" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0">
+        <Border Grid.Row="2" Background="#FF000000" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0">
           <Grid>
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
-            <DockPanel Grid.Row="0" Margin="20,8,20,4" LastChildFill="False">
-              <TextBlock Text="Output" Foreground="{StaticResource Muted}" FontSize="11" DockPanel.Dock="Left"/>
-              <Button x:Name="BtnClearLog" Content="Clear" DockPanel.Dock="Right" Padding="9,2" Margin="0"/>
+            <DockPanel Grid.Row="0" Margin="22,9,22,4" LastChildFill="False">
+              <TextBlock Text="OUTPUT" Foreground="{StaticResource Faint}" FontSize="10.5" FontWeight="SemiBold" DockPanel.Dock="Left"/>
+              <Button x:Name="BtnClearLog" Content="Clear" DockPanel.Dock="Right" Padding="10,3" Margin="0"/>
             </DockPanel>
-            <RichTextBox x:Name="LogBox" Grid.Row="1" Margin="14,0,14,10" Background="Transparent"
+            <RichTextBox x:Name="LogBox" Grid.Row="1" Margin="16,0,16,10" Background="Transparent"
                          Foreground="{StaticResource Text}" BorderThickness="0" IsReadOnly="True"
                          FontFamily="Consolas" FontSize="12"
                          VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
@@ -6256,7 +6327,7 @@ param(
 
     <!-- status bar -->
     <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0">
-      <Grid Margin="20,9">
+      <Grid Margin="22,10">
         <TextBlock x:Name="StatusText" Text="Ready" Foreground="{StaticResource Muted}" FontSize="12" VerticalAlignment="Center"/>
         <ProgressBar x:Name="Progress" Width="260" Height="6" HorizontalAlignment="Right" VerticalAlignment="Center"
                      Background="{StaticResource Panel2}" Foreground="{StaticResource Accent}" BorderThickness="0"
@@ -6298,28 +6369,53 @@ param(
         }
     }
 
-    # WPF cannot run on an MTA thread. powershell.exe is STA; pwsh is not, so a run
-    # started there is relaunched into an STA host rather than failing.
-    function Invoke-StaRelaunch {
+    # The GUI has two hard requirements the current host may not meet, and both are
+    # fixed the same way - by relaunching:
+    #
+    #   STA    WPF cannot run on an MTA thread. powershell.exe is STA; pwsh is not.
+    #   Admin  Nearly every tweak writes to HKLM. A non-elevated window would show a
+    #          catalog it mostly cannot apply, so the window is always elevated and
+    #          there is no in-app "restart as admin" to explain.
+    #
+    # Returns $true when a replacement was started and this run should stand down.
+    function Invoke-GuiRelaunch {
         param([hashtable]$BoundParameters = @{})
 
-        Write-Warn 'The GUI needs an STA thread, and this PowerShell host is running MTA.'
+        $needsSta = -not (Test-StaApartment)
+
+        # A dry run writes nothing, so demanding a UAC prompt to preview a plan would
+        # be theatre. The header badge makes it obvious which mode the window is in.
+        $needsAdmin = (-not $Ctx.IsAdmin) -and (-not $Ctx.DryRun)
+
+        if (-not $needsSta -and -not $needsAdmin) { return $false }
+
+        $reasons = @()
+        if ($needsAdmin) { $reasons += 'administrator rights' }
+        if ($needsSta)   { $reasons += 'an STA thread' }
+        Write-Step ("Reopening the GUI with " + ($reasons -join ' and '))
 
         $command = Get-RelaunchCommand -BoundParameters $BoundParameters
+        # Always the 5.1 host: it is STA by default and always present.
         $host51 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 
-        Write-Step 'Relaunching in an STA host'
-        Write-Log "STA relaunch: $command"
+        $start = @{
+            FilePath     = $host51
+            ArgumentList = @('-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', $command)
+            ErrorAction  = 'Stop'
+        }
+        # UAC is the prompt; asking first would just be a dialog about a dialog.
+        if ($needsAdmin) { $start.Verb = 'RunAs' }
+
+        Write-Log "GUI relaunch: $command"
 
         try {
-            Start-Process -FilePath $host51 -ArgumentList @(
-                '-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-Command', $command
-            ) -ErrorAction Stop | Out-Null
+            Start-Process @start | Out-Null
             return $true
         }
         catch {
-            Write-Err "Could not start an STA host: $($_.Exception.Message)"
-            return $false
+            # Almost always the user dismissing UAC.
+            Write-Err "The GUI needs administrator rights and was not granted them: $($_.Exception.Message)"
+            return $true
         }
     }
 
@@ -6332,19 +6428,24 @@ param(
     function ConvertTo-Brush {
         param($Color)
 
+        # The console's sixteen colours mapped onto the window's purple palette, so
+        # log output reads as part of the same design rather than a terminal pasted
+        # into it. Cyan is the CLI's accent, so it lands on the purple accent here.
         $hex = switch ([string]$Color) {
-            'Green'      { '#FF7BD88F' }
-            'DarkGreen'  { '#FF5FA86F' }
-            'Yellow'     { '#FFF0C674' }
-            'DarkYellow' { '#FFD0A354' }
-            'Red'        { '#FFF07178' }
-            'DarkRed'    { '#FFC05058' }
-            'Cyan'       { '#FF4FC3F7' }
-            'DarkCyan'   { '#FF3A93BC' }
-            'White'      { '#FFF4F4F8' }
-            'Gray'       { '#FFC8C8D2' }
-            'DarkGray'   { '#FF8E8E9C' }
-            default      { '#FFE4E4EA' }
+            'Green'      { '#FF7EE0A6' }
+            'DarkGreen'  { '#FF56A87A' }
+            'Yellow'     { '#FFFFCB7A' }
+            'DarkYellow' { '#FFD1A055' }
+            'Red'        { '#FFFF7B94' }
+            'DarkRed'    { '#FFC2536B' }
+            'Cyan'       { '#FFB388FF' }
+            'DarkCyan'   { '#FF7D5CC0' }
+            'Magenta'    { '#FFD8B4FE' }
+            'DarkMagenta'{ '#FF9268D8' }
+            'White'      { '#FFF3EFFC' }
+            'Gray'       { '#FFC5BDDC' }
+            'DarkGray'   { '#FF8B81A8' }
+            default      { '#FFEDE8F7' }
         }
 
         New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($hex))
@@ -6378,8 +6479,8 @@ param(
 
         $box = $Border.Child.Children[0]
 
-        if ($box.IsChecked -eq $true) { $Border.Background = New-HexBrush '#FF16323E' }
-        elseif ($Hover)               { $Border.Background = New-HexBrush '#FF212129' }
+        if ($box.IsChecked -eq $true) { $Border.Background = New-HexBrush '#FF1D1233' }
+        elseif ($Hover)               { $Border.Background = New-HexBrush '#FF120C1E' }
         else                          { $Border.Background = [Windows.Media.Brushes]::Transparent }
     }
 
@@ -6420,7 +6521,7 @@ param(
         $badge = New-Object Windows.Controls.TextBlock
         $badge.Text = [string]$Count
         $badge.FontSize = 11
-        $badge.Foreground = New-HexBrush '#FF6E6E7E'
+        $badge.Foreground = New-HexBrush '#FF5F5680'
         [Windows.Controls.DockPanel]::SetDock($badge, 'Right')
         $panel.Children.Add($badge) | Out-Null
 
@@ -6428,13 +6529,13 @@ param(
         $label.Text = $Title.ToUpperInvariant()
         $label.FontSize = 10.5
         $label.FontWeight = 'SemiBold'
-        $label.Foreground = New-HexBrush '#FF8E8E9C'
+        $label.Foreground = New-HexBrush '#FF8B81A8'
         [Windows.Controls.DockPanel]::SetDock($label, 'Left')
         $panel.Children.Add($label) | Out-Null
 
         $rule = New-Object Windows.Controls.Border
         $rule.Height = 1
-        $rule.Background = New-HexBrush '#FF2C2C36'
+        $rule.Background = New-HexBrush '#FF241A3A'
         $rule.VerticalAlignment = 'Center'
         $rule.Margin = New-Object Windows.Thickness 10, 1, 10, 0
         $panel.Children.Add($rule) | Out-Null
@@ -6468,8 +6569,8 @@ param(
             [Parameter(Mandatory)][string]$Primary,
             [AllowEmptyString()][string]$Secondary = '',
             [AllowEmptyString()][string]$Status = '',
-            [string]$StatusBrush = '#FF9C9CAC',
-            [string]$StatusFill = '#FF262630',
+            [string]$StatusBrush = '#FF8B81A8',
+            [string]$StatusFill = '#FF150F22',
             [switch]$NoCheckBox
         )
 
@@ -6514,14 +6615,14 @@ param(
 
         $title = New-Object Windows.Controls.TextBlock
         $title.Text = $Primary
-        $title.Foreground = ConvertTo-Brush 'White'
+        $title.Foreground = New-HexBrush '#FFEDE8F7'
         $title.FontSize = 13
         $stack.Children.Add($title) | Out-Null
 
         if ($Secondary) {
             $sub = New-Object Windows.Controls.TextBlock
             $sub.Text = $Secondary
-            $sub.Foreground = ConvertTo-Brush 'DarkGray'
+            $sub.Foreground = New-HexBrush '#FF8B81A8'
             $sub.FontSize = 11
             $sub.TextWrapping = 'Wrap'
             $sub.Margin = New-Object Windows.Thickness 0, 1, 0, 0
@@ -6594,10 +6695,10 @@ param(
             foreach ($tweak in $matching) {
                 $status = Get-TweakStatus -Tweak $tweak
                 $label, $ink, $fill = switch ($status) {
-                    'Applied' { 'applied', '#FF7BD88F', '#FF1B3226' }
-                    'Partial' { 'partial', '#FFF0C674', '#FF332C18' }
-                    'Action'  { 'action',  '#FF4FC3F7', '#FF16303C' }
-                    default   { '',        '#FF9C9CAC', '#FF262630' }
+                    'Applied' { 'applied', '#FF7EE0A6', '#FF102A1E' }
+                    'Partial' { 'partial', '#FFFFCB7A', '#FF2E2410' }
+                    'Action'  { 'action',  '#FFB388FF', '#FF1E1436' }
+                    default   { '',        '#FF8B81A8', '#FF150F22' }
                 }
 
                 $row = New-GuiRow -Item $tweak -Primary $tweak.name -Secondary $tweak.description `
@@ -6641,10 +6742,10 @@ param(
             foreach ($app in $matching) {
                 # Anything but winget is worth flagging: it means a vendor download
                 # or, for a script, remote code.
-                $how, $ink, $fill = if ($app.scriptUrl)      { 'script',   '#FFF0C674', '#FF332C18' }
-                                    elseif ($app.zipUrl)     { 'archive',  '#FF9C9CAC', '#FF262630' }
-                                    elseif ($app.downloadUrl){ 'download', '#FF9C9CAC', '#FF262630' }
-                                    else                     { 'winget',   '#FF6E7E8C', '#FF20262C' }
+                $how, $ink, $fill = if ($app.scriptUrl)      { 'script',   '#FFFFCB7A', '#FF2E2410' }
+                                    elseif ($app.zipUrl)     { 'archive',  '#FF8B81A8', '#FF150F22' }
+                                    elseif ($app.downloadUrl){ 'download', '#FF8B81A8', '#FF150F22' }
+                                    else                     { 'winget',   '#FF7D5CC0', '#FF150F22' }
 
                 $row = New-GuiRow -Item $app -Primary $app.name -Secondary ([string]$app.description) `
                     -Status $how -StatusBrush $ink -StatusFill $fill
@@ -6729,7 +6830,7 @@ param(
             $badge = New-Object Windows.Controls.TextBlock
             $badge.Text = [string]$Count
             $badge.FontSize = 11
-            $badge.Foreground = New-HexBrush '#FF6E6E7E'
+            $badge.Foreground = New-HexBrush '#FF5F5680'
             $badge.VerticalAlignment = 'Center'
             [Windows.Controls.DockPanel]::SetDock($badge, 'Right')
             $panel.Children.Add($badge) | Out-Null
@@ -6759,11 +6860,11 @@ param(
         $visual = New-Object Windows.Media.DrawingVisual
         $dc = $visual.RenderOpen()
         try {
-            $accent = New-HexBrush '#FF4FC3F7'
+            $accent = New-HexBrush '#FFB388FF'
             $dc.DrawRoundedRectangle($accent, $null, (New-Object Windows.Rect 0, 0, 32, 32), 7, 7)
 
             # A stylised M, stroked rather than typeset, so no font is involved.
-            $pen = New-Object Windows.Media.Pen ((New-HexBrush '#FF0B1218'), 3.4)
+            $pen = New-Object Windows.Media.Pen ((New-HexBrush '#FF14082B'), 3.4)
             $pen.StartLineCap = 'Round'; $pen.EndLineCap = 'Round'; $pen.LineJoin = 'Round'
             $geometry = [Windows.Media.Geometry]::Parse('M 8,23 L 8,9 L 16,18 L 24,9 L 24,23')
             $dc.DrawGeometry($null, $pen, $geometry)
@@ -6791,7 +6892,7 @@ param(
         # Pull every x:Name into a lookup so handlers read as $ui.BtnApply.
         $ui = @{}
         foreach ($name in @(
-            'VersionText', 'CatalogChip', 'ElevChip', 'ElevChipBorder', 'DryRunToggle', 'BtnElevate',
+            'VersionText', 'CatalogChip', 'DryRunBadge',
             'NavList', 'TweaksPanel', 'AppsPanel', 'ToolboxPanel', 'ProfilesPanel',
             'TweakSearch', 'TweakCategory', 'TweakRows', 'BtnApply', 'BtnRevert', 'BtnTweakAll', 'BtnTweakNone',
             'AppSearch', 'AppCategory', 'AppRows', 'BtnInstall', 'BtnAppNone',
@@ -6914,22 +7015,10 @@ param(
         $ui.VersionText.Text = "v$($Ctx.Version)"
         $ui.CatalogChip.Text = "$($Ctx.Tweaks.Count) tweaks   $($Ctx.Apps.Count) apps"
 
-        if ($Ctx.IsAdmin) {
-            $ui.ElevChip.Text = 'elevated'
-            $ui.ElevChip.Foreground = ConvertTo-Brush 'Green'
-            $ui.BtnElevate.Visibility = 'Collapsed'
-        }
-        else {
-            $ui.ElevChip.Text = 'not elevated'
-        }
-
-        $ui.DryRunToggle.IsChecked = $Ctx.DryRun
-        $ui.DryRunToggle.Add_Click({ param($sender, $e) $Ctx.DryRun = [bool]$sender.IsChecked })
-
-        $ui.BtnElevate.Add_Click({
-            param($sender, $e)
-            if (Invoke-SelfElevate -BoundParameters $Ctx.Gui.Bound) { $Ctx.Gui.Window.Close() }
-        })
+        # The window is always elevated, so there is nothing to report and no button
+        # to offer. Dry run is a CLI flag only; surface it read-only when it is on,
+        # so a dry run never looks like a real one.
+        if ($Ctx.DryRun) { $ui.DryRunBadge.Visibility = 'Visible' }
 
         $ui.BtnClearLog.Add_Click({ if ($Ctx.Gui) { $Ctx.Gui.Paragraph.Inlines.Clear() } })
 
@@ -7035,7 +7124,9 @@ param(
 
         Write-Rule -Title 'Moscovium' -Suffix "v$($Ctx.Version)"
         Write-Info "$($Ctx.Tweaks.Count) tweaks, $($Ctx.Apps.Count) apps loaded."
-        if (-not $Ctx.IsAdmin) { Write-Warn 'Not elevated - machine-wide tweaks will be skipped.' }
+
+        # No elevation notice: Show-Gui guarantees it, so saying so would be noise.
+        if ($Ctx.DryRun) { Write-Warn 'Dry run - nothing will actually be changed.' }
 
         [pscustomobject]@{
             Window = $window
@@ -7047,13 +7138,8 @@ param(
     function Show-Gui {
         param([hashtable]$BoundParameters = @{})
 
-        if (-not (Test-StaApartment)) {
-            if (Invoke-StaRelaunch -BoundParameters $BoundParameters) {
-                Write-Ok 'GUI launched in a separate STA window.'
-                return 0
-            }
-            return 1
-        }
+        # Elevated and STA or not at all - see Invoke-GuiRelaunch.
+        if (Invoke-GuiRelaunch -BoundParameters $BoundParameters) { return 0 }
 
         try { Import-WpfAssembly }
         catch {
@@ -7419,4 +7505,4 @@ param(
         Restore-ConsoleEncoding -Previous $previousEncoding
     }
 
-} $PSBoundParameters '1.2.0' $SourceUrl '80f6fd927c'
+} $PSBoundParameters '1.2.0' $SourceUrl 'a3be1f6431'

@@ -92,6 +92,18 @@ function Read-DataFile {
         if ($bad.Count -gt 0) {
             throw "$Name contains $($bad.Count) non-ASCII character(s). Markup cannot be \u-escaped; use ASCII."
         }
+
+        # A malformed colour is a XamlParseException at window-open time, which is
+        # a long way from the typo. WPF accepts #RGB, #ARGB, #RRGGBB and #AARRGGBB;
+        # anything else here is a slip.
+        $colors = [regex]::Matches($text, '(?i)"(#[0-9a-f]+)"')
+        foreach ($match in $colors) {
+            $digits = $match.Groups[1].Value.Length - 1
+            if ($digits -notin @(3, 4, 6, 8)) {
+                throw "$Name has a malformed colour '$($match.Groups[1].Value)': $digits hex digits, expected 3, 4, 6 or 8."
+            }
+        }
+
         return $text
     }
 

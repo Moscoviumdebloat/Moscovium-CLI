@@ -66,6 +66,9 @@ irm <url> | iex                                    # menu, then pick GUI
 .\moscovium.ps1 -Gui
 ```
 
+The theme is AMOLED: the canvas is true black, so those pixels are simply off on
+an OLED panel, and surfaces lift off it in near-black purples rather than greys.
+
 Rows are grouped by category with a count per group, ticking one tints the whole
 row, the action buttons say how many are selected and disable when none are, and
 the sidebar carries the size of each page. Ctrl+F jumps to the search box on the
@@ -88,7 +91,14 @@ install and it still works straight from `irm`. Two consequences worth knowing:
   the window keeps painting and the action buttons disable while it runs. It is
   cooperative rather than a background runspace - honest about what it is.
 
-Dry run is a toggle in the header, and applies to everything the window does.
+**It is always elevated.** Nearly every tweak writes to `HKLM`, so a
+non-elevated window would show a catalog it mostly cannot apply. `-Gui` requests
+elevation up front and reopens itself; there is no in-app "restart as admin"
+button to explain, and no permanently red "not elevated" badge to ignore.
+
+The one exception is `-Gui -DryRun`, which opens without a UAC prompt, because a
+dry run writes nothing and demanding elevation to preview a plan would be
+theatre. The header carries a DRY RUN badge so the two are never confused.
 
 ## Usage
 
