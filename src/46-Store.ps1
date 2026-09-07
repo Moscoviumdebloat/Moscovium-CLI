@@ -32,7 +32,33 @@ function Invoke-GitHubApi {
     $token = Get-MoscoviumSetting -Name 'GitHubToken'
     if ($token) { $headers['Authorization'] = "Bearer $token" }
 
-    Invoke-RestMethod -Uri "https://api.github.com$Path" -Headers $headers -TimeoutSec 45
+    try {
+        return Invoke-RestMethod -Uri "https://api.github.com$Path" -Headers $headers -TimeoutSec 45
+    }
+    catch {
+        # A saved token that has expired or been revoked makes GitHub answer 401
+        # to everything, which would break the store and the Scoop search on a
+        # machine where they worked yesterday. The token is only ever a rate
+        # limit, never access - every repository read here is public - so drop
+        # it and go again unauthenticated.
+        #
+        # Only on 401. A 403 is the rate limit itself, and retrying without the
+        # token would make that worse, not better.
+        $status = 0
+        try { $status = [int]$_.Exception.Response.StatusCode } catch { }
+
+        if ($status -ne 401 -or -not $token) { throw }
+
+        # Once per session: a Scoop search alone makes two calls, and repeating
+        # the warning per call buries the results under it.
+        if (-not $Ctx.GitHubTokenRejected) {
+            $Ctx.GitHubTokenRejected = $true
+            Write-Warn 'The saved GitHub token was rejected (401). Continuing without it - clear it in Settings.'
+        }
+
+        $headers.Remove('Authorization')
+        return Invoke-RestMethod -Uri "https://api.github.com$Path" -Headers $headers -TimeoutSec 45
+    }
 }
 
 # One catalog entry per public, non-archived repo that has a release with an

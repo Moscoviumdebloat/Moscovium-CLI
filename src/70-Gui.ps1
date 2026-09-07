@@ -602,6 +602,50 @@ function Update-GuiOneClickSteps {
     }
 }
 
+# Runs the search the three checkboxes ask for and fills the results list.
+function Invoke-GuiAppSearch {
+    if (-not $Ctx.Gui) { return }
+    $ui = $Ctx.Gui.Ui
+
+    $query = [string]$ui.AppSearchBox.Text
+    if ([string]::IsNullOrWhiteSpace($query)) {
+        $ui.StatusText.Text = 'Type something to search for.'
+        return
+    }
+
+    $managers = [System.Collections.Generic.List[string]]::new()
+    if ($ui.ChkWinget.IsChecked) { $managers.Add('winget') }
+    if ($ui.ChkChoco.IsChecked)  { $managers.Add('choco') }
+    if ($ui.ChkScoop.IsChecked)  { $managers.Add('scoop') }
+
+    if ($managers.Count -eq 0) {
+        $ui.StatusText.Text = 'Tick at least one manager.'
+        return
+    }
+
+    # Through Invoke-GuiWork: three network round trips is long enough that the
+    # buttons should disable and the progress bar should run.
+    #
+    # Its return value is the work's own output - nothing else in it writes to
+    # the pipeline - which is how the result gets back here. Not $script:, which
+    # inside the bundle's wrapper block would resolve to the caller's scope and
+    # leave a variable behind.
+    $search = Invoke-GuiWork -Label "searching for $query" -Work {
+        Search-AllPackages -Query $query -Managers @($managers) -Limit 30
+    }
+
+    if ($null -eq $search) { return }
+
+    $ui.AppSearchRows.ItemsSource = @($search.Results)
+
+    $summary = "$(@($search.Results).Count) result(s) for '$query'"
+    foreach ($problem in @($search.Errors)) {
+        Write-Warn $problem
+        $summary += '   ' + $problem
+    }
+    $ui.AppSearchSummary.Text = $summary
+}
+
 function Update-GuiPackageRow {
     if (-not $Ctx.Gui) { return }
     $ui = $Ctx.Gui.Ui
@@ -1148,6 +1192,8 @@ function New-GuiWindow {
         'NavList', 'OneClickPanel', 'TasksPanel', 'TweaksPanel', 'AppsPanel', 'ToolboxPanel', 'ProfilesPanel',
         'StorePanel', 'GuidesPanel', 'PersonalizePanel', 'SettingsPanel',
         'PackagesPanel', 'PackageRows',
+        'SearchAppsPanel', 'AppSearchBox', 'BtnAppSearch', 'BtnAppSearchInstall', 'AppSearchRows',
+        'AppSearchSummary', 'ChkWinget', 'ChkChoco', 'ChkScoop',
         'CustomizationPanel', 'CustomizationRows',
         'OneClickSteps', 'OneClickBlurb', 'BtnOneClick', 'BtnOneClickToolbox',
         'TaskSummary', 'CpuValue', 'CpuBar', 'CpuDetail', 'MemValue', 'MemBar', 'MemDetail',
@@ -1263,8 +1309,8 @@ function New-GuiWindow {
 
     # Order has to match the ListBoxItems in the XAML and the $panels array in
     # the SelectionChanged handler. -1 means "no count worth showing".
-    $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Counter-Strike 2', 'CS:GO', 'Customization', 'Profiles', 'Settings')
-    $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1, @(Get-CustomizationTools).Count, -1, -1)
+    $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Search apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Counter-Strike 2', 'CS:GO', 'Customization', 'Profiles', 'Settings')
+    $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1, @(Get-CustomizationTools).Count, -1, -1)
 
     # The item Content becomes a DockPanel below, so the labels are no longer
     # readable off the ListBox. Keep them where a handler can still find them.
@@ -1316,7 +1362,8 @@ function New-GuiWindow {
         if (-not $Ctx.Gui) { return }
 
         $panels = @($Ctx.Gui.Ui.OneClickPanel, $Ctx.Gui.Ui.TasksPanel, $Ctx.Gui.Ui.TweaksPanel,
-                    $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.PackagesPanel, $Ctx.Gui.Ui.StorePanel,
+                    $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.SearchAppsPanel,
+                    $Ctx.Gui.Ui.PackagesPanel, $Ctx.Gui.Ui.StorePanel,
                     $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.GuidesPanel, $Ctx.Gui.Ui.PersonalizePanel,
                     $Ctx.Gui.Ui.Cs2Panel, $Ctx.Gui.Ui.CsgoPanel,
                     $Ctx.Gui.Ui.CustomizationPanel, $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
@@ -1347,6 +1394,25 @@ function New-GuiWindow {
     $ui.BtnTweakAll.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Tweaks) { $r.CheckBox.IsChecked = $true } })
     $ui.BtnTweakNone.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Tweaks) { $r.CheckBox.IsChecked = $false } })
     $ui.BtnAppNone.Add_Click({ foreach ($r in $Ctx.Gui.Rows.Apps) { $r.CheckBox.IsChecked = $false } })
+
+    # ---- app search --------------------------------------------------------
+    # A search is a network round trip per manager, so it runs on demand rather
+    # than as you type. Enter in the box does the same as the button.
+    $ui.BtnAppSearch.Add_Click({ Invoke-GuiAppSearch })
+
+    $ui.AppSearchBox.Add_KeyDown({
+        param($sender, $e)
+        if ($e.Key -eq [Windows.Input.Key]::Return) { Invoke-GuiAppSearch }
+    })
+
+    $ui.BtnAppSearchInstall.Add_Click({
+        if (-not $Ctx.Gui) { return }
+
+        $selected = $Ctx.Gui.Ui.AppSearchRows.SelectedItem
+        if (-not $selected) { $Ctx.Gui.Ui.StatusText.Text = 'Pick a result first.'; return }
+
+        Invoke-GuiWork -Label "installing $($selected.Id)" -Work { Install-SearchResult -Result $selected | Out-Null }
+    })
 
     # ---- task manager ------------------------------------------------------
     foreach ($label in @('CPU', 'Memory', 'PID', 'Name')) { $ui.TaskSort.Items.Add($label) | Out-Null }

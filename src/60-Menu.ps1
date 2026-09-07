@@ -516,6 +516,53 @@ function Show-ToolboxMenu {
     Wait-ForKey
 }
 
+# Type a query, pick a result, install it. The results list is a selector like
+# any other, so filtering and paging come for free.
+function Show-AppSearchMenu {
+    $query = ''
+
+    while ($true) {
+        Write-Banner
+        Write-SectionHeading 'Search apps'
+        Write-Info 'One query across winget, Chocolatey and Scoop. Blank to go back.'
+        if ($query) { Write-Info "Last search: $query" }
+
+        Write-Line ''
+        Write-Line '  Search for: ' -Color Yellow -NoNewline
+        $query = [string](Read-Host)
+        if ([string]::IsNullOrWhiteSpace($query)) { return }
+
+        Write-Line ''
+        Write-Step "Searching winget, Chocolatey and Scoop for '$query'"
+        $search = Search-AllPackages -Query $query -Limit 25
+
+        foreach ($problem in @($search.Errors)) { Write-Warn $problem }
+
+        $results = @($search.Results)
+        if ($results.Count -eq 0) {
+            Write-Warn "Nothing matched '$query'."
+            Wait-ForKey
+            continue
+        }
+
+        $choice = Show-Selector -Items $results -Title "Results for '$query'" -SingleSelect `
+            -Subtitle "$($results.Count) found - enter to install, esc to search again" `
+            -Label {
+                param($r)
+                $version = $r.Version
+                if (-not $version) { $version = '-' }
+                '{0,-8}{1,-34}{2}' -f $r.Manager, $r.Id, $version
+            } `
+            -Sublabel { param($r) if ($r.Detail) { $r.Detail } else { $r.Name } }
+
+        if (-not $choice.Confirmed) { continue }
+
+        Write-Banner
+        Install-SearchResult -Result $choice.Selected[0] | Out-Null
+        Wait-ForKey
+    }
+}
+
 function Show-PackageMenu {
     while ($true) {
         # Rebuilt each pass so an install that just finished shows as installed
@@ -762,6 +809,7 @@ function Show-MainMenu {
         [pscustomobject]@{ Name = 'Apps';     Hint = "$($Ctx.Apps.Count) curated packages";                    Action = 'apps' }
         [pscustomobject]@{ Name = 'Toolbox';  Hint = 'Debloat scripts, network, boot, control panels';         Action = 'toolbox' }
         [pscustomobject]@{ Name = 'Profiles'; Hint = 'Save or run a setup checklist';                          Action = 'profiles' }
+        [pscustomobject]@{ Name = 'Search apps'; Hint = 'Find anything in winget, Chocolatey or Scoop';         Action = 'findapp' }
         [pscustomobject]@{ Name = 'Packages'; Hint = 'Install Chocolatey or Scoop';                             Action = 'packages' }
         [pscustomobject]@{ Name = 'Customize'; Hint = 'Open-Shell, Nilesoft Shell, StartAllBack, ExplorerPatcher';  Action = 'customize' }
         [pscustomobject]@{ Name = 'Personalise'; Hint = 'Cursor packs and wallpaper';                              Action = 'personalise' }
@@ -791,6 +839,7 @@ function Show-MainMenu {
             'apps'     { Show-AppMenu }
             'toolbox'  { Show-ToolboxMenu }
             'profiles' { Show-ProfileMenu }
+            'findapp'  { Show-AppSearchMenu }
             'packages' { Show-PackageMenu }
             'customize' { Show-CustomizationMenu }
             'personalise' { Show-PersonalizeMenu }

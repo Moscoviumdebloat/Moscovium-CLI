@@ -544,12 +544,47 @@ Test-Case 'the wordmark and the accent are purple, not cyan' {
 }
 
 Test-Case 'the palette defines every colour the code asks for' {
+    # Scanned out of src/ rather than listed here. A hardcoded list is exactly
+    # why 'Faint' went unnoticed: eight call sites asked for a key the palette
+    # never had. Write-Line takes a [ConsoleColor] and throws on the null,
+    # while a frame segment silently skips it - so the bug only surfaced on the
+    # one page that used Write-Line.
     $palette = New-Palette
-    foreach ($name in @('Accent', 'AccentDim', 'Ok', 'Warn', 'Err', 'Text', 'Bright', 'Muted',
-                        'HighlightFg', 'HighlightBg', 'SelectedFg')) {
-        Assert-True ($palette.ContainsKey($name)) "palette is missing '$name'"
+    $asked = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($file in Get-ChildItem (Join-Path $RepoRoot 'src') -Filter *.ps1) {
+        $text = Get-Content -LiteralPath $file.FullName -Raw
+        foreach ($match in [regex]::Matches($text, "Get-Color\s+'([^']+)'")) {
+            $name = $match.Groups[1].Value
+            if (-not $asked.Contains($name)) { $asked.Add($name) }
+        }
+    }
+
+    Assert-True ($asked.Count -ge 8) "only $($asked.Count) colour names found - the scan is broken"
+
+    foreach ($name in $asked) {
+        Assert-True ($palette.ContainsKey($name)) "the code asks for Get-Color '$name', which the palette does not define"
         Assert-True ($palette[$name] -is [ConsoleColor]) "'$name' is not a ConsoleColor"
     }
+
+    # And every palette entry is a real ConsoleColor, including ones nothing
+    # currently asks for.
+    foreach ($name in $palette.Keys) {
+        Assert-True ($palette[$name] -is [ConsoleColor]) "palette entry '$name' is not a ConsoleColor"
+    }
+}
+
+Test-Case 'a rejected GitHub token is dropped rather than breaking every call' {
+    # A saved token that expires makes GitHub answer 401 to everything, which
+    # would break the store and the Scoop search on a machine where they worked
+    # the day before. The token is only ever a rate limit - every repository
+    # read is public - so a 401 retries without it. A 403 is the rate limit
+    # itself and must not retry, which would make it worse.
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/46-Store.ps1') -Raw
+
+    Assert-True ($source -match '\$status -ne 401') 'Invoke-GitHubApi does not single out 401'
+    Assert-True ($source -match "headers\.Remove\('Authorization'\)") 'it never drops the bad token'
+    Assert-True ($source -notmatch '\$status -eq 403') 'it treats 403 as retryable'
 }
 
 Test-Case 'the selection bar uses a background colour, not just brightness' {
@@ -986,6 +1021,189 @@ Test-Case 'presets are written without a BOM' {
     # BOM under Windows PowerShell 5.1.
     $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/40-Toolbox.ps1') -Raw
     Assert-True ($source -match 'New-Object Text\.UTF8Encoding \$false') 'presets may be written with a BOM'
+}
+
+# -----------------------------------------------------------------------------
+Write-Section 'App search'
+
+Test-Case 'winget''s table is parsed by column position, not by column name' {
+    # Built by hand so the parsing is tested without depending on what the
+    # live repository happens to contain. The column names are Spanish on
+    # purpose: boundaries come from the header's spacing, so a localised
+    # install has to parse identically.
+    $table = @(
+        'Nombre                             Id                        Version         Coincidencia'
+        '------------------------------------------------------------------------------------------'
+        '7-Zip                              7zip.7zip                 26.02           Moniker: 7zip'
+        'Advanced Archive Password Recovery Elcomsoft.ArchivePassword 4.66.266.6965   Tag: 7zip'
+    ) -join "`r`n"
+
+    $rows = @(Split-WingetTable -Text $table)
+    Assert-Equal 2 $rows.Count
+
+    # A name with spaces stays one field - the whole point of slicing by
+    # position rather than splitting on whitespace.
+    Assert-Equal '7-Zip' $rows[0][0]
+    Assert-Equal '7zip.7zip' $rows[0][1]
+    Assert-Equal '26.02' $rows[0][2]
+    Assert-Equal 'Advanced Archive Password Recovery' $rows[1][0]
+    Assert-Equal 'Elcomsoft.ArchivePassword' $rows[1][1]
+
+    # No table at all: a message instead of results.
+    Assert-Equal 0 @(Split-WingetTable -Text 'No package found matching input criteria.').Count
+    Assert-Equal 0 @(Split-WingetTable -Text '').Count
+}
+
+Test-Case 'the truncation notice below the table is not read as a result' {
+    # When --count cuts the list winget prints a note *under* the table, and
+    # slicing it by column positions produced a row whose id read 'entries
+    # truncated due'. A winget id never contains whitespace, which is the rule
+    # that drops it without matching the wording - the note is localised.
+    $table = @(
+        'Name                               Id                        Version         Match'
+        '------------------------------------------------------------------------------------------'
+        '7-Zip                              7zip.7zip                 26.02           Moniker: 7zip'
+        '<additional entries truncated due to result limit>'
+    ) -join "`r`n"
+
+    # The splitter is honest about what it saw: two lines of table.
+    Assert-Equal 2 @(Split-WingetTable -Text $table).Count
+
+    # Search-WingetPackage is where the note gets dropped, so check the rule
+    # itself on the field the note would land in.
+    $rows = @(Split-WingetTable -Text $table)
+    Assert-True ($rows[1][1] -match '\s') 'the notice no longer lands a spaced value in the id column'
+    Assert-True ($rows[0][1] -notmatch '\s') 'a real id picked up whitespace'
+}
+
+Test-Case 'a column is padded, and truncated when it would overrun' {
+    Assert-Equal 'abc       ' (Format-SearchColumn 'abc' 10)
+    Assert-Equal 10 (Format-SearchColumn 'abc' 10).Length
+
+    # Chocolatey has versions like 16.02.0.20170209 that ran into the next
+    # column; every result must be exactly the column width.
+    $long = Format-SearchColumn '16.02.0.20170209' 16
+    Assert-Equal 16 $long.Length
+    Assert-True $long.EndsWith('. ') "long value did not get the truncation marker: '$long'"
+    Assert-Equal 16 (Format-SearchColumn ('x' * 200) 16).Length
+    Assert-Equal '' (Format-SearchColumn 'abc' 1)
+}
+
+Test-Case 'the install command is the one each manager documents' {
+    $winget = New-SearchResult -Manager 'winget' -Id '7zip.7zip'
+    $choco  = New-SearchResult -Manager 'choco' -Id '7zip'
+    $main   = New-SearchResult -Manager 'scoop' -Id '7zip' -Bucket 'main'
+    $extras = New-SearchResult -Manager 'scoop' -Id 'vscode' -Bucket 'extras'
+
+    Assert-Equal 'winget install --id 7zip.7zip --exact' (Get-SearchResultCommand -Result $winget)
+    Assert-Equal 'choco install 7zip -y' (Get-SearchResultCommand -Result $choco)
+    Assert-Equal 'scoop install 7zip' (Get-SearchResultCommand -Result $main)
+
+    # extras is not added by default, so installing from it needs the bucket
+    # first - main always exists and must not get a redundant add.
+    Assert-Equal 'scoop bucket add extras; scoop install vscode' (Get-SearchResultCommand -Result $extras)
+}
+
+Test-Case 'a result carries a display name even when the feed gives none' {
+    # Scoop results have no name of their own, so the id stands in rather than
+    # leaving the column blank.
+    $bare = New-SearchResult -Manager 'scoop' -Id 'neovim'
+    Assert-Equal 'neovim' $bare.Name
+    Assert-Equal '' $bare.Version
+
+    $named = New-SearchResult -Manager 'choco' -Id '7zip' -Name '7-Zip'
+    Assert-Equal '7-Zip' $named.Name
+}
+
+Test-Case 'winget really answers, and every id is installable' {
+    # Live. winget ships with Windows, so this is a safe search to depend on.
+    $results = @(Search-WingetPackage -Query '7zip' -Limit 10)
+    Assert-True ($results.Count -ge 1) 'winget returned nothing for 7zip'
+
+    foreach ($result in $results) {
+        Assert-Equal 'winget' $result.Manager
+        Assert-True (-not [string]::IsNullOrWhiteSpace($result.Id)) 'a result has no id'
+        # An id with a space is the parsed-notice bug; one with an ellipsis was
+        # truncated by the column and would fail to install.
+        Assert-True ($result.Id -notmatch '\s') "id '$($result.Id)' contains whitespace"
+        Assert-True (-not $result.Id.Contains([char]0x2026)) "id '$($result.Id)' is truncated"
+    }
+
+    Assert-True (@($results | Where-Object { $_.Id -eq '7zip.7zip' }).Count -eq 1) '7zip.7zip was not among the results'
+}
+
+Test-Case 'the Chocolatey feed answers with ids, not blanks' {
+    # Live, and no Chocolatey needed - the whole reason this goes to the feed.
+    # The id is the Atom <title>; there is no d:Id property on this feed, and
+    # reading d:Id is what first produced a column of empty ids.
+    $results = @(Search-ChocolateyPackage -Query '7zip' -Limit 10)
+    Assert-True ($results.Count -ge 1) 'Chocolatey returned nothing for 7zip'
+
+    foreach ($result in $results) {
+        Assert-Equal 'choco' $result.Manager
+        Assert-True (-not [string]::IsNullOrWhiteSpace($result.Id)) 'a result has a blank id'
+        Assert-True (-not [string]::IsNullOrWhiteSpace($result.Version)) "$($result.Id) has no version"
+    }
+
+    $exact = @($results | Where-Object { $_.Id -eq '7zip' })
+    Assert-Equal 1 $exact.Count '7zip was not among the results'
+    # d:Title is the human name, distinct from the id.
+    Assert-Equal '7-Zip' $exact[0].Name
+}
+
+Test-Case 'Scoop''s buckets answer, exact name first, and cache for the session' {
+    # Live, and no Scoop needed either.
+    $Ctx.ScoopManifests = $null
+
+    $results = @(Search-ScoopPackage -Query '7zip' -Limit 10)
+    Assert-True ($results.Count -ge 1) 'Scoop returned nothing for 7zip'
+
+    # Exact match leads, so '7zip' is not buried under '7zip19.00-helper'.
+    Assert-Equal '7zip' $results[0].Id
+
+    foreach ($result in $results) {
+        Assert-Equal 'scoop' $result.Manager
+        Assert-True ($result.Bucket -in @('main', 'extras')) "unexpected bucket '$($result.Bucket)'"
+        # A bucket listing is file names, so there is no version to report and
+        # inventing one would be a lie.
+        Assert-Equal '' $result.Version
+    }
+
+    # Both official buckets came back, and the cache is populated.
+    $manifests = @(Get-ScoopManifest)
+    Assert-True ($manifests.Count -gt 3000) "only $($manifests.Count) manifests - a bucket may have failed"
+    foreach ($bucket in @('main', 'extras')) {
+        Assert-True (@($manifests | Where-Object { $_.Bucket -eq $bucket }).Count -gt 500) "the $bucket bucket looks short"
+    }
+
+    # Second search is served from the cache: two GitHub calls per query would
+    # be wasteful, and the count must not double.
+    $before = @(Get-ScoopManifest).Count
+    $null = Search-ScoopPackage -Query 'git' -Limit 5
+    Assert-Equal $before @(Get-ScoopManifest).Count
+}
+
+Test-Case 'one failing manager does not take the other two down' {
+    # Each manager is guarded on its own, so a feed being down still leaves the
+    # rest of the results on screen with the failure named.
+    $search = Search-AllPackages -Query '7zip' -Managers @('winget', 'nonsense-manager') -Limit 5
+
+    Assert-True (@($search.Results).Count -ge 1) 'a bad manager name took winget down with it'
+    Assert-Equal 1 @($search.Errors).Count
+    Assert-True ($search.Errors[0] -match 'nonsense-manager') "unexpected error: $($search.Errors[0])"
+    Assert-Equal '7zip' $search.Query
+}
+
+Test-Case 'a dry run installs nothing from any manager' {
+    $previousDryRun = $Ctx.DryRun
+    $Ctx.DryRun = $true
+    try {
+        foreach ($manager in @('choco', 'scoop')) {
+            $result = New-SearchResult -Manager $manager -Id 'somepackage' -Bucket 'main'
+            Assert-True (-not (Install-SearchResult -Result $result)) "$manager reported an install during a dry run"
+        }
+    }
+    finally { $Ctx.DryRun = $previousDryRun }
 }
 
 # -----------------------------------------------------------------------------
@@ -2098,11 +2316,24 @@ if (Test-StaApartment) {
             # Sort picker: one entry per sort key the engine understands.
             Assert-Equal 4 $gui.Ui.TaskSort.Items.Count
 
+            # Search apps page: five columns, all three managers ticked, and no
+            # results until something is searched for.
+            Assert-True ($null -ne $gui.Ui.SearchAppsPanel) 'no search apps panel'
+            Assert-True ($gui.NavNames -contains 'Search apps') 'Search apps is not in the sidebar'
+            Assert-Equal 5 $gui.Ui.AppSearchRows.View.Columns.Count
+            foreach ($box in @('ChkWinget', 'ChkChoco', 'ChkScoop')) {
+                Assert-True ([bool]$gui.Ui[$box].IsChecked) "$box does not start ticked"
+            }
+            Assert-True ($null -eq $gui.Ui.AppSearchRows.ItemsSource) 'the results list is populated before any search'
+
             # Package managers page: one row per manager, and the nav count
             # agrees with the catalog.
             Assert-True ($null -ne $gui.Ui.PackagesPanel) 'no package managers panel'
             Assert-Equal @(Get-PackageManagers).Count $gui.Ui.PackageRows.Children.Count
-            Assert-Equal 'Package managers' $gui.NavNames[4]
+            # By name, not by index: pinning a page to a sidebar position makes
+            # every later page break this, which is exactly what happened when
+            # Search apps landed at index 4.
+            Assert-True ($gui.NavNames -contains 'Package managers') 'Package managers is not in the sidebar'
 
             # A nav item with no panel behind it would silently show nothing.
             Assert-Equal $gui.Ui.NavList.Items.Count $gui.NavNames.Count

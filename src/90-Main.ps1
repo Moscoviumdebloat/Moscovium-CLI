@@ -39,7 +39,8 @@ function Show-Help {
     Write-Line '    -Profile <path>    run a saved setup profile' -Color Gray
     Write-Line '    -SaveProfile <path>  write the current -Apply/-Install selection as a profile' -Color Gray
     Write-Line '    -List <what>       list tweaks, apps, toolbox, packages, or backups' -Color Gray
-    Write-Line '    -Search <term>     search tweaks and apps' -Color Gray
+    Write-Line '    -Search <term>     search tweaks and apps in the built-in catalog' -Color Gray
+    Write-Line '    -FindApp <term>    search winget, Chocolatey and Scoop  [-FindIn winget,choco,scoop]' -Color Gray
     Write-Line ''
     Write-Line '  FLAGS' -Color White
     Write-Line '    -DryRun            print what would happen, change nothing' -Color Gray
@@ -237,6 +238,15 @@ function Invoke-Main {
 
     if (& $has 'List')   { Invoke-List -What $Bound['List']; $didSomething = $true }
     if (& $has 'Search') { Invoke-Search -Term $Bound['Search']; $didSomething = $true }
+
+    # Read-only and networked, so it is not in $mutating - searching should
+    # never provoke a UAC prompt.
+    if (& $has 'FindApp') {
+        $managers = @('winget', 'choco', 'scoop')
+        if (& $has 'FindIn') { $managers = @($Bound['FindIn']) }
+        Show-AppSearch -Query $Bound['FindApp'] -Managers $managers
+        $didSomething = $true
+    }
     if (& $has 'Status') { Show-TweakStatus; $didSomething = $true }
 
     if (& $has 'Apply') {

@@ -103,6 +103,12 @@ function New-Palette {
         Text        = [ConsoleColor]::Gray
         Bright      = [ConsoleColor]::White
         Muted       = [ConsoleColor]::DarkGray
+        # Aliases Muted rather than being dimmer: DarkGray is the dimmest thing
+        # in the sixteen that is still readable, and the next step down is
+        # black. The window has a genuinely fainter Faint; here the two are the
+        # same colour, and the name exists so both front-ends can ask for the
+        # same role. Write-Line takes a [ConsoleColor], so a missing key throws.
+        Faint       = [ConsoleColor]::DarkGray
         HighlightFg = [ConsoleColor]::White
         HighlightBg = [ConsoleColor]::DarkMagenta
         SelectedFg  = [ConsoleColor]::Green

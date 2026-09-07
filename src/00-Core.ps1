@@ -71,6 +71,15 @@ function New-MoscoviumContext {
         Guides     = @()
         GuideCategories = @()
         StoreApps  = @()
+
+        # Scoop's official bucket listings, filled in on first search. Two
+        # GitHub calls for about 4000 names, so they are worth keeping for the
+        # session rather than re-fetching per query.
+        ScoopManifests = $null
+
+        # Set once a saved GitHub token has been rejected, so the warning is
+        # said once rather than on every call that retries without it.
+        GitHubTokenRejected = $false
         Applied    = 0
         Failed     = 0
         Skipped    = 0

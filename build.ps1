@@ -189,6 +189,8 @@ param(
     [switch]  `$Tasks,
     [string]  `$InstallManager,
     [string]  `$Customize,
+    [string]  `$FindApp,
+    [string[]]`$FindIn,
     [string]  `$Cursor,
     [string]  `$Wallpaper,
     [string]  `$WallpaperStyle,

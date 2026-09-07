@@ -21,6 +21,7 @@ which ships with Windows, is enough.
 |---|---|
 | **One-click debloat box** | The landing page in the window and the first entry in the menu. Six steps behind one prompt: WinUtil preset, Win11Debloat preset, security-only Windows Update, TCP autotuning, CPU priority, dynamic tick. |
 | **Task manager** | btop-shaped: CPU with per-core bars and history, memory, disk, network, and a sortable process list you can end a process from. |
+| **Search apps** | One query across winget, Chocolatey and Scoop, with install from whichever one has it. |
 | **Package managers** | Install Chocolatey or Scoop from their own install scripts, with winget status alongside. |
 | **Customization** | The desktop app's shell replacements - Open-Shell, Nilesoft Shell, StartAllBack, ExplorerPatcher - each fetched from its vendor's current release. |
 | **40 tweaks** | Privacy & telemetry, Explorer & taskbar, gaming & performance, hardware, advanced. Applied, reverted, or reported on. |
@@ -182,6 +183,44 @@ in the sidebar.
 
 With output redirected it prints one snapshot instead of repainting a frame
 nobody can see, so `-Tasks > tasks.txt` is useful rather than a hang.
+
+### Search apps
+
+```powershell
+.moscovium.ps1 -FindApp neovim
+.moscovium.ps1 -FindApp 7zip -FindIn choco,scoop
+```
+
+One query, three managers, in the window as its own page and in the menu as
+**Search apps**. Each is reached the only way it actually can be:
+
+| | how | note |
+|---|---|---|
+| winget | its CLI | no machine-readable output for `search`, so the table is parsed |
+| Chocolatey | the community feed | works without Chocolatey installed |
+| Scoop | the official `main` and `extras` bucket listings | works without Scoop installed; no version column |
+
+**The table parsing is locale-proof.** winget has no `--output json` for
+`search` (checked on 1.29), so column boundaries come from the header's
+spacing rather than from column names - a Spanish install prints
+`Nombre  Id  Version  Coincidencia`. Slicing by position also keeps names with
+spaces in one piece: `Advanced Archive Password Recovery` is one field.
+
+Two things that bit during development and now have tests: when `--count`
+truncates, winget prints a notice *below* the table which parsed into a result
+whose id read `entries truncated due` - a winget id never contains whitespace,
+which is the rule that drops it without matching localised wording. And
+Chocolatey's feed has no `d:Id` property at all: the package id is the Atom
+`<title>`, while `d:Title` is the human name.
+
+Scoop results carry no version - a bucket listing is file names, and fetching
+4000 manifests to fill one column is not a trade worth making. Installing from
+`extras` runs `scoop bucket add extras` first, since it is not added by
+default.
+
+Installing goes through each manager: winget through the same path as the app
+catalog, Chocolatey and Scoop through their own CLIs, which have to be
+installed first and want opposite privileges - see below.
 
 ### Package managers
 
@@ -378,6 +417,7 @@ src/              function libraries, concatenated in name order
   52-Tasks        task manager sampling
   54-Packages     package manager detection and install
   56-Customize    shell replacements from their vendors' release channels
+  58-AppSearch    one search across winget, Chocolatey and Scoop
   60-Menu         interactive selectors and screens
   65-TaskView     task manager, console front-end
   70-Gui          the WPF window
