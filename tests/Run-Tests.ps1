@@ -621,6 +621,52 @@ $menuItems = @(1..20 | ForEach-Object { [pscustomobject]@{ Name = "Item $_"; Not
 $menuLabel = { param($o) $o.Name }
 $menuSub   = { param($o) $o.Note }
 
+Test-Case 'every main-menu entry has a handler, and every handler an entry' {
+    # The Mouse page shipped with its switch arm but no menu entry: the edit
+    # that added the entry silently did nothing, and nothing noticed because
+    # the arm and the function both existed. An entry with no arm does nothing
+    # when chosen; an arm with no entry is a page nobody can reach.
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/60-Menu.ps1') -Raw
+
+    $body = [regex]::Match($source, '(?ms)^function Show-MainMenu \{.*?^\}').Value
+    Assert-True ($body.Length -gt 0) 'Show-MainMenu was not found'
+
+    $optionBlock = [regex]::Match($body, '(?ms)\$options = @\(.*?^\s{4}\)').Value
+    Assert-True ($optionBlock.Length -gt 0) 'the options list was not found'
+
+    $switchBlock = [regex]::Match($body, '(?ms)switch \(\$result\.Selected\[0\]\.Action\) \{.*?^\s{8}\}').Value
+    Assert-True ($switchBlock.Length -gt 0) 'the action switch was not found'
+
+    $entries = @([regex]::Matches($optionBlock, "Action = '([^']+)'") | ForEach-Object { $_.Groups[1].Value })
+    $arms = @([regex]::Matches($switchBlock, "(?m)^\s+'([^']+)'\s") | ForEach-Object { $_.Groups[1].Value })
+
+    Assert-True ($entries.Count -ge 10) "only $($entries.Count) menu entries found - the scan is broken"
+
+    foreach ($action in $entries) {
+        Assert-True ($arms -contains $action) "the menu offers '$action' but nothing handles it"
+    }
+    foreach ($action in $arms) {
+        Assert-True ($entries -contains $action) "'$action' is handled but no menu entry reaches it"
+    }
+
+    # And the pages that exist are actually offered. Every one of these is a
+    # screen someone can only get to from here.
+    foreach ($action in @('oneclick', 'tweaks', 'apps', 'toolbox', 'profiles', 'findapp', 'packages',
+                          'customize', 'personalise', 'mouse', 'cs2', 'csgo', 'tasks', 'status', 'gui', 'quit')) {
+        Assert-True ($entries -contains $action) "the main menu has no '$action' entry"
+    }
+}
+
+Test-Case 'every menu screen the switch calls really exists' {
+    # A typo in a handler name would only surface when someone picked that row.
+    foreach ($name in @('Show-TweakMenu', 'Show-AppMenu', 'Show-ToolboxMenu', 'Show-ProfileMenu',
+                        'Show-AppSearchMenu', 'Show-PackageMenu', 'Show-CustomizationMenu',
+                        'Show-PersonalizeMenu', 'Show-MouseMenu', 'Show-CsMenu', 'Show-TaskManager',
+                        'Show-TweakStatus', 'Show-Gui')) {
+        Assert-True ($null -ne (Get-Command -Name $name -ErrorAction SilentlyContinue)) "$name is not defined"
+    }
+}
+
 Test-Case 'an empty filter shows every item' {
     Assert-Equal 20 @(Get-VisibleIndex -Items $menuItems -Filter '' -Label $menuLabel).Count
 }

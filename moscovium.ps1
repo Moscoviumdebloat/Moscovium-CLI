@@ -5,7 +5,7 @@
 
         irm https://moscovium.win | iex
 
-    Build 35492921f6  (a digest of src/ and data/ - same sources, same id).
+    Build a5e9e9b339  (a digest of src/ and data/ - same sources, same id).
     Check with:  .\moscovium.ps1 -Version
 
     GENERATED FILE - do not edit.
@@ -9873,6 +9873,7 @@ param(
             [pscustomobject]@{ Name = 'Packages'; Hint = 'Install Chocolatey or Scoop';                             Action = 'packages' }
             [pscustomobject]@{ Name = 'Customize'; Hint = 'Open-Shell, Nilesoft Shell, StartAllBack, ExplorerPatcher';  Action = 'customize' }
             [pscustomobject]@{ Name = 'Personalise'; Hint = 'Cursor packs and wallpaper';                              Action = 'personalise' }
+            [pscustomobject]@{ Name = 'Mouse';    Hint = 'Pointer speed, acceleration, trails, visibility';        Action = 'mouse' }
             [pscustomobject]@{ Name = 'Counter-Strike 2'; Hint = 'Configs and launch options';                         Action = 'cs2' }
             [pscustomobject]@{ Name = 'CS:GO';        Hint = 'Configs and launch options for the legacy build';        Action = 'csgo' }
             [pscustomobject]@{ Name = 'Tasks';    Hint = 'Live CPU, memory, disk, network and processes';          Action = 'tasks' }
@@ -14323,4 +14324,4 @@ param(
         Restore-ConsoleEncoding -Previous $previousEncoding
     }
 
-} $PSBoundParameters '1.2.0' $SourceUrl '35492921f6'
+} $PSBoundParameters '1.2.0' $SourceUrl 'a5e9e9b339'
