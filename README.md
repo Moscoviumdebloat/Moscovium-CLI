@@ -28,7 +28,7 @@ which ships with Windows, is enough.
 | **16 toolbox actions** | WinUtil, Win11Debloat, Windows Update policy, TCP autotuning, dynamic tick, CPU priority, and the classic control panels - each on its own, when you do not want the whole box. |
 | **6 guides** | The manual walkthroughs - BIOS, GPU control panels, network - that no tool can do for you. |
 | **App store** | Community releases from the Moscovium dev orgs on GitHub. |
-| **Personalise** | Cursor schemes, wallpaper, Counter-Strike configs. |
+| **Personalise** | The desktop app's six cursor packs, fetched on demand, plus your own; wallpaper; Counter-Strike configs and launch options for CS2 and CS:GO. |
 | **Profiles** | Setup checklists, interchangeable with the desktop app's. |
 | **Two front-ends** | The same engine drives a terminal UI and a window. `-Gui` opens the window. |
 
@@ -237,6 +237,25 @@ publishes is also what the desktop app bundles.
 The desktop page's fifth button, the StartAllBack trial reset, is not here.
 It circumvents licensing, the same reason MAS is not in the catalog.
 
+### Personalise
+
+```powershell
+.\moscovium.ps1 -List cursors
+.\moscovium.ps1 -Cursor material-dark          # one of the desktop app's six packs
+.\moscovium.ps1 -Cursor C:\my-cursors           # your own folder of .cur / .ani
+.\moscovium.ps1 -Cursor default                 # back to Windows
+.\moscovium.ps1 -Wallpaper C:\pic.jpg -WallpaperStyle Fit
+.\moscovium.ps1 -CsConfig yabosen               # or a path to your own .cfg
+```
+
+Also a Personalise screen in the menu, with CS2 and CS:GO launch options.
+
+The desktop app's three cursor packs are 345 files - too much to carry in a
+single script. So a preset is fetched when you pick it: the seventeen files
+Windows has roles for, straight from the desktop app's own repository, then
+applied and registered under Mouse Properties exactly as the desktop app does.
+Cursors are per-user and `-Cursor default` puts them back.
+
 ### Toolbox
 
 The individual actions, for when you want fewer than all six.
@@ -408,7 +427,7 @@ Everything except the parts that cannot live in a single script:
 |---|---|
 | Tweaks, App Store, Optimizations, Toolbox, Legacy Menus | ported |
 | Guides, CS2/CS:GO configs, Settings | ported |
-| Cursors | the mechanism, not the packs - point it at a folder of `.cur`/`.ani` files, or restore the Windows defaults. The bundled schemes are several hundred binary files. |
+| Cursors | ported - the six packs are fetched from the desktop app's repository on demand (seventeen files each), or point it at your own folder. |
 | Wallpaper | ported |
 | Customization page installers | ported - fetched from each vendor's current release channel instead of bundled as binaries. The trial reset is not. |
 
@@ -419,8 +438,9 @@ the **StartAllBack trial reset**. Both exist to circumvent licensing. Everything
 else on the GUI's Optimizations, Toolbox, Customization and Legacy Menus pages is
 here. The exclusion is one list in `tools/Sync-Catalog.ps1` if you disagree.
 
-Also not ported: the bundled cursor packs themselves - several hundred binary
-files - though pointing the cursor mechanism at your own folder of them works.
+Nothing else on those pages is missing. The cursor packs and the Customization
+installers are fetched from their sources at apply time rather than bundled,
+which is the only way binaries fit in a single script.
 
 ## Third-party scripts
 

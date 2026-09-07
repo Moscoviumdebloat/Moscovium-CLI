@@ -559,6 +559,83 @@ function Show-CustomizationMenu {
     }
 }
 
+# The desktop app's Cursors, wallpaper and Counter-Strike pages, as one screen.
+# Until this existed the Personalise features were window-only.
+function Show-PersonalizeMenu {
+    while ($true) {
+        $options = [System.Collections.Generic.List[object]]::new()
+        foreach ($preset in Get-CursorPresets) {
+            $options.Add([pscustomobject]@{ Name = "Cursors: $($preset.Name)"; Hint = $preset.Credit; Action = 'preset'; Id = $preset.Id })
+        }
+        $options.Add([pscustomobject]@{ Name = 'Cursors: from a folder of .cur/.ani'; Hint = 'Matched to roles by file name'; Action = 'folder'; Id = '' })
+        $options.Add([pscustomobject]@{ Name = 'Cursors: restore Windows defaults';   Hint = '';                               Action = 'restore'; Id = '' })
+        $options.Add([pscustomobject]@{ Name = 'Wallpaper';                           Hint = 'Any image, with a fit style';    Action = 'wallpaper'; Id = '' })
+        $options.Add([pscustomobject]@{ Name = 'CS2: install yabosen.cfg';           Hint = 'Into every Steam cfg folder found'; Action = 'cfg-default'; Id = '' })
+        $options.Add([pscustomobject]@{ Name = 'CS2: install a .cfg of yours';        Hint = '';                               Action = 'cfg-file'; Id = '' })
+        $options.Add([pscustomobject]@{ Name = 'CS2 launch options';                  Hint = (Get-CsLaunchOption -Game CS2);   Action = 'launch-cs2'; Id = '' })
+        $options.Add([pscustomobject]@{ Name = 'CS:GO launch options';                Hint = (Get-CsLaunchOption -Game CSGO);  Action = 'launch-csgo'; Id = '' })
+
+        $result = Show-Selector -Items @($options) -Title 'Personalise' -SingleSelect `
+            -Subtitle 'Cursor packs fetched from the desktop app, wallpaper, Counter-Strike' `
+            -Label { param($o) $o.Name } `
+            -Sublabel { param($o) $o.Hint }
+
+        if (-not $result.Confirmed) { return }
+        $choice = $result.Selected[0]
+
+        Write-Banner
+        switch ($choice.Action) {
+            'preset'  { Install-CursorPreset -Id $choice.Id | Out-Null }
+            'restore' { Restore-DefaultCursor }
+            'folder' {
+                Write-Line '  Folder of .cur / .ani files: ' -Color Yellow -NoNewline
+                $folder = [string](Read-Host)
+                if ($folder) {
+                    try { Install-CursorScheme -Path $folder -SchemeName (Split-Path -Leaf $folder) }
+                    catch { Write-Err $_.Exception.Message }
+                }
+            }
+            'wallpaper' {
+                Write-Line '  Image path: ' -Color Yellow -NoNewline
+                $image = [string](Read-Host)
+                if ($image) {
+                    Write-Line '  Style [Fill/Fit/Stretch/Tile/Center/Span] (Fill): ' -Color Yellow -NoNewline
+                    $style = [string](Read-Host)
+                    if (-not $style) { $style = 'Fill' }
+                    try { Set-Wallpaper -Path $image -Style $style }
+                    catch { Write-Err $_.Exception.Message }
+                }
+            }
+            'cfg-default' { Install-CsConfig }
+            'cfg-file' {
+                Write-Line '  Path to the .cfg: ' -Color Yellow -NoNewline
+                $cfg = [string](Read-Host)
+                if ($cfg) { Install-CsConfig -LocalPath $cfg }
+            }
+            'launch-cs2'  { Show-CsLaunchOption -Game CS2 }
+            'launch-csgo' { Show-CsLaunchOption -Game CSGO }
+        }
+        Wait-ForKey
+    }
+}
+
+# Prints the string and puts it on the clipboard when there is one - a console
+# over SSH has none, and that is not a failure.
+function Show-CsLaunchOption {
+    param([ValidateSet('CS2', 'CSGO')][string]$Game = 'CS2')
+
+    $options = Get-CsLaunchOption -Game $Game
+    Write-Line ''
+    Write-Info "$Game launch options - paste into Steam > Properties > Launch Options:"
+    Write-Line "      $options" -Color White
+
+    try {
+        Set-Clipboard -Value $options -ErrorAction Stop
+        Write-Ok 'Copied to the clipboard.'
+    }
+    catch { Write-Info 'No clipboard here; copy it from above.' }
+}
+
 function Show-ProfileMenu {
     $options = @(
         [pscustomobject]@{ Name = 'Run a profile';   Action = 'run' }
@@ -641,6 +718,7 @@ function Show-MainMenu {
         [pscustomobject]@{ Name = 'Profiles'; Hint = 'Save or run a setup checklist';                          Action = 'profiles' }
         [pscustomobject]@{ Name = 'Packages'; Hint = 'Install Chocolatey or Scoop';                             Action = 'packages' }
         [pscustomobject]@{ Name = 'Customize'; Hint = 'Open-Shell, Nilesoft Shell, StartAllBack, ExplorerPatcher';  Action = 'customize' }
+        [pscustomobject]@{ Name = 'Personalise'; Hint = 'Cursor packs, wallpaper, Counter-Strike configs';         Action = 'personalise' }
         [pscustomobject]@{ Name = 'Tasks';    Hint = 'Live CPU, memory, disk, network and processes';          Action = 'tasks' }
         [pscustomobject]@{ Name = 'Status';   Hint = 'What is currently applied on this machine';              Action = 'status' }
         [pscustomobject]@{ Name = 'GUI';      Hint = 'Open the same thing as a window';                       Action = 'gui' }
@@ -667,6 +745,7 @@ function Show-MainMenu {
             'profiles' { Show-ProfileMenu }
             'packages' { Show-PackageMenu }
             'customize' { Show-CustomizationMenu }
+            'personalise' { Show-PersonalizeMenu }
             'tasks'    { Show-TaskManager }
             'status'   { Write-Banner; Show-TweakStatus; Wait-ForKey }
             'gui'      { Clear-Host; Show-Gui | Out-Null; Clear-Host }

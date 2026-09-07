@@ -33,6 +33,9 @@ function Show-Help {
     Write-Line '    -Toolbox <id>      run a toolbox action (see -List toolbox)' -Color Gray
     Write-Line '    -InstallManager <id>  install a package manager: choco or scoop' -Color Gray
     Write-Line '    -Customize <id>    install Open-Shell, Nilesoft Shell, StartAllBack or ExplorerPatcher' -Color Gray
+    Write-Line '    -Cursor <id|path|default>  apply a cursor pack (see -List cursors), a folder, or restore' -Color Gray
+    Write-Line '    -Wallpaper <image> [-WallpaperStyle Fill|Fit|Stretch|Tile|Center|Span]' -Color Gray
+    Write-Line '    -CsConfig <path|yabosen>  install a Counter-Strike .cfg into every Steam cfg folder' -Color Gray
     Write-Line '    -Profile <path>    run a saved setup profile' -Color Gray
     Write-Line '    -SaveProfile <path>  write the current -Apply/-Install selection as a profile' -Color Gray
     Write-Line '    -List <what>       list tweaks, apps, toolbox, packages, or backups' -Color Gray
@@ -158,6 +161,7 @@ function Invoke-List {
             '^packages?$' { Show-PackageManagerCatalog }
             '^managers?$' { Show-PackageManagerCatalog }
             '^custom'     { Show-CustomizationCatalog }
+            '^cursors?$'  { Show-CursorPresetCatalog }
             '^categor'    {
                 Write-SectionHeading 'Tweak categories'
                 Format-Columns -Items $Ctx.TweakCategories
@@ -165,7 +169,7 @@ function Invoke-List {
                 Format-Columns -Items $Ctx.AppCategories
             }
             default {
-                Write-Err "Don't know how to list '$item'. Try: tweaks, apps, toolbox, packages, customization, backups, categories."
+                Write-Err "Don't know how to list '$item'. Try: tweaks, apps, toolbox, packages, customization, cursors, backups, categories."
             }
         }
     }
@@ -302,6 +306,34 @@ function Invoke-Main {
     # In $mutating above: these are vendor installers writing to Program Files.
     if (& $has 'Customize') {
         Install-CustomizationTool -Id $Bound['Customize'] | Out-Null
+        $didSomething = $true
+    }
+
+    if (& $has 'Cursor') {
+        $cursor = [string]$Bound['Cursor']
+        try {
+            if ($cursor -eq 'default') { Restore-DefaultCursor }
+            elseif (Test-Path -LiteralPath $cursor -PathType Container) {
+                Install-CursorScheme -Path $cursor -SchemeName (Split-Path -Leaf $cursor)
+            }
+            else { Install-CursorPreset -Id $cursor | Out-Null }
+        }
+        catch { Write-Err $_.Exception.Message }
+        $didSomething = $true
+    }
+
+    if (& $has 'Wallpaper') {
+        $style = 'Fill'
+        if (& $has 'WallpaperStyle') { $style = [string]$Bound['WallpaperStyle'] }
+        try { Set-Wallpaper -Path $Bound['Wallpaper'] -Style $style }
+        catch { Write-Err $_.Exception.Message }
+        $didSomething = $true
+    }
+
+    if (& $has 'CsConfig') {
+        $cfg = [string]$Bound['CsConfig']
+        if ($cfg -in @('yabosen', 'default')) { Install-CsConfig }
+        else { Install-CsConfig -LocalPath $cfg }
         $didSomething = $true
     }
 

@@ -5,7 +5,7 @@
 
         irm https://moscovium.win | iex
 
-    Build a1f0fc265f  (a digest of src/ and data/ - same sources, same id).
+    Build aae5e5d634  (a digest of src/ and data/ - same sources, same id).
     Check with:  .\moscovium.ps1 -Version
 
     GENERATED FILE - do not edit.
@@ -30,6 +30,10 @@ param(
     [switch]  $Tasks,
     [string]  $InstallManager,
     [string]  $Customize,
+    [string]  $Cursor,
+    [string]  $Wallpaper,
+    [string]  $WallpaperStyle,
+    [string]  $CsConfig,
     [string[]]$Guide,
     [string[]]$SetSetting,
     [string]  $Toolbox,
@@ -5903,10 +5907,13 @@ param(
             'IBeam'       = @('ibeam', 'text', 'beam')
             'NWPen'       = @('nwpen', 'handwriting', 'pen')
             'No'          = @('no', 'unavailable')
-            'SizeNS'      = @('sizens', 'vertical')
-            'SizeWE'      = @('sizewe', 'horizontal')
-            'SizeNWSE'    = @('sizenwse', 'diagonal1', 'diagonal 1')
-            'SizeNESW'    = @('sizenesw', 'diagonal2', 'diagonal 2')
+            # The macOS pack spells these 'Vertical Resize', 'Diagonal Resize 1' and
+            # so on, and the match below is exact on the stem - so the full names
+            # have to be here or four of its seventeen roles come out unmatched.
+            'SizeNS'      = @('sizens', 'vertical', 'vertical resize')
+            'SizeWE'      = @('sizewe', 'horizontal', 'horizontal resize')
+            'SizeNWSE'    = @('sizenwse', 'diagonal1', 'diagonal 1', 'diagonal resize 1')
+            'SizeNESW'    = @('sizenesw', 'diagonal2', 'diagonal 2', 'diagonal resize 2')
             'SizeAll'     = @('sizeall', 'move')
             'UpArrow'     = @('uparrow', 'alternate')
             'Hand'        = @('hand', 'link')
@@ -5982,11 +5989,26 @@ param(
             $key = $base.CreateSubKey('Control Panel\Cursors', $true)
             try {
                 $key.SetValue('', $SchemeName, [Microsoft.Win32.RegistryValueKind]::String)
-                foreach ($role in $assigned.Keys) {
-                    $key.SetValue($role, $assigned[$role], [Microsoft.Win32.RegistryValueKind]::ExpandString)
+                foreach ($role in $roles.Keys) {
+                    # A role the pack does not cover is cleared, not left pointing at
+                    # whatever the previous scheme had - otherwise switching packs
+                    # leaves a mixed set behind. Empty means "the built-in one".
+                    $value = ''
+                    if ($assigned.Contains($role)) { $value = $assigned[$role] }
+                    $key.SetValue($role, $value, [Microsoft.Win32.RegistryValueKind]::ExpandString)
                 }
             }
             finally { $key.Dispose() }
+
+            # Registering under Schemes is what makes it appear in the Mouse
+            # Properties dropdown, and is what the desktop app does. The value is
+            # every role's path in the fixed role order, comma-separated.
+            $schemes = $base.CreateSubKey('Control Panel\Cursors\Schemes', $true)
+            try {
+                $ordered = foreach ($role in $roles.Keys) { if ($assigned.Contains($role)) { $assigned[$role] } else { '' } }
+                $schemes.SetValue($SchemeName, ($ordered -join ','), [Microsoft.Win32.RegistryValueKind]::String)
+            }
+            finally { $schemes.Dispose() }
         }
         finally { $base.Dispose() }
 
@@ -5995,6 +6017,180 @@ param(
         foreach ($role in $roles.Keys) {
             if (-not $assigned.Contains($role)) { Write-Info "unmatched: $role" }
         }
+    }
+
+    # -----------------------------------------------------------------------------
+    # The desktop app's cursor packs
+    #
+    # Three packs, six presets, 345 files in the desktop repository - too much to
+    # carry in a single script, so a preset is fetched at apply time: the seventeen
+    # files Windows actually has roles for, straight from the repository that the
+    # desktop app bundles them out of, then handed to Install-CursorScheme like any
+    # other folder. Same idea as the Customization installers: the vendor's current
+    # copy rather than an embedded one, and here the vendor is Moscovium itself.
+    #
+    # 'main' rather than a pinned commit, deliberately: the desktop app ships from
+    # main, so this applies exactly the files it would.
+    # -----------------------------------------------------------------------------
+
+    $CursorPackBaseUrl = 'https://raw.githubusercontent.com/Moscoviumdebloat/Moscovium/main/Assets/Cursors/'
+
+    function Get-CursorPresets {
+        @(
+            [pscustomobject]@{
+                Id = 'concept1-dark'; Name = 'Cursor Concept 1 Dark Free'
+                Folder = 'CursorConcept1/cursor/dark'; Naming = 'standard'
+                Credit = 'Minimal, clean cursor design by Jepri Creations.'
+            }
+            [pscustomobject]@{
+                Id = 'concept1-light'; Name = 'Cursor Concept 1 Light Free'
+                Folder = 'CursorConcept1/cursor/light'; Naming = 'standard'
+                Credit = 'Minimal, clean cursor design by Jepri Creations.'
+            }
+            [pscustomobject]@{
+                Id = 'material-dark'; Name = 'Material Design Dark Free'
+                Folder = 'MaterialDesign/dark'; Naming = 'standard'
+                Credit = 'Google-inspired Material Design cursors by Jepri Creations.'
+            }
+            [pscustomobject]@{
+                Id = 'material-light'; Name = 'Material Design Light Free'
+                Folder = 'MaterialDesign/light'; Naming = 'standard'
+                Credit = 'Google-inspired Material Design cursors by Jepri Creations.'
+            }
+            [pscustomobject]@{
+                Id = 'macos'; Name = 'macOS Cursors No Shadow'
+                Folder = 'MacOSCursors/1. Sierra and newer/1. No Shadow/1. Normal'; Naming = 'macos'
+                Credit = 'macOS Sierra cursors for Windows by antiden.'
+            }
+            [pscustomobject]@{
+                Id = 'macos-shadow'; Name = 'macOS Cursors With Shadow'
+                Folder = 'MacOSCursors/1. Sierra and newer/2. With Shadow/1. Normal'; Naming = 'macos'
+                Credit = 'macOS Sierra cursors for Windows by antiden.'
+            }
+        )
+    }
+
+    # The seventeen files a preset needs, in role order. Two naming conventions
+    # across the three packs, exactly as the desktop app's two mapping builders.
+    function Get-CursorPresetFile {
+        param([Parameter(Mandatory)]$Preset)
+
+        if ($Preset.Naming -eq 'macos') {
+            return @(
+                'Normal.cur', 'Help.cur', 'Working.ani', 'Busy.ani', 'Precision.cur', 'Text.cur',
+                'Handwriting.cur', 'Unavailable.cur', 'Vertical Resize.cur', 'Horizontal Resize.cur',
+                'Diagonal Resize 1.cur', 'Diagonal Resize 2.cur', 'Move.cur', 'Alternate.cur',
+                'Link.cur', 'Person.cur', 'Pin.cur'
+            )
+        }
+
+        @(
+            'arrow.cur', 'help.cur', 'appstarting.ani', 'wait.ani', 'crosshair.cur', 'ibeam.cur',
+            'nwpen.cur', 'no.cur', 'sizens.cur', 'sizewe.cur', 'sizenwse.cur', 'sizenesw.cur',
+            'sizeall.cur', 'uparrow.cur', 'hand.cur', 'person.cur', 'pin.cur'
+        )
+    }
+
+    # Every path segment escaped on its own: the macOS folders have spaces and
+    # dots, and escaping the joined path would also escape the slashes.
+    function Get-CursorPresetUrl {
+        param([Parameter(Mandatory)]$Preset, [Parameter(Mandatory)][string]$FileName)
+
+        $segments = @($Preset.Folder -split '/') + @($FileName)
+        return $CursorPackBaseUrl + (($segments | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/')
+    }
+
+    function Resolve-CursorPreset {
+        param([Parameter(Mandatory)][string]$Id)
+
+        $presets = Get-CursorPresets
+        $exact = @($presets | Where-Object { $_.Id -eq $Id })
+        if ($exact.Count -eq 1) { return $exact[0] }
+
+        $fuzzy = @($presets | Where-Object {
+            (Test-NameMatch -Value $_.Id -Pattern $Id) -or (Test-NameMatch -Value $_.Name -Pattern $Id)
+        })
+        if ($fuzzy.Count -eq 1) { return $fuzzy[0] }
+
+        if ($fuzzy.Count -gt 1) {
+            Write-Err "'$Id' is ambiguous. Did you mean one of these?"
+            foreach ($preset in $fuzzy) { Write-Info $preset.Id }
+            return $null
+        }
+
+        Write-Err "Unknown cursor pack '$Id'. Known: $((Get-CursorPresets | ForEach-Object { $_.Id }) -join ', ')."
+        return $null
+    }
+
+    function Install-CursorPreset {
+        param([Parameter(Mandatory)][string]$Id)
+
+        $preset = Resolve-CursorPreset -Id $Id
+        if (-not $preset) { return $false }
+
+        $files = @(Get-CursorPresetFile -Preset $preset)
+
+        if ($Ctx.DryRun) {
+            Write-Status -Glyph (Get-Glyph 'Info') -Color (Get-Color 'Warn') -Message $preset.Name -MessageColor (Get-Color 'Warn')
+            Write-Info "would download $($files.Count) cursor files from $CursorPackBaseUrl$($preset.Folder)/ and apply them"
+            return $false
+        }
+
+        Write-Line ''
+        Write-Info "$($preset.Name) - $($preset.Credit)"
+        Write-Info "$($files.Count) files from the desktop app's repository:"
+        Write-Line "      $CursorPackBaseUrl$($preset.Folder)/" -Color Gray
+        Write-Info 'Cursors are per-user and reversible: Restore Windows defaults puts them back.'
+
+        if (-not (Confirm-Action "Download and apply $($preset.Name)?" -DefaultYes)) {
+            Write-Warn "$($preset.Name) - skipped."
+            return $false
+        }
+
+        # Into downloads/, not straight into the scheme folder: Install-CursorScheme
+        # copies from wherever it is pointed into the folder the registry will
+        # reference, and does the role matching, so this only has to fetch.
+        $staging = Join-Path (Join-Path $Ctx.StateDir 'downloads\cursors') $preset.Id
+        New-Item -ItemType Directory -Path $staging -Force | Out-Null
+
+        Write-Step "Downloading $($preset.Name)"
+        try {
+            $index = 0
+            foreach ($file in $files) {
+                $index++
+                $url = Get-CursorPresetUrl -Preset $preset -FileName $file
+                # A .cur is 4KB or so; the floor only has to catch an empty or
+                # truncated response, since a 404 already throws.
+                Save-RemoteFile -Url $url -Destination (Join-Path $staging $file) -Label "$index/$($files.Count) $file" -MinimumBytes 64 | Out-Null
+            }
+        }
+        catch {
+            Write-Err "$($preset.Name) - $($_.Exception.Message)"
+            return $false
+        }
+
+        try {
+            Install-CursorScheme -Path $staging -SchemeName $preset.Name
+            return $true
+        }
+        catch {
+            Write-Err "$($preset.Name) - $($_.Exception.Message)"
+            return $false
+        }
+    }
+
+    function Show-CursorPresetCatalog {
+        Write-SectionHeading 'Cursor packs'
+
+        foreach ($preset in Get-CursorPresets) {
+            Write-Line '  - ' -Color DarkGray -NoNewline
+            Write-Line $preset.Id.PadRight(16) -Color White -NoNewline
+            Write-Line $preset.Name -Color Gray
+            Write-Info $preset.Credit
+        }
+
+        Write-Line ''
+        Write-Info 'Apply one with:  -Cursor <id>     a folder of your own:  -Cursor <path>     back to Windows:  -Cursor default'
     }
 
     function Restore-DefaultCursor {
@@ -6091,7 +6287,15 @@ param(
         @($found)
     }
 
-    function Get-CsLaunchOption { '-high -novid -allow_third_party_software -tickrate 128 -noaafonts' }
+    # Both strings verbatim from the desktop app's CS2 and CS:GO pages.
+    function Get-CsLaunchOption {
+        param([ValidateSet('CS2', 'CSGO')][string]$Game = 'CS2')
+
+        switch ($Game) {
+            'CSGO'  { return '-tickrate 128 -allow_third_party_software +exec autoexec -freq 180' }
+            default { return '-high -novid -allow_third_party_software -tickrate 128 -noaafonts' }
+        }
+    }
 
     function Install-CsConfig {
         param(
@@ -8327,6 +8531,83 @@ param(
         }
     }
 
+    # The desktop app's Cursors, wallpaper and Counter-Strike pages, as one screen.
+    # Until this existed the Personalise features were window-only.
+    function Show-PersonalizeMenu {
+        while ($true) {
+            $options = [System.Collections.Generic.List[object]]::new()
+            foreach ($preset in Get-CursorPresets) {
+                $options.Add([pscustomobject]@{ Name = "Cursors: $($preset.Name)"; Hint = $preset.Credit; Action = 'preset'; Id = $preset.Id })
+            }
+            $options.Add([pscustomobject]@{ Name = 'Cursors: from a folder of .cur/.ani'; Hint = 'Matched to roles by file name'; Action = 'folder'; Id = '' })
+            $options.Add([pscustomobject]@{ Name = 'Cursors: restore Windows defaults';   Hint = '';                               Action = 'restore'; Id = '' })
+            $options.Add([pscustomobject]@{ Name = 'Wallpaper';                           Hint = 'Any image, with a fit style';    Action = 'wallpaper'; Id = '' })
+            $options.Add([pscustomobject]@{ Name = 'CS2: install yabosen.cfg';           Hint = 'Into every Steam cfg folder found'; Action = 'cfg-default'; Id = '' })
+            $options.Add([pscustomobject]@{ Name = 'CS2: install a .cfg of yours';        Hint = '';                               Action = 'cfg-file'; Id = '' })
+            $options.Add([pscustomobject]@{ Name = 'CS2 launch options';                  Hint = (Get-CsLaunchOption -Game CS2);   Action = 'launch-cs2'; Id = '' })
+            $options.Add([pscustomobject]@{ Name = 'CS:GO launch options';                Hint = (Get-CsLaunchOption -Game CSGO);  Action = 'launch-csgo'; Id = '' })
+
+            $result = Show-Selector -Items @($options) -Title 'Personalise' -SingleSelect `
+                -Subtitle 'Cursor packs fetched from the desktop app, wallpaper, Counter-Strike' `
+                -Label { param($o) $o.Name } `
+                -Sublabel { param($o) $o.Hint }
+
+            if (-not $result.Confirmed) { return }
+            $choice = $result.Selected[0]
+
+            Write-Banner
+            switch ($choice.Action) {
+                'preset'  { Install-CursorPreset -Id $choice.Id | Out-Null }
+                'restore' { Restore-DefaultCursor }
+                'folder' {
+                    Write-Line '  Folder of .cur / .ani files: ' -Color Yellow -NoNewline
+                    $folder = [string](Read-Host)
+                    if ($folder) {
+                        try { Install-CursorScheme -Path $folder -SchemeName (Split-Path -Leaf $folder) }
+                        catch { Write-Err $_.Exception.Message }
+                    }
+                }
+                'wallpaper' {
+                    Write-Line '  Image path: ' -Color Yellow -NoNewline
+                    $image = [string](Read-Host)
+                    if ($image) {
+                        Write-Line '  Style [Fill/Fit/Stretch/Tile/Center/Span] (Fill): ' -Color Yellow -NoNewline
+                        $style = [string](Read-Host)
+                        if (-not $style) { $style = 'Fill' }
+                        try { Set-Wallpaper -Path $image -Style $style }
+                        catch { Write-Err $_.Exception.Message }
+                    }
+                }
+                'cfg-default' { Install-CsConfig }
+                'cfg-file' {
+                    Write-Line '  Path to the .cfg: ' -Color Yellow -NoNewline
+                    $cfg = [string](Read-Host)
+                    if ($cfg) { Install-CsConfig -LocalPath $cfg }
+                }
+                'launch-cs2'  { Show-CsLaunchOption -Game CS2 }
+                'launch-csgo' { Show-CsLaunchOption -Game CSGO }
+            }
+            Wait-ForKey
+        }
+    }
+
+    # Prints the string and puts it on the clipboard when there is one - a console
+    # over SSH has none, and that is not a failure.
+    function Show-CsLaunchOption {
+        param([ValidateSet('CS2', 'CSGO')][string]$Game = 'CS2')
+
+        $options = Get-CsLaunchOption -Game $Game
+        Write-Line ''
+        Write-Info "$Game launch options - paste into Steam > Properties > Launch Options:"
+        Write-Line "      $options" -Color White
+
+        try {
+            Set-Clipboard -Value $options -ErrorAction Stop
+            Write-Ok 'Copied to the clipboard.'
+        }
+        catch { Write-Info 'No clipboard here; copy it from above.' }
+    }
+
     function Show-ProfileMenu {
         $options = @(
             [pscustomobject]@{ Name = 'Run a profile';   Action = 'run' }
@@ -8409,6 +8690,7 @@ param(
             [pscustomobject]@{ Name = 'Profiles'; Hint = 'Save or run a setup checklist';                          Action = 'profiles' }
             [pscustomobject]@{ Name = 'Packages'; Hint = 'Install Chocolatey or Scoop';                             Action = 'packages' }
             [pscustomobject]@{ Name = 'Customize'; Hint = 'Open-Shell, Nilesoft Shell, StartAllBack, ExplorerPatcher';  Action = 'customize' }
+            [pscustomobject]@{ Name = 'Personalise'; Hint = 'Cursor packs, wallpaper, Counter-Strike configs';         Action = 'personalise' }
             [pscustomobject]@{ Name = 'Tasks';    Hint = 'Live CPU, memory, disk, network and processes';          Action = 'tasks' }
             [pscustomobject]@{ Name = 'Status';   Hint = 'What is currently applied on this machine';              Action = 'status' }
             [pscustomobject]@{ Name = 'GUI';      Hint = 'Open the same thing as a window';                       Action = 'gui' }
@@ -8435,6 +8717,7 @@ param(
                 'profiles' { Show-ProfileMenu }
                 'packages' { Show-PackageMenu }
                 'customize' { Show-CustomizationMenu }
+                'personalise' { Show-PersonalizeMenu }
                 'tasks'    { Show-TaskManager }
                 'status'   { Write-Banner; Show-TweakStatus; Wait-ForKey }
                 'gui'      { Clear-Host; Show-Gui | Out-Null; Clear-Host }
@@ -10095,10 +10378,11 @@ param(
                         CornerRadius="8" Padding="16" Margin="0,0,0,12">
                   <StackPanel>
                     <TextBlock Text="Mouse cursors" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                    <TextBlock Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"
-                               Text="Point this at a folder of .cur / .ani files and it matches them to Windows cursor roles by file name. The desktop app's bundled packs are hundreds of binary files and cannot travel in a single script."/>
+                    <TextBlock Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"
+                               Text="The desktop app's packs, fetched from its repository when you pick one - seventeen files each - or your own folder of .cur / .ani files matched to Windows cursor roles by name. Changes are per-user and apply instantly."/>
+                    <WrapPanel x:Name="CursorPresets" Margin="0,0,0,6"/>
                     <StackPanel Orientation="Horizontal">
-                      <Button x:Name="BtnCursorInstall" Content="Install from folder" Style="{StaticResource Primary}"/>
+                      <Button x:Name="BtnCursorInstall" Content="Install from folder"/>
                       <Button x:Name="BtnCursorRestore" Content="Restore Windows defaults"/>
                     </StackPanel>
                   </StackPanel>
@@ -10124,7 +10408,8 @@ param(
                     <StackPanel Orientation="Horizontal">
                       <Button x:Name="BtnCsDefault" Content="Install yabosen.cfg" Style="{StaticResource Primary}"/>
                       <Button x:Name="BtnCsFile" Content="Install a .cfg"/>
-                      <Button x:Name="BtnCsLaunch" Content="Copy launch options"/>
+                      <Button x:Name="BtnCsLaunch" Content="Copy CS2 launch options"/>
+                      <Button x:Name="BtnCsLaunchCsgo" Content="Copy CS:GO launch options"/>
                     </StackPanel>
                   </StackPanel>
                 </Border>
@@ -11370,7 +11655,7 @@ param(
             'DiskValue', 'DiskBar', 'DiskDetail', 'NetValue', 'NetDetail',
             'CpuGraph', 'CoreStrip', 'TaskRows', 'TaskSearch', 'TaskSort', 'BtnTaskPause', 'BtnTaskKill',
             'StoreRows', 'BtnStoreRefresh', 'BtnStoreInstall', 'GuideRows',
-            'BtnCursorInstall', 'BtnCursorRestore', 'WallpaperStyle', 'BtnWallpaper',
+            'CursorPresets', 'BtnCursorInstall', 'BtnCursorRestore', 'WallpaperStyle', 'BtnWallpaper', 'BtnCsLaunchCsgo',
             'CsFolderText', 'BtnCsDefault', 'BtnCsFile', 'BtnCsLaunch',
             'InstallPath', 'BtnBrowseInstallPath', 'GitHubToken', 'BtnSaveSettings', 'BtnOpenStateFolder',
             'TweakSearch', 'TweakCategory', 'TweakRows', 'BtnApply', 'BtnRevert', 'BtnTweakAll', 'BtnTweakNone',
@@ -11701,6 +11986,25 @@ param(
             Invoke-GuiWork -Label 'restoring cursors' -Work { Restore-DefaultCursor }
         })
 
+        foreach ($preset in Get-CursorPresets) {
+            $button = New-Object Windows.Controls.Button
+            $button.Content = $preset.Name
+            $button.ToolTip = $preset.Credit
+            $button.Tag = $preset.Id
+            $button.Margin = New-Object Windows.Thickness 0, 0, 8, 8
+            $button.Style = $window.FindResource('Primary')
+
+            # Plain script block, per the note at the top of the file: it reads the
+            # preset id back off $sender rather than capturing it.
+            $button.Add_Click({
+                param($sender, $e)
+                $id = [string]$sender.Tag
+                Invoke-GuiWork -Label "installing cursors: $id" -Work { Install-CursorPreset -Id $id | Out-Null }
+            })
+
+            $ui.CursorPresets.Children.Add($button) | Out-Null
+        }
+
         foreach ($style in @('Fill', 'Fit', 'Stretch', 'Tile', 'Center', 'Span')) {
             $ui.WallpaperStyle.Items.Add($style) | Out-Null
         }
@@ -11735,6 +12039,13 @@ param(
             [Windows.Clipboard]::SetText($options)
             $Ctx.Gui.Ui.StatusText.Text = "Copied: $options"
             Write-Ok "Launch options copied to the clipboard: $options"
+        })
+
+        $ui.BtnCsLaunchCsgo.Add_Click({
+            $options = Get-CsLaunchOption -Game CSGO
+            [Windows.Clipboard]::SetText($options)
+            $Ctx.Gui.Ui.StatusText.Text = "Copied: $options"
+            Write-Ok "CS:GO launch options copied to the clipboard: $options"
         })
 
         # ---- settings ----------------------------------------------------------
@@ -11920,6 +12231,9 @@ param(
         Write-Line '    -Toolbox <id>      run a toolbox action (see -List toolbox)' -Color Gray
         Write-Line '    -InstallManager <id>  install a package manager: choco or scoop' -Color Gray
         Write-Line '    -Customize <id>    install Open-Shell, Nilesoft Shell, StartAllBack or ExplorerPatcher' -Color Gray
+        Write-Line '    -Cursor <id|path|default>  apply a cursor pack (see -List cursors), a folder, or restore' -Color Gray
+        Write-Line '    -Wallpaper <image> [-WallpaperStyle Fill|Fit|Stretch|Tile|Center|Span]' -Color Gray
+        Write-Line '    -CsConfig <path|yabosen>  install a Counter-Strike .cfg into every Steam cfg folder' -Color Gray
         Write-Line '    -Profile <path>    run a saved setup profile' -Color Gray
         Write-Line '    -SaveProfile <path>  write the current -Apply/-Install selection as a profile' -Color Gray
         Write-Line '    -List <what>       list tweaks, apps, toolbox, packages, or backups' -Color Gray
@@ -12045,6 +12359,7 @@ param(
                 '^packages?$' { Show-PackageManagerCatalog }
                 '^managers?$' { Show-PackageManagerCatalog }
                 '^custom'     { Show-CustomizationCatalog }
+                '^cursors?$'  { Show-CursorPresetCatalog }
                 '^categor'    {
                     Write-SectionHeading 'Tweak categories'
                     Format-Columns -Items $Ctx.TweakCategories
@@ -12052,7 +12367,7 @@ param(
                     Format-Columns -Items $Ctx.AppCategories
                 }
                 default {
-                    Write-Err "Don't know how to list '$item'. Try: tweaks, apps, toolbox, packages, customization, backups, categories."
+                    Write-Err "Don't know how to list '$item'. Try: tweaks, apps, toolbox, packages, customization, cursors, backups, categories."
                 }
             }
         }
@@ -12192,6 +12507,34 @@ param(
             $didSomething = $true
         }
 
+        if (& $has 'Cursor') {
+            $cursor = [string]$Bound['Cursor']
+            try {
+                if ($cursor -eq 'default') { Restore-DefaultCursor }
+                elseif (Test-Path -LiteralPath $cursor -PathType Container) {
+                    Install-CursorScheme -Path $cursor -SchemeName (Split-Path -Leaf $cursor)
+                }
+                else { Install-CursorPreset -Id $cursor | Out-Null }
+            }
+            catch { Write-Err $_.Exception.Message }
+            $didSomething = $true
+        }
+
+        if (& $has 'Wallpaper') {
+            $style = 'Fill'
+            if (& $has 'WallpaperStyle') { $style = [string]$Bound['WallpaperStyle'] }
+            try { Set-Wallpaper -Path $Bound['Wallpaper'] -Style $style }
+            catch { Write-Err $_.Exception.Message }
+            $didSomething = $true
+        }
+
+        if (& $has 'CsConfig') {
+            $cfg = [string]$Bound['CsConfig']
+            if ($cfg -in @('yabosen', 'default')) { Install-CsConfig }
+            else { Install-CsConfig -LocalPath $cfg }
+            $didSomething = $true
+        }
+
         if (& $has 'Profile')       { Invoke-SetupProfile -Path $Bound['Profile']; $didSomething = $true }
         if (& $has 'UpgradeAll')    { Invoke-UpgradeAll; $didSomething = $true }
         if (& $has 'WindowsUpdate') { Invoke-WindowsUpdate; $didSomething = $true }
@@ -12250,4 +12593,4 @@ param(
         Restore-ConsoleEncoding -Previous $previousEncoding
     }
 
-} $PSBoundParameters '1.2.0' $SourceUrl 'a1f0fc265f'
+} $PSBoundParameters '1.2.0' $SourceUrl 'aae5e5d634'

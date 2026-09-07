@@ -847,10 +847,11 @@
                         CornerRadius="8" Padding="16" Margin="0,0,0,12">
                   <StackPanel>
                     <TextBlock Text="Mouse cursors" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                    <TextBlock Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"
-                               Text="Point this at a folder of .cur / .ani files and it matches them to Windows cursor roles by file name. The desktop app's bundled packs are hundreds of binary files and cannot travel in a single script."/>
+                    <TextBlock Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"
+                               Text="The desktop app's packs, fetched from its repository when you pick one - seventeen files each - or your own folder of .cur / .ani files matched to Windows cursor roles by name. Changes are per-user and apply instantly."/>
+                    <WrapPanel x:Name="CursorPresets" Margin="0,0,0,6"/>
                     <StackPanel Orientation="Horizontal">
-                      <Button x:Name="BtnCursorInstall" Content="Install from folder" Style="{StaticResource Primary}"/>
+                      <Button x:Name="BtnCursorInstall" Content="Install from folder"/>
                       <Button x:Name="BtnCursorRestore" Content="Restore Windows defaults"/>
                     </StackPanel>
                   </StackPanel>
@@ -876,7 +877,8 @@
                     <StackPanel Orientation="Horizontal">
                       <Button x:Name="BtnCsDefault" Content="Install yabosen.cfg" Style="{StaticResource Primary}"/>
                       <Button x:Name="BtnCsFile" Content="Install a .cfg"/>
-                      <Button x:Name="BtnCsLaunch" Content="Copy launch options"/>
+                      <Button x:Name="BtnCsLaunch" Content="Copy CS2 launch options"/>
+                      <Button x:Name="BtnCsLaunchCsgo" Content="Copy CS:GO launch options"/>
                     </StackPanel>
                   </StackPanel>
                 </Border>

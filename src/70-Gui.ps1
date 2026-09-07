@@ -1147,7 +1147,7 @@ function New-GuiWindow {
         'DiskValue', 'DiskBar', 'DiskDetail', 'NetValue', 'NetDetail',
         'CpuGraph', 'CoreStrip', 'TaskRows', 'TaskSearch', 'TaskSort', 'BtnTaskPause', 'BtnTaskKill',
         'StoreRows', 'BtnStoreRefresh', 'BtnStoreInstall', 'GuideRows',
-        'BtnCursorInstall', 'BtnCursorRestore', 'WallpaperStyle', 'BtnWallpaper',
+        'CursorPresets', 'BtnCursorInstall', 'BtnCursorRestore', 'WallpaperStyle', 'BtnWallpaper', 'BtnCsLaunchCsgo',
         'CsFolderText', 'BtnCsDefault', 'BtnCsFile', 'BtnCsLaunch',
         'InstallPath', 'BtnBrowseInstallPath', 'GitHubToken', 'BtnSaveSettings', 'BtnOpenStateFolder',
         'TweakSearch', 'TweakCategory', 'TweakRows', 'BtnApply', 'BtnRevert', 'BtnTweakAll', 'BtnTweakNone',
@@ -1478,6 +1478,25 @@ function New-GuiWindow {
         Invoke-GuiWork -Label 'restoring cursors' -Work { Restore-DefaultCursor }
     })
 
+    foreach ($preset in Get-CursorPresets) {
+        $button = New-Object Windows.Controls.Button
+        $button.Content = $preset.Name
+        $button.ToolTip = $preset.Credit
+        $button.Tag = $preset.Id
+        $button.Margin = New-Object Windows.Thickness 0, 0, 8, 8
+        $button.Style = $window.FindResource('Primary')
+
+        # Plain script block, per the note at the top of the file: it reads the
+        # preset id back off $sender rather than capturing it.
+        $button.Add_Click({
+            param($sender, $e)
+            $id = [string]$sender.Tag
+            Invoke-GuiWork -Label "installing cursors: $id" -Work { Install-CursorPreset -Id $id | Out-Null }
+        })
+
+        $ui.CursorPresets.Children.Add($button) | Out-Null
+    }
+
     foreach ($style in @('Fill', 'Fit', 'Stretch', 'Tile', 'Center', 'Span')) {
         $ui.WallpaperStyle.Items.Add($style) | Out-Null
     }
@@ -1512,6 +1531,13 @@ function New-GuiWindow {
         [Windows.Clipboard]::SetText($options)
         $Ctx.Gui.Ui.StatusText.Text = "Copied: $options"
         Write-Ok "Launch options copied to the clipboard: $options"
+    })
+
+    $ui.BtnCsLaunchCsgo.Add_Click({
+        $options = Get-CsLaunchOption -Game CSGO
+        [Windows.Clipboard]::SetText($options)
+        $Ctx.Gui.Ui.StatusText.Text = "Copied: $options"
+        Write-Ok "CS:GO launch options copied to the clipboard: $options"
     })
 
     # ---- settings ----------------------------------------------------------

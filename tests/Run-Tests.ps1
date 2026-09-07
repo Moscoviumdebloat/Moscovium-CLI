@@ -1273,6 +1273,129 @@ if (Test-StaApartment) {
 }
 
 # -----------------------------------------------------------------------------
+Write-Section 'Personalise'
+
+Test-Case 'the six cursor presets are the desktop app''s six' {
+    $presets = @(Get-CursorPresets)
+    Assert-Equal 6 $presets.Count
+
+    $ids = @($presets | ForEach-Object { $_.Id })
+    Assert-Equal 6 @($ids | Sort-Object -Unique).Count 'preset ids are not unique'
+    foreach ($expected in @('concept1-dark', 'concept1-light', 'material-dark', 'material-light', 'macos', 'macos-shadow')) {
+        Assert-True ($ids -contains $expected) "$expected is missing"
+    }
+
+    foreach ($preset in $presets) {
+        Assert-True ($preset.Naming -in @('standard', 'macos')) "$($preset.Id) has naming '$($preset.Naming)'"
+        Assert-True (-not [string]::IsNullOrWhiteSpace($preset.Folder)) "$($preset.Id) has no folder"
+        Assert-True (-not [string]::IsNullOrWhiteSpace($preset.Credit)) "$($preset.Id) has no credit"
+        Assert-Equal 17 @(Get-CursorPresetFile -Preset $preset).Count
+        Assert-Equal $preset.Id (Resolve-CursorPreset -Id $preset.Id).Id
+    }
+    Assert-True ($null -eq (Resolve-CursorPreset -Id 'no-such-pack')) 'a nonsense id resolved'
+}
+
+Test-Case 'every preset file maps to a distinct Windows cursor role' {
+    # This is the bug the macOS names exposed: the role map had 'vertical' and
+    # the file is 'Vertical Resize.cur', matched with -eq on the stem, so four
+    # of seventeen roles came out unmatched. Both naming conventions now have to
+    # cover every role exactly once - the same check Install-CursorScheme does.
+    $roles = Get-CursorRoleMap
+    Assert-Equal 17 $roles.Count
+
+    foreach ($preset in @(Get-CursorPresets)) {
+        $matched = @{}
+        foreach ($file in @(Get-CursorPresetFile -Preset $preset)) {
+            $stem = [IO.Path]::GetFileNameWithoutExtension($file).ToLowerInvariant()
+            $role = $null
+            foreach ($candidate in $roles.Keys) {
+                if (@($roles[$candidate]) -contains $stem) { $role = $candidate; break }
+            }
+            Assert-True ($null -ne $role) "$($preset.Id): '$file' matches no cursor role"
+            Assert-True (-not $matched.ContainsKey($role)) "$($preset.Id): '$file' and '$($matched[$role])' both claim $role"
+            $matched[$role] = $file
+        }
+        Assert-Equal 17 $matched.Count "$($preset.Id) covers $($matched.Count) of 17 roles"
+    }
+}
+
+Test-Case 'preset URLs escape each path segment, never the slashes' {
+    $macos = Resolve-CursorPreset -Id 'macos'
+    $url = Get-CursorPresetUrl -Preset $macos -FileName 'Vertical Resize.cur'
+
+    Assert-True ($url.StartsWith('https://raw.githubusercontent.com/Moscoviumdebloat/Moscovium/main/Assets/Cursors/')) "unexpected base: $url"
+    Assert-True ($url -notmatch ' ') 'a space survived into the URL'
+    Assert-True ($url -match '%20') 'spaces were not escaped'
+    Assert-True ($url -notmatch '%2F') 'a slash was escaped'
+    Assert-True ($url.EndsWith('/Vertical%20Resize.cur')) "unexpected tail: $url"
+
+    $plain = Get-CursorPresetUrl -Preset (Resolve-CursorPreset -Id 'material-dark') -FileName 'arrow.cur'
+    Assert-True ($plain.EndsWith('/MaterialDesign/dark/arrow.cur')) "unexpected: $plain"
+}
+
+Test-Case 'one file of every preset is really there today' {
+    # Live, one HEAD per preset. The packs live in the desktop app's repository
+    # and this fetches from main, so a moved folder shows up here first.
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    foreach ($preset in @(Get-CursorPresets)) {
+        $file = @(Get-CursorPresetFile -Preset $preset)[0]
+        $request = [Net.HttpWebRequest]::Create((Get-CursorPresetUrl -Preset $preset -FileName $file))
+        $request.Method = 'HEAD'; $request.UserAgent = 'Moscovium-CLI tests'; $request.Timeout = 20000
+        $response = $null
+        try {
+            $response = $request.GetResponse()
+            Assert-True ($response.ContentLength -gt 1000) "$($preset.Id)/$file is only $($response.ContentLength) bytes"
+        }
+        finally { if ($response) { $response.Dispose() } }
+    }
+}
+
+Test-Case 'a dry run fetches nothing and applies nothing' {
+    $previousDryRun = $Ctx.DryRun
+    $Ctx.DryRun = $true
+    try {
+        foreach ($preset in @(Get-CursorPresets)) {
+            Assert-True (-not (Install-CursorPreset -Id $preset.Id)) "$($preset.Id) reported success during a dry run"
+        }
+        # The folder route and restore also honour it; neither may touch the registry.
+        Restore-DefaultCursor
+    }
+    finally { $Ctx.DryRun = $previousDryRun }
+}
+
+Test-Case 'applying a scheme registers it and clears the roles it does not cover' {
+    # Source-level: the registry effects run under the real user hive, so they
+    # are pinned by reading the code rather than by changing the tester''s cursors.
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/48-Personalize.ps1') -Raw
+    Assert-True ($source -match "CreateSubKey\('Control Panel\\Cursors\\Schemes'") 'schemes are not registered under Cursors\Schemes'
+    Assert-True ($source -match 'foreach \(\$role in \$roles\.Keys\)[\s\S]{0,400}\$value = ''''') 'uncovered roles are not cleared'
+}
+
+Test-Case 'CS2 and CS:GO have their own launch options' {
+    $cs2 = Get-CsLaunchOption -Game CS2
+    $csgo = Get-CsLaunchOption -Game CSGO
+    Assert-True ($cs2 -ne $csgo) 'the two games share one string'
+    Assert-Equal $cs2 (Get-CsLaunchOption)
+    # Verbatim from the desktop app''s two pages.
+    Assert-Equal '-high -novid -allow_third_party_software -tickrate 128 -noaafonts' $cs2
+    Assert-True ($csgo -match '\+exec autoexec') 'CS:GO options do not exec autoexec'
+    Assert-True ($csgo -match '-freq 180') 'CS:GO options lost -freq'
+}
+
+if (Test-StaApartment) {
+    Test-Case 'the Personalise page has a button per cursor pack and both launch buttons' {
+        Import-WpfAssembly
+        $gui = New-GuiWindow
+        try {
+            Assert-Equal @(Get-CursorPresets).Count $gui.Ui.CursorPresets.Children.Count
+            Assert-True ($null -ne $gui.Ui.BtnCsLaunchCsgo) 'no CS:GO launch button'
+            Assert-True ($null -ne $gui.Ui.BtnCsLaunch) 'no CS2 launch button'
+        }
+        finally { $gui.Window.Close() }
+    }
+}
+
+# -----------------------------------------------------------------------------
 Write-Section 'Task manager'
 
 Test-Case 'byte and time formatting stays inside a table column' {
