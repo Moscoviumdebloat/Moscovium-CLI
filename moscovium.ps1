@@ -5,7 +5,7 @@
 
         irm https://moscovium.win | iex
 
-    Build 1bee281ca0  (a digest of src/ and data/ - same sources, same id).
+    Build 9078e52db5  (a digest of src/ and data/ - same sources, same id).
     Check with:  .\moscovium.ps1 -Version
 
     GENERATED FILE - do not edit.
@@ -4634,9 +4634,9 @@ param(
     # Those always print the URL and ask first, because running them is remote code
     # execution with whatever privileges this process holds.
     #
-    # Deliberately not ported from the GUI: the MAS activation bootstrap and the
-    # StartAllBack trial reset. Both exist to circumvent licensing. Everything else
-    # from those three pages is here.
+    # Everything from the GUI's three pages (Optimizations, Toolbox, Legacy Menus)
+    # is here. That now includes the MAS activation bootstrap and the StartAllBack
+    # trial reset that were originally left out - the user asked for them.
     # =============================================================================
 
     $EmbeddedWinutilConfigJson = @'
@@ -4839,6 +4839,14 @@ param(
             [pscustomobject]@{
                 Id = 'sound'; Name = 'Open: Sound control panel'; Admin = $false
                 Description = 'mmsys.cpl, the classic playback/recording device list.'
+            }
+            [pscustomobject]@{
+                Id = 'startallback-reset'; Name = 'StartAllBack: trial reset'; Admin = $true
+                Description = 'Resets the StartAllBack trial by clearing the per-user CLSID entries it leaves behind. Needs an Explorer restart.'
+            }
+            [pscustomobject]@{
+                Id = 'mas'; Name = 'Microsoft Activation Scripts (MAS)'; Admin = $false
+                Description = 'Runs the Massgrave activation script (get.activated.win) in its own elevated window. Activates Windows and Office.'
             }
         )
     }
@@ -5383,12 +5391,77 @@ param(
                 'keyboard'      { Invoke-NativeCommand -FilePath 'control.exe' -Arguments @('keyboard') -NoWait | Out-Null; Write-Ok 'Opened.' }
                 'sound'         { Invoke-NativeCommand -FilePath 'control.exe' -Arguments @('mmsys.cpl') -NoWait | Out-Null; Write-Ok 'Opened.' }
 
+                'startallback-reset' { Reset-StartAllBackTrial | Out-Null }
+                'mas' {
+                    Invoke-RemoteScript -Url 'https://get.activated.win' -Label 'Microsoft Activation Scripts (MAS)' | Out-Null
+                }
+
                 default { Write-Err "Toolbox action '$($action.Id)' has no implementation." }
             }
         }
         catch {
             Write-Err "$($action.Name) - $($_.Exception.Message)"
         }
+    }
+
+    # Reset the StartAllBack trial by deleting the per-user CLSID entries it leaves
+    # under HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\CLSID. Each of
+    # those keys tracks trial state; clearing them resets the counter. Port of the
+    # GUI's StartAllBack.ps1, using the CLI's own registry helpers so it runs in
+    # process rather than spawning a second PowerShell.
+    function Reset-StartAllBackTrial {
+        $clsidRoot = 'HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\CLSID'
+
+        Write-Step 'Enumerating StartAllBack CLSID entries'
+        $keys = Get-Item -Path "Registry::$clsidRoot\*" -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty Name
+
+        # Only match real CLSID-form keys ({8-4-4-4-12}) and only leaf keys (no subkeys)
+        $trialKeys = @($keys | Where-Object {
+            $_ -cmatch '\\{[a-z0-9]{8}-([a-z0-9]{4}-){3}[a-z0-9]{12}.*$'
+        })
+
+        if ($trialKeys.Count -eq 0) {
+            Write-Ok 'No StartAllBack trial entries found - nothing to clean.'
+            return $true
+        }
+
+        $removed = 0
+        foreach ($key in $trialKeys) {
+            $leaf = $key.Substring($key.LastIndexOf('\') + 1)
+            $leafPath = "$clsidRoot\$leaf"
+
+            $subkeys = Get-Item -Path "Registry::$leafPath\*" -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty Name
+            if ($subkeys | Measure-Object | Select-Object -ExpandProperty Count) {
+                continue
+            }
+
+            try {
+                Remove-Item -Path "Registry::$leafPath" -Force -ErrorAction Stop
+                $removed++
+            }
+            catch {
+                Write-Warn "Could not delete $leafPath - $_"
+            }
+        }
+
+        Write-Ok "Removed $removed StartAllBack trial entries."
+
+        if (-not (Confirm-Action 'Restart Explorer now to apply the reset?' -DefaultYes)) {
+            Write-Info 'Remember to restart Explorer later (log off and on).'
+            return $true
+        }
+
+        Write-Step 'Restarting Explorer'
+        Stop-Process -Name 'explorer' -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+        if (-not (Get-Process -Name 'explorer' -ErrorAction SilentlyContinue)) {
+            Start-Process 'explorer.exe'
+        }
+
+        Write-Ok 'Explorer restarted. StartAllBack trial reset complete.'
+        return $true
     }
 
     function Show-ToolboxCatalog {
@@ -8669,9 +8742,9 @@ param(
     # what each vendor currently publishes is also what the desktop app does; it
     # just bundles the file instead of fetching it.
     #
-    # Not ported: the StartAllBack trial reset, for the same reason MAS is not in
-    # the catalog - it exists to circumvent licensing. Installing StartAllBack is
-    # here; its licence terms are its own business after that.
+    # The trial reset IS now ported - it lives in src/40-Toolbox.ps1 as the
+    # startallback-reset action. Installing StartAllBack is here; its licence
+    # terms are its own business after that.
     # =============================================================================
 
     function Get-CustomizationTools {
@@ -15131,4 +15204,4 @@ param(
         Restore-ConsoleEncoding -Previous $previousEncoding
     }
 
-} $PSBoundParameters '2.1.0' $SourceUrl '1bee281ca0'
+} $PSBoundParameters '2.1.0' $SourceUrl '9078e52db5'
