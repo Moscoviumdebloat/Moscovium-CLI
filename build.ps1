@@ -187,6 +187,7 @@ param(
     # Other actions
     [switch]  `$Gui,
     [switch]  `$Tasks,
+    [string]  `$InstallManager,
     [string[]]`$Guide,
     [string[]]`$SetSetting,
     [string]  `$Toolbox,

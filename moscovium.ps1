@@ -5,7 +5,7 @@
 
         irm https://moscovium.win | iex
 
-    Build 581730e68c  (a digest of src/ and data/ - same sources, same id).
+    Build 064d37156e  (a digest of src/ and data/ - same sources, same id).
     Check with:  .\moscovium.ps1 -Version
 
     GENERATED FILE - do not edit.
@@ -28,6 +28,7 @@ param(
     # Other actions
     [switch]  $Gui,
     [switch]  $Tasks,
+    [string]  $InstallManager,
     [string[]]$Guide,
     [string[]]$SetSetting,
     [string]  $Toolbox,
@@ -7077,6 +7078,334 @@ param(
         }
     }
 
+# ===== src/54-Packages.ps1 =============================================
+
+    # =============================================================================
+    # Package managers: detect them, and run their own installers.
+    #
+    # The interesting thing here is that the two installable ones need *opposite*
+    # privileges, and both enforce it:
+    #
+    #   Chocolatey installs machine-wide to %PROGRAMDATA%\chocolatey, so it needs
+    #   administrator.
+    #
+    #   Scoop installs per-user to ~\scoop and its installer *refuses* to run
+    #   elevated - "Running the installer as administrator is disabled by default"
+    #   - unless passed -RunAsAdmin, which changes it to a machine-wide install.
+    #
+    # Moscovium's window is always elevated and the CLI elevates for anything that
+    # changes the machine, so Scoop cannot simply be run inline from either. What
+    # happens instead is in Invoke-PackageManagerInstall.
+    #
+    # The install commands are stored verbatim from each project's own install page
+    # rather than rebuilt from parts. Someone else's installer invocation is not
+    # ours to improve, and printing the exact line a user would paste is the whole
+    # point of showing it.
+    # =============================================================================
+
+    function Get-PackageManagers {
+        @(
+            [pscustomobject]@{
+                Id = 'winget'
+                Name = 'winget'
+                Site = 'https://learn.microsoft.com/windows/package-manager/'
+                Summary = 'Ships with Windows. Moscovium installs its whole app catalog through this one.'
+                # Neither requires nor refuses elevation.
+                Elevation = 'either'
+                # Not ours to install: it arrives with App Installer from the
+                # Microsoft Store, and scripting that around the Store is exactly
+                # the kind of thing that breaks on the next Windows build.
+                InstallCommand = ''
+                GlobalCommand = ''
+                InstallNote = 'Part of App Installer. Get it from the Microsoft Store if it is missing.'
+            }
+            [pscustomobject]@{
+                Id = 'choco'
+                Name = 'Chocolatey'
+                Site = 'https://chocolatey.org/install'
+                Summary = 'Machine-wide, in C:\ProgramData\chocolatey. The largest Windows package repository.'
+                Elevation = 'admin'
+                InstallCommand = 'Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString(''https://community.chocolatey.org/install.ps1''))'
+                GlobalCommand = ''
+                InstallNote = 'Needs administrator, and always installs machine-wide.'
+            }
+            [pscustomobject]@{
+                Id = 'scoop'
+                Name = 'Scoop'
+                Site = 'https://scoop.sh'
+                Summary = 'Per-user, in ~\scoop. No UAC prompts, and nothing lands on the PATH you did not ask for.'
+                Elevation = 'user'
+                InstallCommand = 'irm get.scoop.sh | iex'
+                # The documented escape hatch for a machine-wide Scoop. Its own
+                # docs call this the admin case, not the normal one.
+                GlobalCommand = '& ([scriptblock]::Create((irm get.scoop.sh))) -RunAsAdmin'
+                InstallNote = 'Its installer refuses to run elevated unless you ask for a machine-wide install.'
+            }
+        )
+    }
+
+    function Resolve-PackageManager {
+        param([Parameter(Mandatory)][string]$Id)
+
+        $managers = Get-PackageManagers
+
+        $exact = @($managers | Where-Object { $_.Id -eq $Id })
+        if ($exact.Count -eq 1) { return $exact[0] }
+
+        $fuzzy = @($managers | Where-Object {
+            (Test-NameMatch -Value $_.Id -Pattern $Id) -or (Test-NameMatch -Value $_.Name -Pattern $Id)
+        })
+        if ($fuzzy.Count -eq 1) { return $fuzzy[0] }
+
+        if ($fuzzy.Count -gt 1) {
+            Write-Err "'$Id' is ambiguous. Did you mean one of these?"
+            foreach ($manager in $fuzzy) { Write-Info $manager.Id }
+            return $null
+        }
+
+        Write-Err "Unknown package manager '$Id'. Known: $((Get-PackageManagers | ForEach-Object { $_.Id }) -join ', ')."
+        return $null
+    }
+
+    # Where each manager lands, checked on disk as well as on the PATH.
+    #
+    # The PATH alone is not enough: a manager installed a minute ago by a child
+    # process is on the *new* PATH, not this process's copy of it, so a fresh
+    # install would keep reporting itself missing until Moscovium was restarted.
+    function Get-PackageManagerStatus {
+        param([Parameter(Mandatory)]$Manager)
+
+        $command = $null
+        $path = $null
+
+        switch ($Manager.Id) {
+            'winget' {
+                $command = Get-Command -Name 'winget.exe' -ErrorAction SilentlyContinue
+            }
+            'choco' {
+                $command = Get-Command -Name 'choco.exe' -ErrorAction SilentlyContinue
+                if (-not $command) {
+                    $root = $env:ChocolateyInstall
+                    if ([string]::IsNullOrWhiteSpace($root)) { $root = Join-Path $env:ProgramData 'chocolatey' }
+                    $candidate = Join-Path $root 'bin\choco.exe'
+                    if (Test-Path -LiteralPath $candidate) { $path = $candidate }
+                }
+            }
+            'scoop' {
+                # Scoop is a PowerShell shim, so Get-Command has to look for the
+                # command name rather than an .exe.
+                $command = Get-Command -Name 'scoop' -ErrorAction SilentlyContinue
+                if (-not $command) {
+                    $root = $env:SCOOP
+                    if ([string]::IsNullOrWhiteSpace($root)) { $root = Join-Path $env:USERPROFILE 'scoop' }
+                    $candidate = Join-Path $root 'shims\scoop.ps1'
+                    if (Test-Path -LiteralPath $candidate) { $path = $candidate }
+                }
+            }
+        }
+
+        if ($command) {
+            $path = $command.Source
+            if ([string]::IsNullOrWhiteSpace($path)) { $path = $command.Name }
+        }
+
+        [pscustomobject]@{
+            Id        = $Manager.Id
+            Installed = [bool]$path
+            Path      = $path
+            # True when it is on disk but not on this process's PATH - which means
+            # it works in a new terminal and not in this one.
+            OnPath    = [bool]$command
+        }
+    }
+
+    function Get-PackageManagerReport {
+        $report = [System.Collections.Generic.List[object]]::new()
+
+        foreach ($manager in Get-PackageManagers) {
+            $status = Get-PackageManagerStatus -Manager $manager
+            $report.Add([pscustomobject]@{
+                Manager   = $manager
+                Installed = $status.Installed
+                Path      = $status.Path
+                OnPath    = $status.OnPath
+            })
+        }
+
+        return @($report)
+    }
+
+    # Runs one manager's own installer, in a separate PowerShell process, after
+    # printing the exact command.
+    #
+    # Separate process for the same three reasons the toolbox scripts get one: this
+    # bundle runs under Set-StrictMode and $ErrorActionPreference = 'Stop' and child
+    # scopes inherit both, neither installer is written to survive that, and both
+    # want their own console. It is also the only way to get the elevation right,
+    # since the two need opposite privileges.
+    function Invoke-PackageManagerInstall {
+        param(
+            [Parameter(Mandatory)][string]$Id,
+            # Scoop's documented machine-wide install. Ignored by anything else.
+            [switch]$Global
+        )
+
+        $manager = Resolve-PackageManager -Id $Id
+        if (-not $manager) { return $false }
+
+        $status = Get-PackageManagerStatus -Manager $manager
+        if ($status.Installed) {
+            Write-Ok "$($manager.Name) is already installed - $($status.Path)"
+            if (-not $status.OnPath) {
+                Write-Info 'It is not on this session PATH yet. Open a new terminal to use it.'
+            }
+            return $true
+        }
+
+        if ([string]::IsNullOrWhiteSpace($manager.InstallCommand)) {
+            Write-Warn "$($manager.Name) is not something Moscovium installs."
+            Write-Info $manager.InstallNote
+            Write-Line "      $($manager.Site)" -Color White
+            return $false
+        }
+
+        $command = $manager.InstallCommand
+        $elevated = ($manager.Elevation -eq 'admin')
+
+        # Scoop's installer refuses to run elevated. Moscovium's window is always
+        # elevated, and so is the CLI once it has relaunched itself for a mutating
+        # action, so the per-user install genuinely cannot be launched from here -
+        # a child process inherits the elevation and there is no reliable way to
+        # drop it. Offer the machine-wide install its own docs describe, and hand
+        # over the command for a normal window if that is not what was wanted.
+        if ($manager.Elevation -eq 'user' -and $Ctx.IsAdmin -and -not $Global) {
+            Write-Line ''
+            Write-Warn "$($manager.Name) will not install per-user from an elevated window - its own installer blocks it."
+            Write-Info 'To install it per-user, run this in a normal, non-elevated PowerShell:'
+            Write-Line "      $($manager.InstallCommand)" -Color White
+            Write-Line ''
+
+            if ([string]::IsNullOrWhiteSpace($manager.GlobalCommand)) { return $false }
+
+            Write-Info 'Or install it machine-wide from here instead, which is what its docs call the admin case.'
+            if (-not (Confirm-Action "Install $($manager.Name) machine-wide instead?")) {
+                Write-Warn "$($manager.Name) - skipped."
+                return $false
+            }
+
+            $command = $manager.GlobalCommand
+        }
+        elseif ($Global -and -not [string]::IsNullOrWhiteSpace($manager.GlobalCommand)) {
+            $command = $manager.GlobalCommand
+            $elevated = $true
+        }
+
+        if ($Ctx.DryRun) {
+            Write-Status -Glyph (Get-Glyph 'Info') -Color (Get-Color 'Warn') -Message $manager.Name -MessageColor (Get-Color 'Warn')
+            Write-Info "would run: $command"
+            return $false
+        }
+
+        $needsElevation = $elevated -and -not $Ctx.IsAdmin
+
+        Write-Line ''
+        Write-Warn "$($manager.Name) is installed by a script published by its own project:"
+        Write-Line "      $($manager.Site)" -Color White
+        Write-Info 'Moscovium does not review or pin the contents of that script.'
+        Write-Line ''
+        Write-Info 'Runs in a new window as:'
+        Write-Line "      $command" -Color Gray
+
+        if ($needsElevation) { Write-Info 'It will ask for administrator rights.' }
+        elseif ($manager.Elevation -eq 'user') { Write-Info 'It runs as you, not elevated.' }
+
+        if (-not (Confirm-Action "Install $($manager.Name) now?" -DefaultYes)) {
+            Write-Warn "$($manager.Name) - skipped."
+            return $false
+        }
+
+        # Held open on a terminating error only: a successful install prints its own
+        # summary and a flashed-past failure is the one thing worth stopping for.
+        $handler = "Write-Host ''; " +
+                   "Write-Host ('Moscovium: the installer stopped with an error.') -ForegroundColor Red; " +
+                   "Write-Host (`$_.Exception.Message) -ForegroundColor Red; " +
+                   "Write-Host ''; " +
+                   "Read-Host 'Press Enter to close this window'"
+
+        $wrapped = "try { $command } catch { $handler }"
+
+        $start = @{
+            FilePath     = Get-PowerShellHost
+            ArgumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $wrapped)
+            Wait         = $true
+            PassThru     = $true
+            ErrorAction  = 'Stop'
+        }
+        if ($needsElevation) { $start.Verb = 'RunAs' }
+
+        Write-Step "Installing $($manager.Name) - this returns when the installer finishes"
+        Write-Log "package manager install: $wrapped"
+
+        try {
+            $process = Start-Process @start
+        }
+        catch {
+            Write-Err "Could not start the $($manager.Name) installer: $($_.Exception.Message)"
+            return $false
+        }
+
+        if ($process -and $process.ExitCode -ne 0) {
+            Write-Warn "The $($manager.Name) installer exited with code $($process.ExitCode)."
+            return $false
+        }
+
+        # Re-check on disk rather than trusting the exit code: this process's PATH
+        # is a copy taken at startup and will not have grown a new entry.
+        $after = Get-PackageManagerStatus -Manager $manager
+        if ($after.Installed) {
+            Write-Ok "$($manager.Name) installed - $($after.Path)"
+            Write-Info 'Open a new terminal before using it: this session PATH was set before it existed.'
+            return $true
+        }
+
+        Write-Warn "The $($manager.Name) installer finished, but it is still not on disk where it was expected."
+        return $false
+    }
+
+    function Show-PackageManagerCatalog {
+        Write-SectionHeading 'Package managers'
+
+        foreach ($entry in @(Get-PackageManagerReport)) {
+            $manager = $entry.Manager
+
+            $mark = Get-Glyph 'Unchecked'
+            $color = Get-Color 'Muted'
+            $state = 'not installed'
+
+            if ($entry.Installed) {
+                $mark = Get-Glyph 'Ok'
+                $color = Get-Color 'Ok'
+                $state = 'installed'
+                if (-not $entry.OnPath) { $state = 'installed, needs a new terminal' }
+            }
+
+            # Padded: the ASCII glyph set spells these '[ ]' and '+', so an
+            # unpadded mark puts every column after it out of line.
+            Write-Line '  ' -NoNewline
+            Write-Line $mark.PadRight(4) -Color $color -NoNewline
+            Write-Line $manager.Id.PadRight(10) -Color White -NoNewline
+            Write-Line $manager.Name.PadRight(14) -Color Gray -NoNewline
+            Write-Line $state -Color $color
+
+            Write-Info $manager.Summary
+            if ($entry.Installed) { Write-Info $entry.Path }
+            else { Write-Info $manager.InstallNote }
+        }
+
+        Write-Line ''
+        Write-Info 'Install one with:  -InstallManager <id>'
+    }
+
 # ===== src/60-Menu.ps1 =================================================
 
     # =============================================================================
@@ -7597,6 +7926,30 @@ param(
         Wait-ForKey
     }
 
+    function Show-PackageMenu {
+        while ($true) {
+            # Rebuilt each pass so an install that just finished shows as installed
+            # without leaving and coming back.
+            $entries = @(Get-PackageManagerReport)
+
+            $result = Show-Selector -Items $entries -Title 'Package managers' -SingleSelect `
+                -Subtitle 'Chocolatey, Scoop and winget - install one, or see what is already here' `
+                -Label { param($e) $e.Manager.Name } `
+                -Sublabel {
+                    param($e)
+                    if (-not $e.Installed) { return 'not installed' }
+                    if (-not $e.OnPath) { return 'installed - needs a new terminal' }
+                    return 'installed'
+                }
+
+            if (-not $result.Confirmed) { return }
+
+            Write-Banner
+            Invoke-PackageManagerInstall -Id $result.Selected[0].Manager.Id | Out-Null
+            Wait-ForKey
+        }
+    }
+
     function Show-ProfileMenu {
         $options = @(
             [pscustomobject]@{ Name = 'Run a profile';   Action = 'run' }
@@ -7677,6 +8030,7 @@ param(
             [pscustomobject]@{ Name = 'Apps';     Hint = "$($Ctx.Apps.Count) curated packages";                    Action = 'apps' }
             [pscustomobject]@{ Name = 'Toolbox';  Hint = 'Debloat scripts, network, boot, control panels';         Action = 'toolbox' }
             [pscustomobject]@{ Name = 'Profiles'; Hint = 'Save or run a setup checklist';                          Action = 'profiles' }
+            [pscustomobject]@{ Name = 'Packages'; Hint = 'Install Chocolatey or Scoop';                             Action = 'packages' }
             [pscustomobject]@{ Name = 'Tasks';    Hint = 'Live CPU, memory, disk, network and processes';          Action = 'tasks' }
             [pscustomobject]@{ Name = 'Status';   Hint = 'What is currently applied on this machine';              Action = 'status' }
             [pscustomobject]@{ Name = 'GUI';      Hint = 'Open the same thing as a window';                       Action = 'gui' }
@@ -7701,6 +8055,7 @@ param(
                 'apps'     { Show-AppMenu }
                 'toolbox'  { Show-ToolboxMenu }
                 'profiles' { Show-ProfileMenu }
+                'packages' { Show-PackageMenu }
                 'tasks'    { Show-TaskManager }
                 'status'   { Write-Banner; Show-TweakStatus; Wait-ForKey }
                 'gui'      { Clear-Host; Show-Gui | Out-Null; Clear-Host }
@@ -8937,6 +9292,7 @@ param(
           <ListBoxItem Content="Tasks"/>
           <ListBoxItem Content="Tweaks"/>
           <ListBoxItem Content="Apps"/>
+          <ListBoxItem Content="Package managers"/>
           <ListBoxItem Content="Store"/>
           <ListBoxItem Content="Toolbox"/>
           <ListBoxItem Content="Guides"/>
@@ -9255,6 +9611,45 @@ param(
                     BorderThickness="1" CornerRadius="8">
               <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="7">
                 <StackPanel x:Name="ToolboxRows"/>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+
+          <Grid x:Name="PackagesPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Package managers" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+
+            <TextBlock Grid.Row="1" TextWrapping="Wrap" FontSize="12" Margin="0,0,0,10"
+                       Foreground="{StaticResource Muted}"
+                       Text="Each one is installed by running its own project's install script, in a new window, after Moscovium shows you the exact command."/>
+
+            <!-- Scoop's installer refuses to run elevated, and this window
+                 always is. The note says so rather than letting the button
+                 fail with someone else's error message. -->
+            <Border Grid.Row="2" Background="{StaticResource Panel2}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="7" Padding="13,9" Margin="0,0,0,12">
+              <StackPanel>
+                <TextBlock Text="Chocolatey and Scoop want opposite privileges" FontSize="11.5"
+                           FontWeight="SemiBold" Foreground="{StaticResource Warn}"/>
+                <TextBlock TextWrapping="Wrap" FontSize="11.5" Margin="0,4,0,0" LineHeight="16"
+                           Foreground="{StaticResource Muted}"
+                           Text="Chocolatey installs machine-wide and needs administrator. Scoop installs into your profile and its installer blocks itself from running elevated - and this window always is. Installing Scoop here offers the machine-wide variant its own docs describe; for the normal per-user install, Moscovium hands you the one-line command to paste into an ordinary PowerShell window."/>
+              </StackPanel>
+            </Border>
+
+            <Border Grid.Row="3" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="8">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="7">
+                <StackPanel x:Name="PackageRows"/>
               </ScrollViewer>
             </Border>
           </Grid>
@@ -10012,6 +10407,59 @@ param(
         }
     }
 
+    function Update-GuiPackageRow {
+        if (-not $Ctx.Gui) { return }
+        $ui = $Ctx.Gui.Ui
+
+        $ui.PackageRows.Children.Clear()
+
+        foreach ($entry in @(Get-PackageManagerReport)) {
+            $manager = $entry.Manager
+
+            $state = 'not installed'
+            $ink, $fill = '#FF8B81A8', '#FF150F22'
+            if ($entry.Installed) {
+                $state = 'installed'
+                $ink, $fill = '#FF7EE0A6', '#FF102A1E'
+                # On disk but not on this process's PATH, which was copied at
+                # startup - so it works in a new terminal and not in here.
+                if (-not $entry.OnPath) {
+                    $state = 'new terminal'
+                    $ink, $fill = '#FFFFCB7A', '#FF2E2410'
+                }
+            }
+
+            $secondary = $manager.Summary
+            if ($entry.Installed -and $entry.Path) { $secondary = $entry.Path }
+
+            $row = New-GuiRow -Item $manager -Primary "$($manager.Name)   $($manager.Site)" `
+                -Secondary $secondary -Status $state -StatusBrush $ink -StatusFill $fill -NoCheckBox
+
+            # winget arrives with App Installer from the Store; scripting around
+            # the Store is the kind of thing that breaks on the next Windows build.
+            if (-not [string]::IsNullOrWhiteSpace($manager.InstallCommand) -and -not $entry.Installed) {
+                $install = New-Object Windows.Controls.Button
+                $install.Content = 'Install'
+                $install.Padding = New-Object Windows.Thickness 12, 4, 12, 4
+                $install.Margin = New-Object Windows.Thickness 8, 0, 0, 0
+                $install.VerticalAlignment = 'Center'
+                $install.Tag = $manager.Id
+                [Windows.Controls.Grid]::SetColumn($install, 2)
+
+                $install.Add_Click({
+                    param($sender, $e)
+                    $id = [string]$sender.Tag
+                    Invoke-GuiWork -Label "installing $id" -Work { Invoke-PackageManagerInstall -Id $id | Out-Null }
+                    Update-GuiPackageRow
+                })
+
+                $row.Element.Child.Children.Add($install) | Out-Null
+            }
+
+            $ui.PackageRows.Children.Add($row.Element) | Out-Null
+        }
+    }
+
     # -----------------------------------------------------------------------------
     # Task manager page
     #
@@ -10452,6 +10900,7 @@ param(
             'VersionText', 'CatalogChip', 'DryRunBadge',
             'NavList', 'OneClickPanel', 'TasksPanel', 'TweaksPanel', 'AppsPanel', 'ToolboxPanel', 'ProfilesPanel',
             'StorePanel', 'GuidesPanel', 'PersonalizePanel', 'SettingsPanel',
+            'PackagesPanel', 'PackageRows',
             'OneClickSteps', 'OneClickBlurb', 'BtnOneClick', 'BtnOneClickToolbox',
             'TaskSummary', 'CpuValue', 'CpuBar', 'CpuDetail', 'MemValue', 'MemBar', 'MemDetail',
             'DiskValue', 'DiskBar', 'DiskDetail', 'NetValue', 'NetDetail',
@@ -10564,8 +11013,8 @@ param(
 
         # Order has to match the ListBoxItems in the XAML and the $panels array in
         # the SelectionChanged handler. -1 means "no count worth showing".
-        $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Profiles', 'Settings')
-        $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1)
+        $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Profiles', 'Settings')
+        $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1)
 
         # The item Content becomes a DockPanel below, so the labels are no longer
         # readable off the ListBox. Keep them where a handler can still find them.
@@ -10617,9 +11066,9 @@ param(
             if (-not $Ctx.Gui) { return }
 
             $panels = @($Ctx.Gui.Ui.OneClickPanel, $Ctx.Gui.Ui.TasksPanel, $Ctx.Gui.Ui.TweaksPanel,
-                        $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.StorePanel, $Ctx.Gui.Ui.ToolboxPanel,
-                        $Ctx.Gui.Ui.GuidesPanel, $Ctx.Gui.Ui.PersonalizePanel, $Ctx.Gui.Ui.ProfilesPanel,
-                        $Ctx.Gui.Ui.SettingsPanel)
+                        $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.PackagesPanel, $Ctx.Gui.Ui.StorePanel,
+                        $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.GuidesPanel, $Ctx.Gui.Ui.PersonalizePanel,
+                        $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
             for ($i = 0; $i -lt $panels.Count; $i++) {
                 $panels[$i].Visibility = if ($i -eq $sender.SelectedIndex) { 'Visible' } else { 'Collapsed' }
             }
@@ -10899,6 +11348,7 @@ param(
 
         # ---- go ----------------------------------------------------------------
         Update-GuiOneClickSteps
+        Update-GuiPackageRow
         Update-GuiTweakRow
         Update-GuiAppRow
         Update-GuiToolboxRow
@@ -11003,9 +11453,10 @@ param(
         Write-Line '    -Gui               open the graphical interface' -Color Gray
         Write-Line '    -Tasks             live task manager: CPU, memory, disk, network, processes' -Color Gray
         Write-Line '    -Toolbox <id>      run a toolbox action (see -List toolbox)' -Color Gray
+        Write-Line '    -InstallManager <id>  install a package manager: choco or scoop' -Color Gray
         Write-Line '    -Profile <path>    run a saved setup profile' -Color Gray
         Write-Line '    -SaveProfile <path>  write the current -Apply/-Install selection as a profile' -Color Gray
-        Write-Line '    -List <what>       list tweaks, apps, toolbox, or backups' -Color Gray
+        Write-Line '    -List <what>       list tweaks, apps, toolbox, packages, or backups' -Color Gray
         Write-Line '    -Search <term>     search tweaks and apps' -Color Gray
         Write-Line ''
         Write-Line '  FLAGS' -Color White
@@ -11125,6 +11576,8 @@ param(
                 '^backups?$'  { Show-Backups }
                 '^guides?$'   { Show-GuideCatalog }
                 '^store$'     { Show-StoreCatalog }
+                '^packages?$' { Show-PackageManagerCatalog }
+                '^managers?$' { Show-PackageManagerCatalog }
                 '^categor'    {
                     Write-SectionHeading 'Tweak categories'
                     Format-Columns -Items $Ctx.TweakCategories
@@ -11132,7 +11585,7 @@ param(
                     Format-Columns -Items $Ctx.AppCategories
                 }
                 default {
-                    Write-Err "Don't know how to list '$item'. Try: tweaks, apps, toolbox, backups, categories."
+                    Write-Err "Don't know how to list '$item'. Try: tweaks, apps, toolbox, packages, backups, categories."
                 }
             }
         }
@@ -11257,6 +11710,15 @@ param(
         }
 
         if (& $has 'Toolbox')       { Invoke-ToolboxAction -Id $Bound['Toolbox']; $didSomething = $true }
+
+        # Deliberately not in $mutating above. Chocolatey's installer needs
+        # administrator and gets its own elevated child process; Scoop's *refuses*
+        # to run elevated, so pre-elevating Moscovium would make the per-user
+        # install impossible. Each child process gets the privileges it needs.
+        if (& $has 'InstallManager') {
+            Invoke-PackageManagerInstall -Id $Bound['InstallManager'] | Out-Null
+            $didSomething = $true
+        }
         if (& $has 'Profile')       { Invoke-SetupProfile -Path $Bound['Profile']; $didSomething = $true }
         if (& $has 'UpgradeAll')    { Invoke-UpgradeAll; $didSomething = $true }
         if (& $has 'WindowsUpdate') { Invoke-WindowsUpdate; $didSomething = $true }
@@ -11315,4 +11777,4 @@ param(
         Restore-ConsoleEncoding -Previous $previousEncoding
     }
 
-} $PSBoundParameters '1.2.0' $SourceUrl '581730e68c'
+} $PSBoundParameters '1.2.0' $SourceUrl '064d37156e'

@@ -31,9 +31,10 @@ function Show-Help {
     Write-Line '    -Gui               open the graphical interface' -Color Gray
     Write-Line '    -Tasks             live task manager: CPU, memory, disk, network, processes' -Color Gray
     Write-Line '    -Toolbox <id>      run a toolbox action (see -List toolbox)' -Color Gray
+    Write-Line '    -InstallManager <id>  install a package manager: choco or scoop' -Color Gray
     Write-Line '    -Profile <path>    run a saved setup profile' -Color Gray
     Write-Line '    -SaveProfile <path>  write the current -Apply/-Install selection as a profile' -Color Gray
-    Write-Line '    -List <what>       list tweaks, apps, toolbox, or backups' -Color Gray
+    Write-Line '    -List <what>       list tweaks, apps, toolbox, packages, or backups' -Color Gray
     Write-Line '    -Search <term>     search tweaks and apps' -Color Gray
     Write-Line ''
     Write-Line '  FLAGS' -Color White
@@ -153,6 +154,8 @@ function Invoke-List {
             '^backups?$'  { Show-Backups }
             '^guides?$'   { Show-GuideCatalog }
             '^store$'     { Show-StoreCatalog }
+            '^packages?$' { Show-PackageManagerCatalog }
+            '^managers?$' { Show-PackageManagerCatalog }
             '^categor'    {
                 Write-SectionHeading 'Tweak categories'
                 Format-Columns -Items $Ctx.TweakCategories
@@ -160,7 +163,7 @@ function Invoke-List {
                 Format-Columns -Items $Ctx.AppCategories
             }
             default {
-                Write-Err "Don't know how to list '$item'. Try: tweaks, apps, toolbox, backups, categories."
+                Write-Err "Don't know how to list '$item'. Try: tweaks, apps, toolbox, packages, backups, categories."
             }
         }
     }
@@ -285,6 +288,15 @@ function Invoke-Main {
     }
 
     if (& $has 'Toolbox')       { Invoke-ToolboxAction -Id $Bound['Toolbox']; $didSomething = $true }
+
+    # Deliberately not in $mutating above. Chocolatey's installer needs
+    # administrator and gets its own elevated child process; Scoop's *refuses*
+    # to run elevated, so pre-elevating Moscovium would make the per-user
+    # install impossible. Each child process gets the privileges it needs.
+    if (& $has 'InstallManager') {
+        Invoke-PackageManagerInstall -Id $Bound['InstallManager'] | Out-Null
+        $didSomething = $true
+    }
     if (& $has 'Profile')       { Invoke-SetupProfile -Path $Bound['Profile']; $didSomething = $true }
     if (& $has 'UpgradeAll')    { Invoke-UpgradeAll; $didSomething = $true }
     if (& $has 'WindowsUpdate') { Invoke-WindowsUpdate; $didSomething = $true }

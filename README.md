@@ -21,6 +21,7 @@ which ships with Windows, is enough.
 |---|---|
 | **One-click debloat box** | The landing page in the window and the first entry in the menu. Six steps behind one prompt: WinUtil preset, Win11Debloat preset, security-only Windows Update, TCP autotuning, CPU priority, dynamic tick. |
 | **Task manager** | btop-shaped: CPU with per-core bars and history, memory, disk, network, and a sortable process list you can end a process from. |
+| **Package managers** | Install Chocolatey or Scoop from their own install scripts, with winget status alongside. |
 | **40 tweaks** | Privacy & telemetry, Explorer & taskbar, gaming & performance, hardware, advanced. Applied, reverted, or reported on. |
 | **127 apps** | The full curated winget catalog, plus direct-download and archive installers, across 8 categories. |
 | **16 toolbox actions** | WinUtil, Win11Debloat, Windows Update policy, TCP autotuning, dynamic tick, CPU priority, and the classic control panels - each on its own, when you do not want the whole box. |
@@ -180,6 +181,35 @@ in the sidebar.
 With output redirected it prints one snapshot instead of repainting a frame
 nobody can see, so `-Tasks > tasks.txt` is useful rather than a hang.
 
+### Package managers
+
+```powershell
+.\moscovium.ps1 -List packages          # what is installed
+.\moscovium.ps1 -InstallManager choco   # Chocolatey
+.\moscovium.ps1 -InstallManager scoop   # Scoop
+```
+
+In the window it is its own sidebar page.
+
+**The two want opposite privileges, and both enforce it.** Chocolatey installs
+machine-wide to `%PROGRAMDATA%\chocolatey` and needs administrator. Scoop
+installs per-user to `~\scoop` and its installer *refuses* to run elevated —
+`Running the installer as administrator is disabled by default` — unless passed
+`-RunAsAdmin`, which turns it into a machine-wide install.
+
+Moscovium's window is always elevated, and a child process inherits that with
+no reliable way to drop it. So installing Scoop from the window offers the
+machine-wide variant its own docs describe, and hands you the one-line command
+to paste into an ordinary PowerShell window if that is not what you wanted.
+From an unelevated CLI it just installs.
+
+Each install command is stored verbatim from that project's own install page
+rather than rebuilt from parts — someone else's installer invocation is not
+ours to improve, and printing the exact line you would paste is the point of
+showing it. winget is listed for its status only: it arrives with App Installer
+from the Microsoft Store, and scripting around the Store is the kind of thing
+that breaks on the next Windows build.
+
 ### Toolbox
 
 The individual actions, for when you want fewer than all six.
@@ -278,6 +308,7 @@ src/              function libraries, concatenated in name order
   40-Toolbox      one-shot actions
   50-Profile      setup profiles
   52-Tasks        task manager sampling
+  54-Packages     package manager detection and install
   60-Menu         interactive selectors and screens
   65-TaskView     task manager, console front-end
   70-Gui          the WPF window

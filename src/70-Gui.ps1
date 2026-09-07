@@ -602,6 +602,59 @@ function Update-GuiOneClickSteps {
     }
 }
 
+function Update-GuiPackageRow {
+    if (-not $Ctx.Gui) { return }
+    $ui = $Ctx.Gui.Ui
+
+    $ui.PackageRows.Children.Clear()
+
+    foreach ($entry in @(Get-PackageManagerReport)) {
+        $manager = $entry.Manager
+
+        $state = 'not installed'
+        $ink, $fill = '#FF8B81A8', '#FF150F22'
+        if ($entry.Installed) {
+            $state = 'installed'
+            $ink, $fill = '#FF7EE0A6', '#FF102A1E'
+            # On disk but not on this process's PATH, which was copied at
+            # startup - so it works in a new terminal and not in here.
+            if (-not $entry.OnPath) {
+                $state = 'new terminal'
+                $ink, $fill = '#FFFFCB7A', '#FF2E2410'
+            }
+        }
+
+        $secondary = $manager.Summary
+        if ($entry.Installed -and $entry.Path) { $secondary = $entry.Path }
+
+        $row = New-GuiRow -Item $manager -Primary "$($manager.Name)   $($manager.Site)" `
+            -Secondary $secondary -Status $state -StatusBrush $ink -StatusFill $fill -NoCheckBox
+
+        # winget arrives with App Installer from the Store; scripting around
+        # the Store is the kind of thing that breaks on the next Windows build.
+        if (-not [string]::IsNullOrWhiteSpace($manager.InstallCommand) -and -not $entry.Installed) {
+            $install = New-Object Windows.Controls.Button
+            $install.Content = 'Install'
+            $install.Padding = New-Object Windows.Thickness 12, 4, 12, 4
+            $install.Margin = New-Object Windows.Thickness 8, 0, 0, 0
+            $install.VerticalAlignment = 'Center'
+            $install.Tag = $manager.Id
+            [Windows.Controls.Grid]::SetColumn($install, 2)
+
+            $install.Add_Click({
+                param($sender, $e)
+                $id = [string]$sender.Tag
+                Invoke-GuiWork -Label "installing $id" -Work { Invoke-PackageManagerInstall -Id $id | Out-Null }
+                Update-GuiPackageRow
+            })
+
+            $row.Element.Child.Children.Add($install) | Out-Null
+        }
+
+        $ui.PackageRows.Children.Add($row.Element) | Out-Null
+    }
+}
+
 # -----------------------------------------------------------------------------
 # Task manager page
 #
@@ -1042,6 +1095,7 @@ function New-GuiWindow {
         'VersionText', 'CatalogChip', 'DryRunBadge',
         'NavList', 'OneClickPanel', 'TasksPanel', 'TweaksPanel', 'AppsPanel', 'ToolboxPanel', 'ProfilesPanel',
         'StorePanel', 'GuidesPanel', 'PersonalizePanel', 'SettingsPanel',
+        'PackagesPanel', 'PackageRows',
         'OneClickSteps', 'OneClickBlurb', 'BtnOneClick', 'BtnOneClickToolbox',
         'TaskSummary', 'CpuValue', 'CpuBar', 'CpuDetail', 'MemValue', 'MemBar', 'MemDetail',
         'DiskValue', 'DiskBar', 'DiskDetail', 'NetValue', 'NetDetail',
@@ -1154,8 +1208,8 @@ function New-GuiWindow {
 
     # Order has to match the ListBoxItems in the XAML and the $panels array in
     # the SelectionChanged handler. -1 means "no count worth showing".
-    $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Profiles', 'Settings')
-    $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1)
+    $navNames  = @('One click', 'Tasks', 'Tweaks', 'Apps', 'Package managers', 'Store', 'Toolbox', 'Guides', 'Personalise', 'Profiles', 'Settings')
+    $navCounts = @(-1, -1, $Ctx.Tweaks.Count, $Ctx.Apps.Count, @(Get-PackageManagers).Count, -1, @(Get-ToolboxListActions).Count, $Ctx.Guides.Count, -1, -1, -1)
 
     # The item Content becomes a DockPanel below, so the labels are no longer
     # readable off the ListBox. Keep them where a handler can still find them.
@@ -1207,9 +1261,9 @@ function New-GuiWindow {
         if (-not $Ctx.Gui) { return }
 
         $panels = @($Ctx.Gui.Ui.OneClickPanel, $Ctx.Gui.Ui.TasksPanel, $Ctx.Gui.Ui.TweaksPanel,
-                    $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.StorePanel, $Ctx.Gui.Ui.ToolboxPanel,
-                    $Ctx.Gui.Ui.GuidesPanel, $Ctx.Gui.Ui.PersonalizePanel, $Ctx.Gui.Ui.ProfilesPanel,
-                    $Ctx.Gui.Ui.SettingsPanel)
+                    $Ctx.Gui.Ui.AppsPanel, $Ctx.Gui.Ui.PackagesPanel, $Ctx.Gui.Ui.StorePanel,
+                    $Ctx.Gui.Ui.ToolboxPanel, $Ctx.Gui.Ui.GuidesPanel, $Ctx.Gui.Ui.PersonalizePanel,
+                    $Ctx.Gui.Ui.ProfilesPanel, $Ctx.Gui.Ui.SettingsPanel)
         for ($i = 0; $i -lt $panels.Count; $i++) {
             $panels[$i].Visibility = if ($i -eq $sender.SelectedIndex) { 'Visible' } else { 'Collapsed' }
         }
@@ -1489,6 +1543,7 @@ function New-GuiWindow {
 
     # ---- go ----------------------------------------------------------------
     Update-GuiOneClickSteps
+    Update-GuiPackageRow
     Update-GuiTweakRow
     Update-GuiAppRow
     Update-GuiToolboxRow

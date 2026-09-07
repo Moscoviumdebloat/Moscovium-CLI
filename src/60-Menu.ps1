@@ -516,6 +516,30 @@ function Show-ToolboxMenu {
     Wait-ForKey
 }
 
+function Show-PackageMenu {
+    while ($true) {
+        # Rebuilt each pass so an install that just finished shows as installed
+        # without leaving and coming back.
+        $entries = @(Get-PackageManagerReport)
+
+        $result = Show-Selector -Items $entries -Title 'Package managers' -SingleSelect `
+            -Subtitle 'Chocolatey, Scoop and winget - install one, or see what is already here' `
+            -Label { param($e) $e.Manager.Name } `
+            -Sublabel {
+                param($e)
+                if (-not $e.Installed) { return 'not installed' }
+                if (-not $e.OnPath) { return 'installed - needs a new terminal' }
+                return 'installed'
+            }
+
+        if (-not $result.Confirmed) { return }
+
+        Write-Banner
+        Invoke-PackageManagerInstall -Id $result.Selected[0].Manager.Id | Out-Null
+        Wait-ForKey
+    }
+}
+
 function Show-ProfileMenu {
     $options = @(
         [pscustomobject]@{ Name = 'Run a profile';   Action = 'run' }
@@ -596,6 +620,7 @@ function Show-MainMenu {
         [pscustomobject]@{ Name = 'Apps';     Hint = "$($Ctx.Apps.Count) curated packages";                    Action = 'apps' }
         [pscustomobject]@{ Name = 'Toolbox';  Hint = 'Debloat scripts, network, boot, control panels';         Action = 'toolbox' }
         [pscustomobject]@{ Name = 'Profiles'; Hint = 'Save or run a setup checklist';                          Action = 'profiles' }
+        [pscustomobject]@{ Name = 'Packages'; Hint = 'Install Chocolatey or Scoop';                             Action = 'packages' }
         [pscustomobject]@{ Name = 'Tasks';    Hint = 'Live CPU, memory, disk, network and processes';          Action = 'tasks' }
         [pscustomobject]@{ Name = 'Status';   Hint = 'What is currently applied on this machine';              Action = 'status' }
         [pscustomobject]@{ Name = 'GUI';      Hint = 'Open the same thing as a window';                       Action = 'gui' }
@@ -620,6 +645,7 @@ function Show-MainMenu {
             'apps'     { Show-AppMenu }
             'toolbox'  { Show-ToolboxMenu }
             'profiles' { Show-ProfileMenu }
+            'packages' { Show-PackageMenu }
             'tasks'    { Show-TaskManager }
             'status'   { Write-Banner; Show-TweakStatus; Wait-ForKey }
             'gui'      { Clear-Host; Show-Gui | Out-Null; Clear-Host }

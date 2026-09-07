@@ -423,6 +423,7 @@
           <ListBoxItem Content="Tasks"/>
           <ListBoxItem Content="Tweaks"/>
           <ListBoxItem Content="Apps"/>
+          <ListBoxItem Content="Package managers"/>
           <ListBoxItem Content="Store"/>
           <ListBoxItem Content="Toolbox"/>
           <ListBoxItem Content="Guides"/>
@@ -741,6 +742,45 @@
                     BorderThickness="1" CornerRadius="8">
               <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="7">
                 <StackPanel x:Name="ToolboxRows"/>
+              </ScrollViewer>
+            </Border>
+          </Grid>
+
+          <Grid x:Name="PackagesPanel" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+              <Border Width="3" Height="18" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,10,0"/>
+              <TextBlock Text="Package managers" Style="{StaticResource PageTitle}"/>
+            </StackPanel>
+
+            <TextBlock Grid.Row="1" TextWrapping="Wrap" FontSize="12" Margin="0,0,0,10"
+                       Foreground="{StaticResource Muted}"
+                       Text="Each one is installed by running its own project's install script, in a new window, after Moscovium shows you the exact command."/>
+
+            <!-- Scoop's installer refuses to run elevated, and this window
+                 always is. The note says so rather than letting the button
+                 fail with someone else's error message. -->
+            <Border Grid.Row="2" Background="{StaticResource Panel2}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="7" Padding="13,9" Margin="0,0,0,12">
+              <StackPanel>
+                <TextBlock Text="Chocolatey and Scoop want opposite privileges" FontSize="11.5"
+                           FontWeight="SemiBold" Foreground="{StaticResource Warn}"/>
+                <TextBlock TextWrapping="Wrap" FontSize="11.5" Margin="0,4,0,0" LineHeight="16"
+                           Foreground="{StaticResource Muted}"
+                           Text="Chocolatey installs machine-wide and needs administrator. Scoop installs into your profile and its installer blocks itself from running elevated - and this window always is. Installing Scoop here offers the machine-wide variant its own docs describe; for the normal per-user install, Moscovium hands you the one-line command to paste into an ordinary PowerShell window."/>
+              </StackPanel>
+            </Border>
+
+            <Border Grid.Row="3" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
+                    BorderThickness="1" CornerRadius="8">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="7">
+                <StackPanel x:Name="PackageRows"/>
               </ScrollViewer>
             </Border>
           </Grid>

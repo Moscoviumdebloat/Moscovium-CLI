@@ -989,6 +989,138 @@ Test-Case 'presets are written without a BOM' {
 }
 
 # -----------------------------------------------------------------------------
+Write-Section 'Package managers'
+
+Test-Case 'every package manager resolves to itself' {
+    foreach ($manager in Get-PackageManagers) {
+        $resolved = Resolve-PackageManager -Id $manager.Id
+        Assert-True ($null -ne $resolved) "'$($manager.Id)' did not resolve"
+        Assert-Equal $manager.Id $resolved.Id
+    }
+
+    # Names work too, so -InstallManager Chocolatey does the obvious thing.
+    Assert-Equal 'choco' (Resolve-PackageManager -Id 'Chocolatey').Id
+    Assert-Equal 'scoop' (Resolve-PackageManager -Id 'Scoop').Id
+}
+
+Test-Case 'the install commands are the ones each project documents' {
+    $byId = @{}
+    foreach ($manager in Get-PackageManagers) { $byId[$manager.Id] = $manager }
+
+    # Verbatim from https://chocolatey.org/install - the TLS line matters on
+    # older builds, and rebuilding someone else's installer invocation from
+    # parts is not our business.
+    $choco = $byId['choco'].InstallCommand
+    Assert-True ($choco -match 'community\.chocolatey\.org/install\.ps1') 'the Chocolatey URL is wrong'
+    Assert-True ($choco -match 'Set-ExecutionPolicy Bypass -Scope Process -Force') 'the execution policy prelude is missing'
+    Assert-True ($choco -match 'SecurityProtocol -bor 3072') 'the TLS 1.2 prelude is missing'
+
+    # Verbatim from https://scoop.sh
+    Assert-Equal 'irm get.scoop.sh | iex' $byId['scoop'].InstallCommand
+
+    # The documented admin escape hatch, and the only place -RunAsAdmin appears.
+    Assert-True ($byId['scoop'].GlobalCommand -match '-RunAsAdmin') 'the machine-wide Scoop command is missing'
+    Assert-True ($byId['choco'].GlobalCommand -eq '') 'Chocolatey has no separate machine-wide command'
+
+    # winget is not ours to install: it arrives with App Installer from the
+    # Store, and scripting around the Store breaks on the next Windows build.
+    Assert-Equal '' $byId['winget'].InstallCommand
+    Assert-True ($byId['winget'].InstallNote -match 'App Installer') 'the winget note does not say where it comes from'
+
+    foreach ($manager in Get-PackageManagers) {
+        Assert-True ($manager.Site -match '^https://') "$($manager.Id) has no https site"
+        Assert-True (-not [string]::IsNullOrWhiteSpace($manager.Summary)) "$($manager.Id) has no summary"
+    }
+}
+
+Test-Case 'the two installable managers need opposite privileges' {
+    # This is the whole reason the page carries a warning and the installer
+    # branches: Chocolatey requires elevation, Scoop refuses it.
+    $byId = @{}
+    foreach ($manager in Get-PackageManagers) { $byId[$manager.Id] = $manager }
+
+    Assert-Equal 'admin'  $byId['choco'].Elevation
+    Assert-Equal 'user'   $byId['scoop'].Elevation
+    Assert-Equal 'either' $byId['winget'].Elevation
+}
+
+Test-Case 'status is read off disk, not just off the PATH' {
+    # A manager installed a minute ago by a child process is on the *new* PATH,
+    # not this process's copy of it - so a PATH-only check would keep reporting
+    # a fresh install as missing until Moscovium was restarted.
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/54-Packages.ps1') -Raw
+    Assert-True ($source -match 'Test-Path -LiteralPath \$candidate') 'status never looks on disk'
+
+    foreach ($entry in @(Get-PackageManagerReport)) {
+        Assert-True ($null -ne $entry.Manager) 'a report row has no manager'
+        Assert-True ($entry.Installed -is [bool]) 'Installed is not a boolean'
+        Assert-True ($entry.OnPath -is [bool]) 'OnPath is not a boolean'
+        # On disk is the weaker claim, so anything on the PATH is also on disk.
+        if ($entry.OnPath) { Assert-True $entry.Installed 'on the PATH but reported as not installed' }
+        if ($entry.Installed) { Assert-True (-not [string]::IsNullOrWhiteSpace($entry.Path)) 'installed with no path' }
+    }
+
+    # winget ships with Windows 10 1809 and later, so it is a safe live check.
+    $winget = @(Get-PackageManagerReport | Where-Object { $_.Manager.Id -eq 'winget' })[0]
+    Assert-True $winget.Installed 'winget was not detected on a machine that has it'
+}
+
+Test-Case 'a dry run prints the command and installs nothing' {
+    $previousDryRun = $Ctx.DryRun
+    $Ctx.DryRun = $true
+
+    try {
+        foreach ($id in @('choco', 'scoop')) {
+            # $false means "did not install", which is what a dry run should
+            # report - it must never come back claiming success.
+            Assert-True (-not (Invoke-PackageManagerInstall -Id $id)) "$id reported an install during a dry run"
+        }
+    }
+    finally { $Ctx.DryRun = $previousDryRun }
+}
+
+Test-Case 'Scoop refuses to install per-user from an elevated session' {
+    # Moscovium's window is always elevated and the CLI elevates for mutating
+    # actions, so this is the path most people will hit. It has to explain
+    # itself rather than letting Scoop's own installer fail with Deny-Install.
+    $previousAdmin = $Ctx.IsAdmin
+    $previousSink = $Ctx.ConfirmSink
+    $previousDryRun = $Ctx.DryRun
+
+    $asked = [System.Collections.Generic.List[string]]::new()
+    $Ctx.IsAdmin = $true
+    $Ctx.DryRun = $false
+    # Answering no means nothing is launched, so this test installs nothing.
+    $Ctx.ConfirmSink = { param($message, $defaultYes) $asked.Add([string]$message); return $false }
+
+    try {
+        Assert-True (-not (Invoke-PackageManagerInstall -Id 'scoop')) 'an elevated per-user Scoop install claimed success'
+
+        # Exactly one question, and it is the machine-wide one - not the
+        # ordinary "install it now?", which would have run the blocked command.
+        Assert-Equal 1 $asked.Count
+        Assert-True ($asked[0] -match 'machine-wide') "the question asked was: $($asked[0])"
+
+        # Chocolatey has no such conflict: elevated is what it wants, so it
+        # goes straight to the normal confirmation.
+        $asked.Clear()
+        Assert-True (-not (Invoke-PackageManagerInstall -Id 'choco')) 'declining still reported an install'
+        Assert-Equal 1 $asked.Count
+        Assert-True ($asked[0] -match 'Install Chocolatey now') "the question asked was: $($asked[0])"
+    }
+    finally {
+        $Ctx.IsAdmin = $previousAdmin
+        $Ctx.ConfirmSink = $previousSink
+        $Ctx.DryRun = $previousDryRun
+    }
+}
+
+Test-Case 'an unknown manager is reported, not silently ignored' {
+    Assert-True ($null -eq (Resolve-PackageManager -Id 'definitely-not-a-manager')) 'a nonsense id resolved'
+    Assert-True (-not (Invoke-PackageManagerInstall -Id 'definitely-not-a-manager')) 'a nonsense id reported an install'
+}
+
+# -----------------------------------------------------------------------------
 Write-Section 'Task manager'
 
 Test-Case 'byte and time formatting stays inside a table column' {
@@ -1636,6 +1768,12 @@ if (Test-StaApartment) {
 
             # Sort picker: one entry per sort key the engine understands.
             Assert-Equal 4 $gui.Ui.TaskSort.Items.Count
+
+            # Package managers page: one row per manager, and the nav count
+            # agrees with the catalog.
+            Assert-True ($null -ne $gui.Ui.PackagesPanel) 'no package managers panel'
+            Assert-Equal @(Get-PackageManagers).Count $gui.Ui.PackageRows.Children.Count
+            Assert-Equal 'Package managers' $gui.NavNames[4]
 
             # A nav item with no panel behind it would silently show nothing.
             Assert-Equal $gui.Ui.NavList.Items.Count $gui.NavNames.Count
