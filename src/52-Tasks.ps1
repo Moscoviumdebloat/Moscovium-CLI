@@ -111,6 +111,136 @@ function New-MeterBar {
     return ((Get-Glyph 'BarFull') * $filled) + ((Get-Glyph 'BarEmpty') * ($Width - $filled))
 }
 
+# A filled history graph $Height character rows tall.
+#
+# On a Unicode console every cell is a braille 2x4 dot matrix, so the effective
+# resolution is 2*Width by 4*Height - which is what makes this read as a curve
+# rather than a bar chart, and is the same trick btop uses. On a legacy console
+# it falls back to a column chart off the block ramp at 1x1 per cell.
+#
+# Returns an array of strings, top row first.
+function New-HistoryGraph {
+    param(
+        [AllowEmptyCollection()][double[]]$Values = @(),
+        [int]$Width = 40,
+        [int]$Height = 3,
+        [double]$Maximum = 100
+    )
+
+    if ($Width -lt 1 -or $Height -lt 1) { return @() }
+    if ($Maximum -le 0) { $Maximum = 1 }
+
+    $braille = [bool]$Ctx.Theme.Unicode
+
+    # Sub-columns per character cell: two for braille, one for blocks.
+    $perCell = 1
+    if ($braille) { $perCell = 2 }
+    $subWidth = $Width * $perCell
+    $subHeight = $Height * 4
+    if (-not $braille) { $subHeight = $Height }
+
+    # Newest sample on the right. When there is more history than the graph is
+    # wide the oldest is dropped; when there is less it is stretched to fill.
+    #
+    # Stretching rather than left-padding is deliberate. A 92-cell braille
+    # graph is 184 sub-columns, so at one sample a second a padded graph would
+    # sit three minutes in a mostly empty box - which reads as broken. The
+    # shape wobbles slightly as history accumulates and then settles, which is
+    # the better trade.
+    $recent = @($Values)
+    if ($recent.Count -gt $subWidth) { $recent = @($recent[($recent.Count - $subWidth)..($recent.Count - 1)]) }
+
+    # -1 marks a sub-column with nothing to draw, which stays blank rather than
+    # reading as a measured zero.
+    $heights = New-Object 'int[]' $subWidth
+    for ($i = 0; $i -lt $subWidth; $i++) { $heights[$i] = -1 }
+
+    if ($recent.Count -gt 0) {
+        for ($i = 0; $i -lt $subWidth; $i++) {
+            # Nearest sample at this fraction along the width.
+            $source = 0
+            if ($subWidth -gt 1 -and $recent.Count -gt 1) {
+                $source = [int][Math]::Round(($i / [double]($subWidth - 1)) * ($recent.Count - 1))
+            }
+            elseif ($recent.Count -gt 1) {
+                $source = $recent.Count - 1
+            }
+
+            $fraction = [Math]::Max(0.0, [Math]::Min(1.0, $recent[$source] / $Maximum))
+            $filled = [int][Math]::Round($fraction * $subHeight)
+            # Any non-zero reading gets at least one dot, so a busy-but-quiet
+            # machine is not drawn as flat nothing.
+            if ($filled -eq 0 -and $recent[$source] -gt 0) { $filled = 1 }
+            $heights[$i] = $filled
+        }
+    }
+
+    if (-not $braille) { return @(New-BlockGraph -Heights $heights -Width $Width -Height $Height) }
+
+    # Braille dot numbering is column-major and does not run in reading order:
+    #   1 4
+    #   2 5
+    #   3 6
+    #   7 8
+    # so the top-to-bottom bit order differs per half of the cell.
+    $leftBits  = @(0x01, 0x02, 0x04, 0x40)
+    $rightBits = @(0x08, 0x10, 0x20, 0x80)
+
+    $rows = [System.Collections.Generic.List[string]]::new()
+    for ($row = 0; $row -lt $Height; $row++) {
+        $line = New-Object Text.StringBuilder
+
+        for ($col = 0; $col -lt $Width; $col++) {
+            $mask = 0
+
+            for ($half = 0; $half -lt 2; $half++) {
+                $filled = $heights[($col * 2) + $half]
+                if ($filled -lt 0) { continue }
+
+                $bits = $rightBits
+                if ($half -eq 0) { $bits = $leftBits }
+
+                for ($sub = 0; $sub -lt 4; $sub++) {
+                    # Row 0 sub-row 0 is the top of the graph, so measure from
+                    # the bottom to decide whether this dot is under the line.
+                    $fromBottom = $subHeight - (($row * 4) + $sub)
+                    if ($fromBottom -le $filled) { $mask = $mask -bor $bits[$sub] }
+                }
+            }
+
+            [void]$line.Append((ConvertTo-Char (0x2800 + $mask)))
+        }
+
+        $rows.Add($line.ToString())
+    }
+
+    return @($rows)
+}
+
+# The legacy-console fallback: one block per cell, filled from the bottom.
+function New-BlockGraph {
+    param(
+        [Parameter(Mandatory)][int[]]$Heights,
+        [Parameter(Mandatory)][int]$Width,
+        [Parameter(Mandatory)][int]$Height
+    )
+
+    $full = Get-Glyph 'BarFull'
+    $rows = [System.Collections.Generic.List[string]]::new()
+
+    for ($row = 0; $row -lt $Height; $row++) {
+        $line = New-Object Text.StringBuilder
+        for ($col = 0; $col -lt $Width; $col++) {
+            $fromBottom = $Height - $row
+            if ($col -lt $Heights.Count -and $Heights[$col] -ge $fromBottom) { [void]$line.Append($full) }
+            else { [void]$line.Append(' ') }
+        }
+        $rows.Add($line.ToString())
+    }
+
+    return @($rows)
+}
+
 # A history graph one line tall, oldest sample on the left. Scaled against
 # $Maximum rather than the data's own peak, so the shape means the same thing
 # from one frame to the next.

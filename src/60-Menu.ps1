@@ -40,6 +40,35 @@ function Write-Frame {
     catch { Clear-Host }
 
     foreach ($line in $Lines) {
+        # A line can be one string in one colour, or a run of segments in
+        # different colours - which is what a box with a coloured title, or a
+        # meter whose cells shade from green to red, is made of. Segments are
+        # written with -NoNewline and the row is padded once at the end, so the
+        # result is still exactly one console line.
+        if (@($line.Segments).Count -gt 0) {
+            $used = 0
+
+            foreach ($segment in @($line.Segments)) {
+                if ($used -ge $width) { break }
+
+                $text = [string]$segment.Text
+                if (($used + $text.Length) -gt $width) { $text = $text.Substring(0, $width - $used) }
+                if ($text.Length -eq 0) { continue }
+                $used += $text.Length
+
+                if (-not $Ctx.UseColor) { Write-Host $text -NoNewline; continue }
+
+                $splat = @{ Object = $text; NoNewline = $true }
+                if ($segment.Color)      { $splat.ForegroundColor = $segment.Color }
+                if ($segment.Background) { $splat.BackgroundColor = $segment.Background }
+                Write-Host @splat
+            }
+
+            if ($used -lt $width) { Write-Host (' ' * ($width - $used)) -NoNewline }
+            Write-Host ''
+            continue
+        }
+
         $text = [string]$line.Text
         if ($text.Length -gt $width) { $text = $text.Substring(0, $width) }
         # Padding to the full width is what turns a background colour into a
@@ -63,9 +92,26 @@ function Write-Frame {
     if ($PreviousHeight) { $PreviousHeight.Value = $Lines.Count }
 }
 
+# Segments is always present, even when empty: Set-StrictMode makes reading an
+# absent property throw, and Write-Frame checks it on every line.
 function New-FrameLine {
     param([AllowEmptyString()][string]$Text = '', $Color = $null, $Background = $null)
+    [pscustomobject]@{ Text = $Text; Color = $Color; Background = $Background; Segments = @() }
+}
+
+function New-FrameSegment {
+    param([AllowEmptyString()][string]$Text = '', $Color = $null, $Background = $null)
     [pscustomobject]@{ Text = $Text; Color = $Color; Background = $Background }
+}
+
+# A frame line built from coloured pieces. Text is kept in step with the
+# segments so callers that only want to measure or match a line still can -
+# the tests do, and so does the log pane.
+function New-FrameLineFromSegments {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Segments)
+
+    $text = -join @($Segments | ForEach-Object { [string]$_.Text })
+    [pscustomobject]@{ Text = $text; Color = $null; Background = $null; Segments = @($Segments) }
 }
 
 function Read-MenuKey {

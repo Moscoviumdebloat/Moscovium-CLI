@@ -1271,26 +1271,6 @@ Test-Case 'two real samples populate every panel' {
     }
 }
 
-Test-Case 'the console frame fits the window it is drawn into' {
-    # Write-Frame homes the cursor to the top of the buffer to repaint. A frame
-    # as tall as the window scrolls it by one on the final newline, which moves
-    # (0,0) off screen and breaks every later repaint - so the layout has to
-    # leave at least one row spare.
-    $monitor = New-TaskMonitor
-    Update-TaskMonitor -Monitor $monitor | Out-Null
-    Start-Sleep -Milliseconds 250
-    Update-TaskMonitor -Monitor $monitor | Out-Null
-
-    foreach ($height in @(24, 30, 50)) {
-        $header = @(New-TaskHeaderLines -Monitor $monitor -Width 100)
-        $viewport = [Math]::Max(3, $height - $TaskChromeRows - $header.Count)
-
-        # Seven rows of chrome: blank, title, rule, column header, rule, status,
-        # keys. The body is the viewport.
-        $frameHeight = 7 + $header.Count + $viewport
-        Assert-True ($frameHeight -lt $height) "at height $height the frame is $frameHeight rows"
-    }
-}
 
 Test-Case 'the key hint fits an 80-column window' {
     # Write-Frame truncates at the window width, and the tail of this line is
@@ -1304,40 +1284,179 @@ Test-Case 'the key hint fits an 80-column window' {
     }
 }
 
-Test-Case 'every gauge line fits the width it was given' {
+Test-Case 'the live view polls the Console API, not RawUI' {
+    # The bug this guards against: $Host.UI.RawUI.KeyAvailable reports any
+    # pending console input record - focus changes, resizes, key-UP events -
+    # while ReadKey('IncludeKeyDown') accepts only key-down records. So RawUI
+    # says a key is waiting, ReadKey blocks, and the monitor stops refreshing
+    # until a real key arrives. [Console]::KeyAvailable and [Console]::ReadKey
+    # are a matched pair.
+    # Comment lines are stripped: the header explains the bug by naming the API
+    # it does not use, and that explanation should not fail its own test.
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/65-TaskView.ps1') -Raw
+    $code = (@($source -split "`r?`n" | Where-Object { $_.TrimStart() -notmatch '^#' }) -join "`n")
+
+    Assert-True ($code -match '\[Console\]::KeyAvailable') 'the view does not poll [Console]::KeyAvailable'
+    Assert-True ($code -match '\[Console\]::ReadKey') 'the view does not read through [Console]::ReadKey'
+    Assert-True ($code -notmatch 'RawUI\.KeyAvailable') 'the view is back on RawUI.KeyAvailable'
+    Assert-True ($code -notmatch 'Read-MenuKey') 'the view is back on the selector key reader'
+
+    # ConsoleKey's numeric values are the virtual key codes the switch arms
+    # use, which is why swapping the reader did not change them.
+    Assert-Equal 38 ([int][ConsoleKey]::UpArrow)
+    Assert-Equal 40 ([int][ConsoleKey]::DownArrow)
+    Assert-Equal 27 ([int][ConsoleKey]::Escape)
+    Assert-Equal 8  ([int][ConsoleKey]::Backspace)
+}
+
+Test-Case 'a history graph is exactly the size it was asked for' {
+    foreach ($unicode in @($true, $false)) {
+        $Ctx.Theme.Glyph = New-GlyphSet -Unicode $unicode
+        $Ctx.Theme.Unicode = $unicode
+
+        foreach ($height in @(1, 2, 3)) {
+            $graph = @(New-HistoryGraph -Values @(0, 25, 50, 75, 100) -Width 20 -Height $height -Maximum 100)
+            Assert-Equal $height $graph.Count "height $height gave $($graph.Count) rows (unicode=$unicode)"
+            foreach ($row in $graph) {
+                Assert-Equal 20 $row.Length "a row is $($row.Length) characters wide (unicode=$unicode)"
+            }
+        }
+
+        # Degenerate inputs must not throw mid-refresh.
+        Assert-Equal 0 @(New-HistoryGraph -Values @(1, 2) -Width 0 -Height 3).Count
+        Assert-Equal 0 @(New-HistoryGraph -Values @(1, 2) -Width 10 -Height 0).Count
+        Assert-Equal 2 @(New-HistoryGraph -Values @() -Width 10 -Height 2).Count
+        Assert-Equal 2 @(New-HistoryGraph -Values @(50) -Width 10 -Height 2 -Maximum 0).Count
+    }
+
+    $Ctx.Theme.Glyph = New-GlyphSet -Unicode $true
+    $Ctx.Theme.Unicode = $true
+
+    # Braille: every cell is in the U+2800 block, and a full-scale reading
+    # fills the bottom row completely.
+    $graph = @(New-HistoryGraph -Values @(100, 100, 100) -Width 6 -Height 2 -Maximum 100)
+    foreach ($row in $graph) {
+        foreach ($char in $row.ToCharArray()) {
+            $code = [int][char]$char
+            Assert-True ($code -ge 0x2800 -and $code -le 0x28FF) "0x$('{0:X}' -f $code) is not a braille cell"
+        }
+    }
+    Assert-Equal ((ConvertTo-Char 0x28FF) * 6) $graph[1]
+
+    # Nothing recorded draws as blank, not as a measured zero.
+    $empty = @(New-HistoryGraph -Values @() -Width 4 -Height 1 -Maximum 100)
+    Assert-Equal ((ConvertTo-Char 0x2800) * 4) $empty[0]
+
+    # A short history is stretched to fill rather than left as a stub against
+    # the right edge - three minutes of empty box reads as broken.
+    $stretched = @(New-HistoryGraph -Values @(100, 100) -Width 8 -Height 1 -Maximum 100)
+    Assert-True ($stretched[0] -notmatch [regex]::Escape((ConvertTo-Char 0x2800))) 'a stretched graph left blank cells'
+}
+
+Test-Case 'a meter shades along its own length and stays its own width' {
+    foreach ($percent in @(0, 1, 37, 60, 85, 100)) {
+        $segments = @(New-TaskMeterSegments -Percent $percent -Width 20)
+        $rendered = -join @($segments | ForEach-Object { [string]$_.Text })
+        Assert-Equal 20 $rendered.Length "at $percent% the meter is $($rendered.Length) wide"
+    }
+
+    # Clamped, so a glitched counter cannot draw past its column.
+    Assert-Equal 20 (-join @((New-TaskMeterSegments -Percent 150 -Width 20) | ForEach-Object { $_.Text })).Length
+    Assert-Equal 20 (-join @((New-TaskMeterSegments -Percent -10 -Width 20) | ForEach-Object { $_.Text })).Length
+    Assert-Equal 0 @(New-TaskMeterSegments -Percent 50 -Width 0).Count
+
+    # A full meter passes through every load band, because the cells are
+    # coloured by their own position rather than by the reading - which is what
+    # shows headroom as well as load.
+    $full = @(New-TaskMeterSegments -Percent 100 -Width 20)
+    $colors = @($full | ForEach-Object { [string]$_.Color } | Sort-Object -Unique)
+    Assert-Equal 3 $colors.Count "a full meter used $($colors.Count) colours: $($colors -join ', ')"
+
+    # An empty one is all dim, no green.
+    $none = @(New-TaskMeterSegments -Percent 0 -Width 20)
+    Assert-Equal 1 @($none).Count
+    Assert-Equal ([string](Get-Color 'Muted')) ([string]$none[0].Color)
+}
+
+Test-Case 'every line of a box is exactly as wide as the box' {
     $monitor = New-TaskMonitor
     Update-TaskMonitor -Monitor $monitor | Out-Null
     Start-Sleep -Milliseconds 250
     Update-TaskMonitor -Monitor $monitor | Out-Null
 
-    # 78 is the narrow case: an 80-column console. Anything wider than the
-    # window gets cut off mid-graph.
-    foreach ($width in @(78, 100, 140)) {
-        foreach ($line in @(New-TaskHeaderLines -Monitor $monitor -Width $width)) {
-            Assert-True ($line.Text.Length -le $width) `
-                "at width $width a gauge line is $($line.Text.Length): $($line.Text)"
+    $rows = @($monitor.Processes)
+
+    # A top edge two characters short of the walls below it is exactly the kind
+    # of thing that looks broken and reads fine in the source.
+    foreach ($width in @(50, 78, 96)) {
+        $boxes = @()
+        $boxes += @(New-TaskCpuBox -Monitor $monitor -Width $width -GraphHeight 2)
+        $boxes += @(New-TaskSystemBox -Monitor $monitor -Width $width)
+        $boxes += @(New-TaskProcessBox -Rows $rows -Cursor 0 -Offset 0 -Viewport 4 -Width $width -Monitor $monitor)
+
+        foreach ($line in $boxes) {
+            # Two spaces of indent outside the box, then the box itself.
+            Assert-Equal ($width + 2) $line.Text.Length "at box width $width a line is $($line.Text.Length): $($line.Text)"
         }
     }
 }
 
-Test-Case 'table rows and the header line up column for column' {
-    $header = New-TaskTableRow -Pointer ' ' -Id 'PID' -Name 'NAME' -Cpu 'CPU%' -Memory 'MEMORY' `
-        -Threads 'THR' -Time 'CPU TIME' -NameWidth 20 -Wide
-    $row = New-TaskTableRow -Pointer '>' -Id '4321' -Name 'powershell' -Cpu '12.5' -Memory '119M' `
-        -Threads '19' -Time '0:00:07' -NameWidth 20 -Wide
+Test-Case 'the frame fits the window it is drawn into' {
+    # Write-Frame homes the cursor to the top of the buffer to repaint. A frame
+    # as tall as the window scrolls it by one on the final newline, which moves
+    # (0,0) off screen and breaks every later repaint - so the layout has to
+    # leave at least one row spare.
+    $monitor = New-TaskMonitor
+    Update-TaskMonitor -Monitor $monitor | Out-Null
+    Start-Sleep -Milliseconds 250
+    Update-TaskMonitor -Monitor $monitor | Out-Null
 
-    Assert-Equal $header.Length $row.Length
+    $rows = @($monitor.Processes)
 
-    # A name longer than its column is truncated, not allowed to shove every
-    # column after it out of line.
-    $long = New-TaskTableRow -Pointer ' ' -Id '1' -Name ('x' * 60) -Cpu '0.0' -Memory '1M' `
-        -Threads '1' -Time '0:00:00' -NameWidth 20 -Wide
-    Assert-Equal $header.Length $long.Length
+    foreach ($height in @(20, 24, 30, 40, 60)) {
+        foreach ($consoleWidth in @(80, 100, 200)) {
+            $frame = New-TaskFrame -Monitor $monitor -Rows $rows `
+                -Width (Get-TaskBoxWidth -ConsoleWidth $consoleWidth) -ConsoleHeight $height
 
-    # The narrow layout drops the two rightmost columns rather than wrapping.
-    $narrow = New-TaskTableRow -Pointer ' ' -Id '1' -Name 'short' -Cpu '0.0' -Memory '1M' `
-        -Threads '1' -Time '0:00:00' -NameWidth 20
-    Assert-True ($narrow.Length -lt $header.Length) 'the narrow row is not narrower'
+            Assert-True (@($frame.Lines).Count -lt $height) `
+                "at ${consoleWidth}x$height the frame is $(@($frame.Lines).Count) rows"
+            Assert-True ($frame.Viewport -ge 3) "the process list got $($frame.Viewport) rows"
+        }
+    }
+}
+
+Test-Case 'the frame degrades rather than overflowing on a small window' {
+    $monitor = New-TaskMonitor
+    Update-TaskMonitor -Monitor $monitor | Out-Null
+
+    # The graph is the first thing to give up rows: another process row is
+    # worth more than another row of history.
+    Assert-Equal 0 (Get-TaskGraphHeight -ConsoleHeight 24)
+    Assert-Equal 2 (Get-TaskGraphHeight -ConsoleHeight 30)
+    Assert-Equal 3 (Get-TaskGraphHeight -ConsoleHeight 40)
+
+    # And the box never gets narrower than the columns need, or wider than is
+    # readable.
+    Assert-Equal 46 (Get-TaskBoxWidth -ConsoleWidth 40)
+    Assert-Equal 76 (Get-TaskBoxWidth -ConsoleWidth 80)
+    Assert-Equal 96 (Get-TaskBoxWidth -ConsoleWidth 300)
+}
+
+Test-Case 'frame segments carry their own text, and plain lines still work' {
+    # Write-Frame reads .Segments on every line, and Set-StrictMode makes an
+    # absent property throw - so the plain constructor has to define it too.
+    $plain = New-FrameLine 'hello' 'Red'
+    Assert-Equal 0 @($plain.Segments).Count
+    Assert-Equal 'hello' $plain.Text
+
+    $line = New-FrameLineFromSegments -Segments @(
+        (New-FrameSegment 'ab' 'Red')
+        (New-FrameSegment 'cd' 'Green')
+    )
+    # Text stays in step with the segments so a caller can still measure or
+    # match the line - the tests do, and so does the log pane.
+    Assert-Equal 'abcd' $line.Text
+    Assert-Equal 2 @($line.Segments).Count
 }
 
 # -----------------------------------------------------------------------------
