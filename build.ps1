@@ -325,6 +325,7 @@ foreach ($file in $sources) {
         $text = Set-EmbeddedLiteral -Text $text -Name 'EmbeddedWinutilConfigJson' -Content (Read-DataFile 'winutil-debloat.json')
         $text = Set-EmbeddedLiteral -Text $text -Name 'EmbeddedWinutilOneClickJson' -Content (Read-DataFile 'winutil-oneclick.json')
         $text = Set-EmbeddedLiteral -Text $text -Name 'EmbeddedRaphiOneClickJson' -Content (Read-DataFile 'raphi-oneclick.json')
+        $text = Set-EmbeddedLiteral -Text $text -Name 'EmbeddedStartAllBackScript' -Content (Read-DataFile 'startallback-trial-reset.ps1' -MustBeAscii)
     }
     if ($file.Name -eq '44-Guides.ps1') {
         $text = Set-EmbeddedLiteral -Text $text -Name 'EmbeddedGuidesJson' -Content (Read-DataFile 'guides.json')

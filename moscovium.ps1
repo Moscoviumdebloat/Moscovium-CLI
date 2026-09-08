@@ -5,7 +5,7 @@
 
         irm https://moscovium.win | iex
 
-    Build 9078e52db5  (a digest of src/ and data/ - same sources, same id).
+    Build b3f62912d7  (a digest of src/ and data/ - same sources, same id).
     Check with:  .\moscovium.ps1 -Version
 
     GENERATED FILE - do not edit.
@@ -4636,7 +4636,10 @@ param(
     #
     # Everything from the GUI's three pages (Optimizations, Toolbox, Legacy Menus)
     # is here. That now includes the MAS activation bootstrap and the StartAllBack
-    # trial reset that were originally left out - the user asked for them.
+    # trial reset that were originally left out - the user asked for them. MAS runs
+    # its upstream script over the network via Invoke-RemoteScript; the StartAllBack
+    # reset ships as a verbatim copy in data/startallback-trial-reset.ps1, embedded at
+    # build time, because fetching it fresh over irm | iex was not reliable enough.
     # =============================================================================
 
     $EmbeddedWinutilConfigJson = @'
@@ -4759,6 +4762,50 @@ param(
   ]
 }
 '@
+    $EmbeddedStartAllBackScript = @'
+$Host.UI.RawUI.WindowTitle = "StartAllBack trial reset || https://glock.rip/cat"
+Write-Output  'CAUTION!! Use this scripts at your own risk. I am not responsible for any damage that may occur as a result of running this script.'
+$x = Read-Host 'Do you want to begin? [Y/N]'
+if (-Not($x -eq "Y" -or ($x -eq "y"))) {
+    exit
+}
+
+$keys = Get-Item -Path Registry::HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\CLSID\* | Select-Object -ExpandProperty Name
+$keys = $keys | Where-Object { $_ -cmatch '\{[a-z0-9]{8}-([a-z0-9]{4}-){3}[a-z0-9]{8}.*$' }
+
+foreach ($key in $keys) {
+    $subkeys = Get-Item -Path ('Registry::' + $key + "\*") | Select-Object -ExpandProperty Name
+    $subkeys_count = $subkeys | Measure-Object | Select-Object -ExpandProperty Count
+    if (-Not ($subkeys_count -eq 0)) {
+        continue
+    }
+
+    Write-Output  ''
+    Write-Output  ('Cleaning...')
+    Write-Output  ''
+    Remove-Item -Path ('Registry::' + $key)
+
+
+}
+
+Write-Output  ('Cleaned Successfully!')
+
+$y = Read-Host 'Explorer restart is required, do you want to continue? [Y/N]'
+if (-Not($y -eq "Y" -or ($y -eq "y"))) {
+    Write-Output  ('Remember restart the explorer later.')
+    exit
+}
+
+stop-process -name explorer -force
+Write-Output  ''
+Write-Output  'All DONE'
+Write-Output  ''
+Write-Host "Press any key to Exit..."
+$null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.SendKeys]::SendWait('%{F4}')
+'@
 
     function Get-ToolboxActions {
         @(
@@ -4841,8 +4888,8 @@ param(
                 Description = 'mmsys.cpl, the classic playback/recording device list.'
             }
             [pscustomobject]@{
-                Id = 'startallback-reset'; Name = 'StartAllBack: trial reset'; Admin = $true
-                Description = 'Resets the StartAllBack trial by clearing the per-user CLSID entries it leaves behind. Needs an Explorer restart.'
+                Id = 'startallback-reset'; Name = 'StartAllBack: trial reset'; Admin = $false
+                Description = 'Runs a bundled copy of Moscoviumdebloat/Moscovium''s StartAllBack.ps1 in its own window. Clears the per-user CLSID entries it leaves behind and restarts Explorer.'
             }
             [pscustomobject]@{
                 Id = 'mas'; Name = 'Microsoft Activation Scripts (MAS)'; Admin = $false
@@ -5037,6 +5084,54 @@ param(
         $path = Join-Path $Ctx.StateDir $DataFile
         [IO.File]::WriteAllText($path, $text, (New-Object Text.UTF8Encoding $false))
         return $path
+    }
+
+    # Runs the bundled, verbatim copy of the GUI's StartAllBack.ps1 in its own
+    # window - the same shape as Invoke-RemoteScript (show what runs, ask, launch
+    # elevated, wait for the window to close) but from a file already on disk
+    # rather than a live `irm | iex`, which proved unreliable for this one.
+    function Invoke-StartAllBackTrialReset {
+        $scriptPath = Get-PresetConfigPath -Json $EmbeddedStartAllBackScript `
+            -DataFile 'startallback-trial-reset.ps1' -Label 'StartAllBack trial reset'
+
+        $elevation = if ($Ctx.IsAdmin) { 'elevated, as you already are' }
+                     else { 'which will ask for administrator rights' }
+
+        Write-Line ''
+        Write-Warn 'StartAllBack: trial reset runs a script bundled from Moscoviumdebloat/Moscovium:'
+        Write-Line '      StartAllBack.ps1' -Color White
+        Write-Info 'It clears the per-user CLSID entries StartAllBack leaves behind, then offers to restart Explorer.'
+        Write-Line ''
+        Write-Info "Runs in a new window ($elevation) and will ask Y/N twice - once to begin, once to restart Explorer."
+        Write-Info 'The window closes itself when the script finishes.'
+
+        if (-not (Confirm-Action 'Run it now?' -DefaultYes)) {
+            Write-Warn 'StartAllBack: trial reset - skipped.'
+            return $false
+        }
+
+        # No -NoExit: the script closes its own window (SendKeys Alt+F4) when done.
+        $start = @{
+            FilePath     = Get-PowerShellHost
+            ArgumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath)
+            Wait         = $true
+            PassThru     = $true
+            ErrorAction  = 'Stop'
+        }
+        if (-not $Ctx.IsAdmin) { $start.Verb = 'RunAs' }
+
+        Write-Step 'Launching StartAllBack: trial reset - this returns when the window closes'
+        Write-Log "embedded script: $scriptPath"
+
+        $process = Start-Process @start
+
+        if ($process -and $process.ExitCode -ne 0) {
+            Write-Warn "StartAllBack: trial reset exited with code $($process.ExitCode)."
+            return $false
+        }
+
+        Write-Ok 'StartAllBack: trial reset closed.'
+        return $true
     }
 
     function Get-WinutilConfigPath {
@@ -5391,7 +5486,7 @@ param(
                 'keyboard'      { Invoke-NativeCommand -FilePath 'control.exe' -Arguments @('keyboard') -NoWait | Out-Null; Write-Ok 'Opened.' }
                 'sound'         { Invoke-NativeCommand -FilePath 'control.exe' -Arguments @('mmsys.cpl') -NoWait | Out-Null; Write-Ok 'Opened.' }
 
-                'startallback-reset' { Reset-StartAllBackTrial | Out-Null }
+                'startallback-reset' { Invoke-StartAllBackTrialReset | Out-Null }
                 'mas' {
                     Invoke-RemoteScript -Url 'https://get.activated.win' -Label 'Microsoft Activation Scripts (MAS)' | Out-Null
                 }
@@ -5402,66 +5497,6 @@ param(
         catch {
             Write-Err "$($action.Name) - $($_.Exception.Message)"
         }
-    }
-
-    # Reset the StartAllBack trial by deleting the per-user CLSID entries it leaves
-    # under HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\CLSID. Each of
-    # those keys tracks trial state; clearing them resets the counter. Port of the
-    # GUI's StartAllBack.ps1, using the CLI's own registry helpers so it runs in
-    # process rather than spawning a second PowerShell.
-    function Reset-StartAllBackTrial {
-        $clsidRoot = 'HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\CLSID'
-
-        Write-Step 'Enumerating StartAllBack CLSID entries'
-        $keys = Get-Item -Path "Registry::$clsidRoot\*" -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty Name
-
-        # Only match real CLSID-form keys ({8-4-4-4-12}) and only leaf keys (no subkeys)
-        $trialKeys = @($keys | Where-Object {
-            $_ -cmatch '\\{[a-z0-9]{8}-([a-z0-9]{4}-){3}[a-z0-9]{12}.*$'
-        })
-
-        if ($trialKeys.Count -eq 0) {
-            Write-Ok 'No StartAllBack trial entries found - nothing to clean.'
-            return $true
-        }
-
-        $removed = 0
-        foreach ($key in $trialKeys) {
-            $leaf = $key.Substring($key.LastIndexOf('\') + 1)
-            $leafPath = "$clsidRoot\$leaf"
-
-            $subkeys = Get-Item -Path "Registry::$leafPath\*" -ErrorAction SilentlyContinue |
-                Select-Object -ExpandProperty Name
-            if ($subkeys | Measure-Object | Select-Object -ExpandProperty Count) {
-                continue
-            }
-
-            try {
-                Remove-Item -Path "Registry::$leafPath" -Force -ErrorAction Stop
-                $removed++
-            }
-            catch {
-                Write-Warn "Could not delete $leafPath - $_"
-            }
-        }
-
-        Write-Ok "Removed $removed StartAllBack trial entries."
-
-        if (-not (Confirm-Action 'Restart Explorer now to apply the reset?' -DefaultYes)) {
-            Write-Info 'Remember to restart Explorer later (log off and on).'
-            return $true
-        }
-
-        Write-Step 'Restarting Explorer'
-        Stop-Process -Name 'explorer' -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
-        if (-not (Get-Process -Name 'explorer' -ErrorAction SilentlyContinue)) {
-            Start-Process 'explorer.exe'
-        }
-
-        Write-Ok 'Explorer restarted. StartAllBack trial reset complete.'
-        return $true
     }
 
     function Show-ToolboxCatalog {
@@ -15204,4 +15239,4 @@ param(
         Restore-ConsoleEncoding -Previous $previousEncoding
     }
 
-} $PSBoundParameters '2.1.0' $SourceUrl '9078e52db5'
+} $PSBoundParameters '2.1.0' $SourceUrl 'b3f62912d7'
