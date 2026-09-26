@@ -38,7 +38,7 @@
 
     <Style TargetType="TextBlock">
       <Setter Property="Foreground" Value="{StaticResource Text}"/>
-      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI"/>
     </Style>
 
     <Style TargetType="Button">
@@ -48,7 +48,7 @@
       <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="Padding" Value="14,7"/>
       <Setter Property="Margin" Value="0,0,8,0"/>
-      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
         <Setter.Value>
@@ -102,7 +102,7 @@
          that this is a themed Win32 app rather than a designed one. -->
     <Style TargetType="CheckBox">
       <Setter Property="Foreground" Value="{StaticResource Text}"/>
-      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
@@ -143,7 +143,7 @@
       <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
       <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="Padding" Value="8,6"/>
-      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI"/>
       <Setter Property="CaretBrush" Value="{StaticResource Accent}"/>
       <Setter Property="SelectionBrush" Value="{StaticResource AccentDim}"/>
       <Setter Property="Template">
@@ -170,7 +170,7 @@
          so both need a template to sit on a dark window. -->
     <Style TargetType="ComboBoxItem">
       <Setter Property="Foreground" Value="{StaticResource Text}"/>
-      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI"/>
       <Setter Property="Padding" Value="11,7"/>
       <Setter Property="Template">
         <Setter.Value>
@@ -190,7 +190,7 @@
 
     <Style TargetType="ComboBox">
       <Setter Property="Foreground" Value="{StaticResource Text}"/>
-      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ComboBox">
@@ -234,7 +234,7 @@
     <!-- Placeholder text: a TextBlock behind the box, shown only while empty. -->
     <Style x:Key="Watermark" TargetType="TextBlock">
       <Setter Property="Foreground" Value="{StaticResource Faint}"/>
-      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI"/>
       <Setter Property="FontSize" Value="12"/>
       <Setter Property="Margin" Value="13,0,0,0"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
@@ -288,7 +288,7 @@
 
     <Style x:Key="NavItem" TargetType="ListBoxItem">
       <Setter Property="Foreground" Value="{StaticResource Muted}"/>
-      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI"/>
       <Setter Property="FontSize" Value="14"/>
       <!-- 7 rather than 12: sixteen pages at the roomier padding overflowed the
            sidebar at the window's minimum height and clipped Settings. Tightened
@@ -326,7 +326,7 @@
       <Setter Property="FontSize" Value="17"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
       <Setter Property="Foreground" Value="{StaticResource Text}"/>
-      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
     </Style>
 
@@ -426,7 +426,7 @@
 
     <Style TargetType="GridViewColumnHeader">
       <Setter Property="Foreground" Value="{StaticResource Faint}"/>
-      <Setter Property="FontFamily" Value="Segoe UI"/>
+      <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI"/>
       <Setter Property="FontSize" Value="10.5"/>
       <Setter Property="HorizontalContentAlignment" Value="Left"/>
       <Setter Property="Template">
@@ -454,6 +454,7 @@
       <Grid Margin="22,15">
         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
           <TextBlock Text="MOSCOVIUM" FontSize="20" FontWeight="SemiBold"
+                     FontFamily="Segoe UI Variable Display, Segoe UI"
                      Foreground="{StaticResource TitleInk}"/>
           <TextBlock x:Name="VersionText" Text="v0.0.0" FontSize="12" Foreground="{StaticResource Faint}"
                      VerticalAlignment="Center" Margin="11,4,0,0"/>
@@ -1233,7 +1234,7 @@
                          Text="Only raises the API rate limit when loading the store. Unauthenticated GitHub allows 60 requests an hour, and each repo costs two."/>
               <PasswordBox x:Name="GitHubToken" Margin="0,0,0,16" Background="{StaticResource Panel2}"
                            Foreground="{StaticResource Text}" BorderBrush="{StaticResource Line}" BorderThickness="1"
-                           Padding="8,6" FontFamily="Segoe UI"/>
+                           Padding="8,6" FontFamily="Segoe UI Variable Text, Segoe UI"/>
 
               <StackPanel Orientation="Horizontal">
                 <Button x:Name="BtnSaveSettings" Content="Save" Style="{StaticResource Primary}"/>

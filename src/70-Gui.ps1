@@ -1349,6 +1349,11 @@ function New-GuiWindow {
     $reader = New-Object Xml.XmlNodeReader ([xml](Get-GuiXaml))
     $window = [Windows.Markup.XamlReader]::Load($reader)
 
+    # Dark caption and rounded corners, applied the moment WPF creates the
+    # handle. See src/68-GuiChrome.ps1 for why this is not WinUI 3, and why the
+    # Mica backdrop it could also set is left off.
+    Register-GuiWindowChrome -Window $window
+
     # Pull every x:Name into a lookup so handlers read as $ui.BtnApply.
     $ui = @{}
     foreach ($name in @(

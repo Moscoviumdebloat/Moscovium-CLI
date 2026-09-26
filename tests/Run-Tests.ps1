@@ -3027,6 +3027,64 @@ catch {
 }
 
 # -----------------------------------------------------------------------------
+Write-Section 'Window chrome'
+
+Test-Case 'chrome support gates on the build the attribute shipped in' {
+    # 19 became 20 at 18985; asking the wrong one of the two is a silent no-op.
+    Assert-Equal 19 (Get-GuiChromeSupport -Build 18362).DarkModeAttr
+    Assert-Equal 19 (Get-GuiChromeSupport -Build 18984).DarkModeAttr
+    Assert-Equal 20 (Get-GuiChromeSupport -Build 18985).DarkModeAttr
+    Assert-Equal 20 (Get-GuiChromeSupport -Build 26200).DarkModeAttr
+
+    Assert-True  (Get-GuiChromeSupport -Build 18362).DarkTitleBar 'dark caption refused on 1903'
+    Assert-True (-not (Get-GuiChromeSupport -Build 18361).DarkTitleBar) 'dark caption claimed before 1903'
+
+    # Corner preference is a Windows 11 attribute.
+    Assert-True (-not (Get-GuiChromeSupport -Build 21996).RoundedCorners) 'corners claimed on Windows 10'
+    Assert-True  (Get-GuiChromeSupport -Build 22000).RoundedCorners 'corners refused on Windows 11'
+}
+
+Test-Case 'chrome on a window that was never shown is a no-op, not a throw' {
+    # New-GuiWindow is called by the render tests, which never show anything.
+    # The handle is zero until WPF creates it, and DWM must not be called with
+    # it - so the report comes back all false rather than blowing up.
+    $window = New-Object Windows.Window
+    $report = Set-GuiWindowChrome -Window $window
+    Assert-True (-not $report.DarkTitleBar) 'dark caption reported on a handle-less window'
+    Assert-True (-not $report.RoundedCorners) 'rounded corners reported on a handle-less window'
+}
+
+Test-Case 'the window asks for its chrome' {
+    $source = Get-Content -LiteralPath (Join-Path $RepoRoot 'src/70-Gui.ps1') -Raw
+    Assert-True ($source -match 'Register-GuiWindowChrome -Window \$window') 'New-GuiWindow no longer registers the chrome'
+}
+
+Test-Case 'the Mica backdrop stays off' {
+    # DWMWA_SYSTEMBACKDROP_TYPE is accepted on this machine and looks like it
+    # works, which is exactly why this guard exists. Mica tints the window with
+    # the wallpaper: invisible on a dark one, and grey through the true-black
+    # palette on a light one. Measured, then deliberately not shipped - see the
+    # header of src/68-GuiChrome.ps1.
+    foreach ($file in (Get-ChildItem -LiteralPath (Join-Path $RepoRoot 'src') -Filter '*.ps1')) {
+        $text = Get-Content -LiteralPath $file.FullName -Raw
+        foreach ($line in ($text -split "`n")) {
+            if ($line -match '^\s*#') { continue }
+            Assert-True ($line -notmatch 'SystemBackdrop|DwmBackdrop') "$($file.Name) sets a system backdrop"
+        }
+    }
+}
+
+Test-Case 'the UI font falls back for Windows 10' {
+    # Segoe UI Variable ships with Windows 11 only. Naming it alone would give
+    # Windows 10 whatever WPF picks instead, so every use carries the fallback.
+    $raw = Get-Content -LiteralPath $xamlPath -Raw -Encoding UTF8
+    foreach ($match in ([regex]'Segoe UI Variable [A-Za-z]+[^"]*').Matches($raw)) {
+        Assert-True ($match.Value -match ', Segoe UI$') "font stack without a fallback: $($match.Value)"
+    }
+    Assert-True ($raw -notmatch '"Segoe UI"') 'a bare Segoe UI setter is left in gui.xaml'
+}
+
+# -----------------------------------------------------------------------------
 Write-Section 'Bundle'
 
 Test-Case 'moscovium.ps1 is up to date with src/ and data/' {
